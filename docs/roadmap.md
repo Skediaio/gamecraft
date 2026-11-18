@@ -60,6 +60,18 @@ night, mist and rain; hearing; patrol and engage behaviour; `docs/design/ballist
 2026-11-18, with a miniature skirmish as their test (`crates/gamecraft-engine/tests/skirmish.rs`).
 Open for P2: tracers and impacts drawn, the full game as an example.
 
+Both games exist as `examples/lantern` and `examples/skirmish` (2026-11-18): built only with
+commands (`build.json`), won by a scripted player (`playthrough.json`) with pinned hashes.
+What they found awkward in the engine, and what follows from it:
+
+- `sim.input {face}` turns once instead of tracking the point: being made a held aim.
+- Messages are static text and trigger conditions read only variables: being given
+  `{var}` substitution and objective conditions.
+- No way to ask for a ballistic aim: being added as `query.aim`.
+- Scattered entities share one name and cannot keep areas clear: being fixed.
+- Scripts cannot react (a player script is a fixed list): scripting, M5.
+- Characters get stuck on solids without waypoints: navigation, M7.
+
 **Done when:** an agent plays each from start to finish over MCP, a second run gives the same
 state hash, and a picture of each exists.
 

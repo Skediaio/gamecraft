@@ -1,0 +1,1765 @@
+{
+  "gamecraft": 1,
+  "name": "Lantern",
+  "seed": 11,
+  "terrain": {
+    "size_m": 256.0,
+    "cell_m": 2.0,
+    "source": {
+      "kind": "noise",
+      "seed": 11,
+      "relief_m": 30.0,
+      "feature_m": 120.0,
+      "octaves": 5,
+      "roughness": 0.5
+    }
+  },
+  "environment": {
+    "time_of_day_h": 22.5,
+    "day_of_year": 172,
+    "latitude_deg": 50.85,
+    "wind_direction_deg": 270.0,
+    "wind_speed_mps": 2.0,
+    "cloud_cover": 0.6,
+    "mist": 0.3,
+    "rain": 0.0
+  },
+  "next_entity_id": 58,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Oak 1",
+      "position": [
+        -2.293939646805705,
+        2.320679024781284,
+        -86.53042628203231
+      ],
+      "rotation_y_deg": 159.96931814007795,
+      "scale": 1.1884011014347184,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 1908102360,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Oak 2",
+      "position": [
+        72.06599332545038,
+        0.21548808434338135,
+        -69.96978590112435
+      ],
+      "rotation_y_deg": 102.783126382908,
+      "scale": 1.0092268719403925,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 3410189454,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Oak 3",
+      "position": [
+        -57.64810361268407,
+        0.5518895060730276,
+        -44.96083112610883
+      ],
+      "rotation_y_deg": 190.828439100572,
+      "scale": 0.9819751629881158,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 1872457134,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Oak 4",
+      "position": [
+        -28.728728155422164,
+        -2.604576920258459,
+        -37.19809013854934
+      ],
+      "rotation_y_deg": 245.41379041701188,
+      "scale": 1.12614023334724,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 3798145079,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Oak 5",
+      "position": [
+        25.754333919176894,
+        -7.149880496442892,
+        14.458140915407588
+      ],
+      "rotation_y_deg": 44.31919929769876,
+      "scale": 0.9983519806356818,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 1232274885,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Oak 6",
+      "position": [
+        -25.04971639610657,
+        -6.603887112820609,
+        -2.450479869274711
+      ],
+      "rotation_y_deg": 15.749379241869125,
+      "scale": 1.0855083211373056,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 4285294568,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Oak 7",
+      "position": [
+        -76.07885841890324,
+        1.4725647608239985,
+        -46.02827707186498
+      ],
+      "rotation_y_deg": 158.0352226790188,
+      "scale": 0.9588677026658945,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 1087799886,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "Oak 8",
+      "position": [
+        -80.57082169100269,
+        -1.5818984561837155,
+        -22.680038683753118
+      ],
+      "rotation_y_deg": 294.4920594180542,
+      "scale": 1.099294131528662,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 2871501169,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "name": "Oak 9",
+      "position": [
+        -27.731321590168243,
+        2.7430236850040033,
+        -103.09535812767744
+      ],
+      "rotation_y_deg": 236.24479052358876,
+      "scale": 0.8945442139495079,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 3731935489,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "name": "Oak 10",
+      "position": [
+        -47.49660540370026,
+        0.7123046636985054,
+        94.04376184842576
+      ],
+      "rotation_y_deg": 321.8180507716512,
+      "scale": 0.8636717299175155,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 3919974404,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "Oak 11",
+      "position": [
+        42.79070429729472,
+        -5.14834412826561,
+        46.48660957249487
+      ],
+      "rotation_y_deg": 338.46261029568643,
+      "scale": 0.9302734602931806,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 1690766091,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "name": "Oak 12",
+      "position": [
+        -26.643400113619684,
+        -4.990884754723266,
+        -21.22191110328043
+      ],
+      "rotation_y_deg": 344.99955721896004,
+      "scale": 0.8621910004675649,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 3760738962,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "name": "Oak 13",
+      "position": [
+        75.85945646583237,
+        -2.2878603271404807,
+        34.752312133221615
+      ],
+      "rotation_y_deg": 192.26393680324995,
+      "scale": 1.1009405733526663,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 3094125208,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "name": "Oak 14",
+      "position": [
+        59.17001249608663,
+        -2.568121338235228,
+        14.179500257251256
+      ],
+      "rotation_y_deg": 204.64467932891486,
+      "scale": 0.8088066467323238,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 515467223,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "name": "Oak 15",
+      "position": [
+        20.563215750439827,
+        -0.8047664360081851,
+        -41.42285925708247
+      ],
+      "rotation_y_deg": 248.79109324800254,
+      "scale": 1.1890752161515263,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 2429335200,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "name": "Oak 16",
+      "position": [
+        -56.137286773583824,
+        1.1553041251814964,
+        -55.42691553187354
+      ],
+      "rotation_y_deg": 290.0700315161361,
+      "scale": 1.1440620597072813,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 468359501,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "name": "Oak 17",
+      "position": [
+        16.925268234693498,
+        2.126835761443452,
+        91.12790608417066
+      ],
+      "rotation_y_deg": 319.3800446732586,
+      "scale": 0.9690937871648633,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 2942352046,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "name": "Oak 18",
+      "position": [
+        0.40096521586708606,
+        2.8296758447099606,
+        -111.54568107271837
+      ],
+      "rotation_y_deg": 63.709233471904795,
+      "scale": 0.8507000548759635,
+      "components": [
+        {
+          "type": "plant",
+          "species": "quercus-robur",
+          "seed": 3170065261,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "name": "Birch 1",
+      "position": [
+        -0.47241045462667103,
+        2.1115720870751162,
+        -88.42093113698793
+      ],
+      "rotation_y_deg": 275.55089551021064,
+      "scale": 1.038255232560002,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 1338263221,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "name": "Birch 2",
+      "position": [
+        -10.022399918683655,
+        2.1067775221901406,
+        -66.95992104284987
+      ],
+      "rotation_y_deg": 90.11245398886871,
+      "scale": 1.0956349297390315,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 3125086771,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "name": "Birch 3",
+      "position": [
+        -61.956796188822494,
+        -0.6099113603683735,
+        25.514700339418088
+      ],
+      "rotation_y_deg": 134.56921700850833,
+      "scale": 1.0223165681009747,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 4002914087,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "name": "Birch 4",
+      "position": [
+        15.985060564185499,
+        -3.6798409436291686,
+        49.33886451342031
+      ],
+      "rotation_y_deg": 136.01720450178476,
+      "scale": 0.9456926327829691,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 902753706,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "name": "Birch 5",
+      "position": [
+        -24.87398650548094,
+        -6.506194523616262,
+        -4.327040046210605
+      ],
+      "rotation_y_deg": 119.04791211707467,
+      "scale": 0.9524027796977154,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 3935026512,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "name": "Birch 6",
+      "position": [
+        -97.70194204131703,
+        -1.3531325468003785,
+        -15.622824495715275
+      ],
+      "rotation_y_deg": 4.197442369120852,
+      "scale": 1.0479085548032585,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 1292292613,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "name": "Birch 7",
+      "position": [
+        -85.25810624373906,
+        1.879245587637541,
+        -64.7994907671906
+      ],
+      "rotation_y_deg": 123.44519689997644,
+      "scale": 0.9067125970624083,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 3794869075,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "name": "Birch 8",
+      "position": [
+        -12.228630926469597,
+        -1.6801034880592922,
+        66.81234048414673
+      ],
+      "rotation_y_deg": 324.7539706045067,
+      "scale": 0.8042838720161327,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 958197968,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "name": "Birch 9",
+      "position": [
+        50.00573200783531,
+        -4.957957058773109,
+        89.37486970122569
+      ],
+      "rotation_y_deg": 244.12024539054067,
+      "scale": 0.8032875648882838,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 3602660084,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 28,
+      "name": "Birch 10",
+      "position": [
+        75.33029719995395,
+        0.8567335267423832,
+        -9.69393847498117
+      ],
+      "rotation_y_deg": 63.093593113338066,
+      "scale": 1.1403930303151892,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 2360641080,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "name": "Birch 11",
+      "position": [
+        0.8001177590733509,
+        2.817131506688737,
+        -78.93350551983238
+      ],
+      "rotation_y_deg": 214.0680729180877,
+      "scale": 0.9271076490102045,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 2575720406,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "name": "Birch 12",
+      "position": [
+        -45.55663920909853,
+        -1.8124497663322279,
+        -31.374397485563854
+      ],
+      "rotation_y_deg": 144.8320761633552,
+      "scale": 0.9424293888937798,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 725817764,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "name": "Birch 13",
+      "position": [
+        -72.82570629463356,
+        -0.8403045719830292,
+        81.00674036154197
+      ],
+      "rotation_y_deg": 116.77652392280098,
+      "scale": 1.1636934258865859,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 24458915,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "name": "Birch 14",
+      "position": [
+        -73.86375099347197,
+        1.9403023638096517,
+        -51.78398487002703
+      ],
+      "rotation_y_deg": 209.33928513977244,
+      "scale": 0.8708495617037268,
+      "components": [
+        {
+          "type": "plant",
+          "species": "betula-pendula",
+          "seed": 3504718710,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "name": "Pine 1",
+      "position": [
+        -11.901736996527067,
+        -3.333494289308536,
+        -36.86094722292643
+      ],
+      "rotation_y_deg": 26.232025237842723,
+      "scale": 1.0451898730186497,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 929598893,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "name": "Pine 2",
+      "position": [
+        60.59778236239839,
+        -4.16153131058765,
+        68.86181015815328
+      ],
+      "rotation_y_deg": 176.78248382212035,
+      "scale": 1.1554873736446176,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 3816204721,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 35,
+      "name": "Pine 3",
+      "position": [
+        -22.796261443841306,
+        3.817394025133749,
+        -93.3656708170452
+      ],
+      "rotation_y_deg": 120.9602147543355,
+      "scale": 0.9920658016217428,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 3081141326,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 36,
+      "name": "Pine 4",
+      "position": [
+        -35.45791582761708,
+        1.1853566517245566,
+        96.47828701153546
+      ],
+      "rotation_y_deg": 62.28904262790792,
+      "scale": 0.8415621682843547,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 2525411614,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 37,
+      "name": "Pine 5",
+      "position": [
+        95.71961938758531,
+        5.803092375325719,
+        -40.922513981809296
+      ],
+      "rotation_y_deg": 68.79741025006027,
+      "scale": 1.0678578853227423,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 2673338979,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "name": "Pine 6",
+      "position": [
+        23.14339951899677,
+        0.3409632331511511,
+        106.00222295436843
+      ],
+      "rotation_y_deg": 230.8385861138439,
+      "scale": 0.8483737234138028,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 3744914268,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 39,
+      "name": "Pine 7",
+      "position": [
+        40.226692970000094,
+        -0.8627353785715621,
+        -29.690055194370053
+      ],
+      "rotation_y_deg": 76.32158047689227,
+      "scale": 0.9713277366636508,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 2033357118,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "name": "Pine 8",
+      "position": [
+        -67.93358430332931,
+        0.1960495606342597,
+        65.11990027559108
+      ],
+      "rotation_y_deg": 56.598838832225965,
+      "scale": 0.9478756679058581,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 2181849679,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 41,
+      "name": "Pine 9",
+      "position": [
+        59.88323962763127,
+        -0.5247605305711884,
+        -75.89982045523573
+      ],
+      "rotation_y_deg": 206.3027251567728,
+      "scale": 0.9269415752975804,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 3842005179,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "name": "Pine 10",
+      "position": [
+        -14.544576631607187,
+        -8.715150899086488,
+        -4.2173258844602355
+      ],
+      "rotation_y_deg": 246.35274862967154,
+      "scale": 0.862050372905888,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 2992915354,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 43,
+      "name": "Pine 11",
+      "position": [
+        -81.35126915142422,
+        -1.8095085806849123,
+        -21.15278177967074
+      ],
+      "rotation_y_deg": 153.91497787951198,
+      "scale": 0.9662103065060423,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 631530091,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 44,
+      "name": "Pine 12",
+      "position": [
+        -76.95657105610692,
+        2.3971211402728287,
+        -54.02760366753539
+      ],
+      "rotation_y_deg": 122.52705975497283,
+      "scale": 0.9480332135733521,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 840543764,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 45,
+      "name": "Pine 13",
+      "position": [
+        -93.1257639348548,
+        -2.4382737495086526,
+        54.83518901494569
+      ],
+      "rotation_y_deg": 135.23102511315568,
+      "scale": 1.0036022280857821,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 2218004741,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 46,
+      "name": "Pine 14",
+      "position": [
+        -17.961541335427217,
+        2.868537806963954,
+        -106.24773895225717
+      ],
+      "rotation_y_deg": 109.10190930609666,
+      "scale": 0.9766315589489191,
+      "components": [
+        {
+          "type": "plant",
+          "species": "pinus-sylvestris",
+          "seed": 255614022,
+          "growth": 1.0
+        }
+      ]
+    },
+    {
+      "id": 47,
+      "name": "Rock 1",
+      "position": [
+        -20.0,
+        -6.341251373291016,
+        -20.0
+      ],
+      "rotation_y_deg": 20.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "shape",
+          "kind": "box",
+          "size": [
+            2.4,
+            1.4,
+            1.8
+          ],
+          "color": [
+            0.42,
+            0.42,
+            0.4
+          ],
+          "solid": true
+        }
+      ]
+    },
+    {
+      "id": 48,
+      "name": "Rock 2",
+      "position": [
+        15.0,
+        -4.160270929336548,
+        40.0
+      ],
+      "rotation_y_deg": -35.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "shape",
+          "kind": "box",
+          "size": [
+            1.8,
+            1.0,
+            2.6
+          ],
+          "color": [
+            0.42,
+            0.42,
+            0.4
+          ],
+          "solid": true
+        }
+      ]
+    },
+    {
+      "id": 49,
+      "name": "Rock 3",
+      "position": [
+        -70.0,
+        -1.462361454963684,
+        20.0
+      ],
+      "rotation_y_deg": 70.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "shape",
+          "kind": "box",
+          "size": [
+            3.0,
+            1.8,
+            2.2
+          ],
+          "color": [
+            0.42,
+            0.42,
+            0.4
+          ],
+          "solid": true
+        }
+      ]
+    },
+    {
+      "id": 50,
+      "name": "Rock 4",
+      "position": [
+        60.0,
+        0.9731817841529846,
+        -30.0
+      ],
+      "rotation_y_deg": 10.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "shape",
+          "kind": "box",
+          "size": [
+            2.0,
+            1.2,
+            2.0
+          ],
+          "color": [
+            0.42,
+            0.42,
+            0.4
+          ],
+          "solid": true
+        }
+      ]
+    },
+    {
+      "id": 51,
+      "name": "Rock 5",
+      "position": [
+        88.0,
+        -1.8109251260757446,
+        50.0
+      ],
+      "rotation_y_deg": -60.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "shape",
+          "kind": "box",
+          "size": [
+            2.6,
+            1.5,
+            1.6
+          ],
+          "color": [
+            0.42,
+            0.42,
+            0.4
+          ],
+          "solid": true
+        }
+      ]
+    },
+    {
+      "id": 52,
+      "name": "Player",
+      "position": [
+        0.0,
+        -9.70712661743164,
+        0.0
+      ],
+      "rotation_y_deg": 0.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "character",
+          "height_m": 1.8,
+          "radius_m": 0.3,
+          "eye_height_m": 1.65,
+          "walk_speed_mps": 1.6,
+          "run_speed_mps": 5.0,
+          "jump_speed_mps": 4.5,
+          "max_slope_deg": 45.0
+        },
+        {
+          "type": "light",
+          "color": [
+            1.0,
+            0.8,
+            0.5
+          ],
+          "intensity_cd": 60.0,
+          "range_m": 8.0,
+          "on": true
+        },
+        {
+          "type": "tags",
+          "tags": [
+            "player"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 53,
+      "name": "Beacon Meadow",
+      "position": [
+        -45.0,
+        -0.8665889799594879,
+        -35.0
+      ],
+      "rotation_y_deg": 0.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "shape",
+          "kind": "cylinder",
+          "size": [
+            0.4,
+            2.5,
+            0.4
+          ],
+          "color": [
+            0.35,
+            0.28,
+            0.2
+          ],
+          "solid": true
+        },
+        {
+          "type": "interactable",
+          "reach_m": 2.0,
+          "prompt": "Light the beacon"
+        },
+        {
+          "type": "light",
+          "color": [
+            1.0,
+            0.6,
+            0.2
+          ],
+          "intensity_cd": 400.0,
+          "range_m": 20.0,
+          "on": false
+        },
+        {
+          "type": "tags",
+          "tags": [
+            "beacon"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 54,
+      "name": "Beacon Pines",
+      "position": [
+        -30.0,
+        -0.44486188888549805,
+        60.0
+      ],
+      "rotation_y_deg": 0.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "shape",
+          "kind": "cylinder",
+          "size": [
+            0.4,
+            2.5,
+            0.4
+          ],
+          "color": [
+            0.35,
+            0.28,
+            0.2
+          ],
+          "solid": true
+        },
+        {
+          "type": "interactable",
+          "reach_m": 2.0,
+          "prompt": "Light the beacon"
+        },
+        {
+          "type": "light",
+          "color": [
+            1.0,
+            0.6,
+            0.2
+          ],
+          "intensity_cd": 400.0,
+          "range_m": 20.0,
+          "on": false
+        },
+        {
+          "type": "tags",
+          "tags": [
+            "beacon"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 55,
+      "name": "Beacon Ford",
+      "position": [
+        60.0,
+        -5.4550416469573975,
+        75.0
+      ],
+      "rotation_y_deg": 0.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "shape",
+          "kind": "cylinder",
+          "size": [
+            0.4,
+            2.5,
+            0.4
+          ],
+          "color": [
+            0.35,
+            0.28,
+            0.2
+          ],
+          "solid": true
+        },
+        {
+          "type": "interactable",
+          "reach_m": 2.0,
+          "prompt": "Light the beacon"
+        },
+        {
+          "type": "light",
+          "color": [
+            1.0,
+            0.6,
+            0.2
+          ],
+          "intensity_cd": 400.0,
+          "range_m": 20.0,
+          "on": false
+        },
+        {
+          "type": "tags",
+          "tags": [
+            "beacon"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 56,
+      "name": "Beacon Hill",
+      "position": [
+        100.0,
+        5.115922689437866,
+        5.0
+      ],
+      "rotation_y_deg": 0.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "shape",
+          "kind": "cylinder",
+          "size": [
+            0.4,
+            2.5,
+            0.4
+          ],
+          "color": [
+            0.35,
+            0.28,
+            0.2
+          ],
+          "solid": true
+        },
+        {
+          "type": "interactable",
+          "reach_m": 2.0,
+          "prompt": "Light the beacon"
+        },
+        {
+          "type": "light",
+          "color": [
+            1.0,
+            0.6,
+            0.2
+          ],
+          "intensity_cd": 400.0,
+          "range_m": 20.0,
+          "on": false
+        },
+        {
+          "type": "tags",
+          "tags": [
+            "beacon"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 57,
+      "name": "Beacon Ridge",
+      "position": [
+        30.0,
+        1.4767658710479736,
+        -85.0
+      ],
+      "rotation_y_deg": 0.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "shape",
+          "kind": "cylinder",
+          "size": [
+            0.4,
+            2.5,
+            0.4
+          ],
+          "color": [
+            0.35,
+            0.28,
+            0.2
+          ],
+          "solid": true
+        },
+        {
+          "type": "interactable",
+          "reach_m": 2.0,
+          "prompt": "Light the beacon"
+        },
+        {
+          "type": "light",
+          "color": [
+            1.0,
+            0.6,
+            0.2
+          ],
+          "intensity_cd": 400.0,
+          "range_m": 20.0,
+          "on": false
+        },
+        {
+          "type": "tags",
+          "tags": [
+            "beacon"
+          ]
+        }
+      ]
+    }
+  ],
+  "vars": {
+    "lit": 0.0
+  },
+  "objectives": [
+    {
+      "id": "light-all",
+      "title": "Light every beacon before the mist comes",
+      "status": "open",
+      "hidden": false
+    },
+    {
+      "id": "beacon-meadow",
+      "title": "Light the Meadow beacon",
+      "status": "open",
+      "hidden": false
+    },
+    {
+      "id": "beacon-pines",
+      "title": "Light the Pines beacon",
+      "status": "open",
+      "hidden": false
+    },
+    {
+      "id": "beacon-ford",
+      "title": "Light the Ford beacon",
+      "status": "open",
+      "hidden": false
+    },
+    {
+      "id": "beacon-hill",
+      "title": "Light the Hill beacon",
+      "status": "open",
+      "hidden": false
+    },
+    {
+      "id": "beacon-ridge",
+      "title": "Light the Ridge beacon",
+      "status": "open",
+      "hidden": false
+    }
+  ],
+  "triggers": [
+    {
+      "id": "light-meadow",
+      "when": {
+        "event": "interact",
+        "target": "Beacon Meadow",
+        "who": "tag:player"
+      },
+      "do": [
+        {
+          "command": "entity.set_component",
+          "params": {
+            "component": {
+              "color": [
+                1.0,
+                0.6,
+                0.2
+              ],
+              "intensity_cd": 400,
+              "on": true,
+              "range_m": 20,
+              "type": "light"
+            },
+            "id": "$target"
+          }
+        },
+        {
+          "command": "objective.set",
+          "params": {
+            "id": "beacon-meadow",
+            "status": "done"
+          }
+        },
+        {
+          "command": "var.set",
+          "params": {
+            "add": 1,
+            "name": "lit"
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 6,
+            "text": "The Meadow beacon is lit."
+          }
+        }
+      ],
+      "once": true,
+      "enabled": true
+    },
+    {
+      "id": "light-pines",
+      "when": {
+        "event": "interact",
+        "target": "Beacon Pines",
+        "who": "tag:player"
+      },
+      "do": [
+        {
+          "command": "entity.set_component",
+          "params": {
+            "component": {
+              "color": [
+                1.0,
+                0.6,
+                0.2
+              ],
+              "intensity_cd": 400,
+              "on": true,
+              "range_m": 20,
+              "type": "light"
+            },
+            "id": "$target"
+          }
+        },
+        {
+          "command": "objective.set",
+          "params": {
+            "id": "beacon-pines",
+            "status": "done"
+          }
+        },
+        {
+          "command": "var.set",
+          "params": {
+            "add": 1,
+            "name": "lit"
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 6,
+            "text": "The Pines beacon is lit."
+          }
+        }
+      ],
+      "once": true,
+      "enabled": true
+    },
+    {
+      "id": "light-ford",
+      "when": {
+        "event": "interact",
+        "target": "Beacon Ford",
+        "who": "tag:player"
+      },
+      "do": [
+        {
+          "command": "entity.set_component",
+          "params": {
+            "component": {
+              "color": [
+                1.0,
+                0.6,
+                0.2
+              ],
+              "intensity_cd": 400,
+              "on": true,
+              "range_m": 20,
+              "type": "light"
+            },
+            "id": "$target"
+          }
+        },
+        {
+          "command": "objective.set",
+          "params": {
+            "id": "beacon-ford",
+            "status": "done"
+          }
+        },
+        {
+          "command": "var.set",
+          "params": {
+            "add": 1,
+            "name": "lit"
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 6,
+            "text": "The Ford beacon is lit."
+          }
+        }
+      ],
+      "once": true,
+      "enabled": true
+    },
+    {
+      "id": "light-hill",
+      "when": {
+        "event": "interact",
+        "target": "Beacon Hill",
+        "who": "tag:player"
+      },
+      "do": [
+        {
+          "command": "entity.set_component",
+          "params": {
+            "component": {
+              "color": [
+                1.0,
+                0.6,
+                0.2
+              ],
+              "intensity_cd": 400,
+              "on": true,
+              "range_m": 20,
+              "type": "light"
+            },
+            "id": "$target"
+          }
+        },
+        {
+          "command": "objective.set",
+          "params": {
+            "id": "beacon-hill",
+            "status": "done"
+          }
+        },
+        {
+          "command": "var.set",
+          "params": {
+            "add": 1,
+            "name": "lit"
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 6,
+            "text": "The Hill beacon is lit."
+          }
+        }
+      ],
+      "once": true,
+      "enabled": true
+    },
+    {
+      "id": "light-ridge",
+      "when": {
+        "event": "interact",
+        "target": "Beacon Ridge",
+        "who": "tag:player"
+      },
+      "do": [
+        {
+          "command": "entity.set_component",
+          "params": {
+            "component": {
+              "color": [
+                1.0,
+                0.6,
+                0.2
+              ],
+              "intensity_cd": 400,
+              "on": true,
+              "range_m": 20,
+              "type": "light"
+            },
+            "id": "$target"
+          }
+        },
+        {
+          "command": "objective.set",
+          "params": {
+            "id": "beacon-ridge",
+            "status": "done"
+          }
+        },
+        {
+          "command": "var.set",
+          "params": {
+            "add": 1,
+            "name": "lit"
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 6,
+            "text": "The Ridge beacon is lit."
+          }
+        }
+      ],
+      "once": true,
+      "enabled": true
+    },
+    {
+      "id": "all-lit",
+      "when": {
+        "event": "var",
+        "name": "lit"
+      },
+      "if": {
+        "var": "lit",
+        "op": ">=",
+        "value": 5.0
+      },
+      "do": [
+        {
+          "command": "objective.set",
+          "params": {
+            "id": "light-all",
+            "status": "done"
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 30,
+            "text": "Every beacon burns. The valley is safe tonight."
+          }
+        }
+      ],
+      "once": true,
+      "enabled": true
+    },
+    {
+      "id": "mist-120",
+      "when": {
+        "event": "time",
+        "at_s": 120.0
+      },
+      "do": [
+        {
+          "command": "environment.set",
+          "params": {
+            "mist": 0.5
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 8,
+            "text": "The mist is thickening."
+          }
+        }
+      ],
+      "once": true,
+      "enabled": true
+    },
+    {
+      "id": "mist-180",
+      "when": {
+        "event": "time",
+        "at_s": 180.0
+      },
+      "do": [
+        {
+          "command": "environment.set",
+          "params": {
+            "mist": 0.7
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 8,
+            "text": "The mist is thickening."
+          }
+        }
+      ],
+      "once": true,
+      "enabled": true
+    },
+    {
+      "id": "mist-240",
+      "when": {
+        "event": "time",
+        "at_s": 240.0
+      },
+      "do": [
+        {
+          "command": "environment.set",
+          "params": {
+            "mist": 0.9
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 8,
+            "text": "The mist is thickening."
+          }
+        }
+      ],
+      "once": true,
+      "enabled": true
+    },
+    {
+      "id": "mist-comes",
+      "when": {
+        "event": "time",
+        "at_s": 300.0
+      },
+      "if": {
+        "var": "lit",
+        "op": "<",
+        "value": 5.0
+      },
+      "do": [
+        {
+          "command": "environment.set",
+          "params": {
+            "mist": 1.0
+          }
+        },
+        {
+          "command": "objective.set",
+          "params": {
+            "id": "light-all",
+            "status": "failed"
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 30,
+            "text": "The mist has come. The beacons stay dark."
+          }
+        }
+      ],
+      "once": true,
+      "enabled": true
+    }
+  ]
+}
