@@ -1,0 +1,19 @@
+[package]
+name = "gamecraft-sim"
+description = "The deterministic fixed-step simulation of a GameCraft world."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gamecraft-math = { workspace = true }
+gamecraft-world = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

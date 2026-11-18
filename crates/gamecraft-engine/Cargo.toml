@@ -1,0 +1,20 @@
+[package]
+name = "gamecraft-engine"
+description = "Session and command registry: every action in GameCraft is a command."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gamecraft-math = { workspace = true }
+gamecraft-world = { workspace = true }
+gamecraft-sim = { workspace = true }
+serde_json = { workspace = true }
+# VisionCraft (MIT): the built-in species, for `species.list` and for checking a plant's
+# species. Used in `src/plants.rs` only (AGENTS.md rule 13).
+visioncraft-flora = { workspace = true }

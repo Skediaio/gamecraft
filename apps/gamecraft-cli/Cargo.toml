@@ -1,0 +1,19 @@
+[package]
+name = "gamecraft-cli"
+description = "gamecraft-cli: headless command line, JSON-lines server and MCP server."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gamecraft-world = { workspace = true }
+gamecraft-engine = { workspace = true }
+gamecraft-automation = { workspace = true }
+gamecraft-render = { workspace = true }
+serde_json = { workspace = true }
+pollster = { workspace = true }

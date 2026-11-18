@@ -1,0 +1,62 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*", "xtask"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/Skediaio/gamecraft"
+publish = false
+
+[workspace.dependencies]
+gamecraft-math = { path = "crates/gamecraft-math" }
+gamecraft-world = { path = "crates/gamecraft-world" }
+gamecraft-sim = { path = "crates/gamecraft-sim" }
+gamecraft-engine = { path = "crates/gamecraft-engine" }
+gamecraft-render = { path = "crates/gamecraft-render" }
+gamecraft-automation = { path = "crates/gamecraft-automation" }
+
+# VisionCraft (MIT): the renderer and the plant generator. One rev for both, moved on purpose
+# (docs/development.md, Updating VisionCraft). Only the crates named in AGENTS.md rule 13 may
+# depend on them.
+visioncraft-render = { git = "https://github.com/Skediaio/visioncraft", rev = "cc88bbc8649d0deecd212d09f7eca4f32b62d179" }
+visioncraft-flora = { git = "https://github.com/Skediaio/visioncraft", rev = "cc88bbc8649d0deecd212d09f7eca4f32b62d179" }
+
+# The versions VisionCraft's renderer uses: its types cross the boundary in gamecraft-render.
+# `libm`: glam's sines, cosines and powers come from the libm crate instead of the platform's
+# maths library, so the simulation's f64 maths has the same bits natively and in the browser
+# (docs/architecture.md, Determinism).
+glam = { version = "0.30", features = ["libm"] }
+wgpu = "30.0.1"
+# Pure-Rust transcendental functions, the same bits on every platform (gamecraft_math::Portable).
+libm = "0.2.16"
+# Blocks on wgpu's futures in native entry points only.
+pollster = "1.0.1"
+# Image encoding only (pictures for agents).
+png = "0.17"
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: a number read back from a file is the number that was written, bit for
+# bit, so a reopened world simulates to the same state hash.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+# Never crash (AGENTS.md, golden rules). clippy.toml allows these in tests only.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+todo = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+
+# The same dev profile as VisionCraft: terrain, plant generation and rasterising are unusable
+# unoptimised.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

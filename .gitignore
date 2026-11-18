@@ -1,0 +1,8 @@
+/target
+dist/
+out/
+.claude/
+.opencode/
+opencode.json
+# A developer's own Cargo overrides (docs/development.md, Working against a local VisionCraft).
+/.cargo/config.local.toml

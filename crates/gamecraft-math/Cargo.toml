@@ -1,0 +1,15 @@
+[package]
+name = "gamecraft-math"
+description = "Deterministic maths for GameCraft: portable transcendental functions, seeded randomness, noise and the state hash."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+glam = { workspace = true }
+libm = { workspace = true }
