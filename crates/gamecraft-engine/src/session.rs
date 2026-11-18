@@ -105,6 +105,10 @@ const MODULES: &[&[Registration]] = &[
     crate::entity_cmds::SPECS,
     crate::play_cmds::SPECS,
     crate::inspect_cmds::SPECS,
+    crate::find_cmds::SPECS,
+    crate::geometry_cmds::SPECS,
+    crate::catalog_cmds::SPECS,
+    crate::scatter_cmds::SPECS,
 ];
 
 #[derive(Clone)]

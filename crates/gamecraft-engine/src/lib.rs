@@ -36,13 +36,18 @@
 //! `example` must run on [`example_world`] (`tests/examples.rs` checks every one), and the
 //! panic hunt picks the new command up by itself.
 
+mod catalog_cmds;
 mod entity_cmds;
 mod error;
 mod example;
+mod find_cmds;
+mod geometry;
+mod geometry_cmds;
 mod inspect_cmds;
 mod params;
 pub mod plants;
 mod play_cmds;
+mod scatter_cmds;
 mod session;
 pub mod spec;
 mod world_cmds;
