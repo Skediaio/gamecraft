@@ -45,6 +45,39 @@ pub enum EventKind {
         /// Seconds since the start.
         at_s: f64,
     },
+    /// A projectile hit something: a character, a shape or (`target` null) the terrain.
+    Hit {
+        /// The projectile's number.
+        projectile: u64,
+        /// The entity whose launcher fired it (`$who`).
+        shooter: EntityId,
+        /// The entity hit (`$target`); `None` for the terrain.
+        target: Option<EntityId>,
+        /// Where, world metres.
+        point: [f64; 3],
+        /// The surface's outward normal there.
+        normal: [f64; 3],
+        /// The projectile's speed at the hit, metres per second.
+        speed_mps: f64,
+        /// Its kinetic energy at the hit, joules.
+        energy_j: f64,
+    },
+    /// A hit used up the health of `target`; `who` fired it.
+    Down {
+        /// The shooter (`$who`).
+        who: EntityId,
+        /// The entity that went down (`$target`).
+        target: EntityId,
+    },
+    /// The character `who` heard a shot of `target`.
+    Heard {
+        /// The character that heard it (`$who`).
+        who: EntityId,
+        /// The shooter (`$target`).
+        target: EntityId,
+        /// The muzzle, world metres.
+        point: [f64; 3],
+    },
 }
 
 /// An event and the tick it happened in.
@@ -65,6 +98,9 @@ impl EventKind {
             EventKind::Leave { .. } => "leave",
             EventKind::Interact { .. } => "interact",
             EventKind::Time { .. } => "time",
+            EventKind::Hit { .. } => "hit",
+            EventKind::Down { .. } => "down",
+            EventKind::Heard { .. } => "heard",
         }
     }
 
@@ -73,16 +109,23 @@ impl EventKind {
         match self {
             EventKind::Enter { who, .. }
             | EventKind::Leave { who, .. }
-            | EventKind::Interact { who, .. } => Some(*who),
+            | EventKind::Interact { who, .. }
+            | EventKind::Down { who, .. }
+            | EventKind::Heard { who, .. } => Some(*who),
+            EventKind::Hit { shooter, .. } => Some(*shooter),
             EventKind::Time { .. } => None,
         }
     }
 
-    /// The entity the event is about (`$target`): the zone or the interacted entity.
+    /// The entity the event is about (`$target`): the zone, the interacted entity, the entity
+    /// hit or downed, or the shooter heard.
     pub fn target(&self) -> Option<EntityId> {
         match self {
             EventKind::Enter { zone, .. } | EventKind::Leave { zone, .. } => Some(*zone),
-            EventKind::Interact { target, .. } => Some(*target),
+            EventKind::Interact { target, .. }
+            | EventKind::Down { target, .. }
+            | EventKind::Heard { target, .. } => Some(*target),
+            EventKind::Hit { target, .. } => *target,
             EventKind::Time { .. } => None,
         }
     }

@@ -1,12 +1,15 @@
 //! Playing: `sim.start`, `sim.stop`, `sim.step`, `sim.input`, `sim.state`.
 
+use crate::combat_cmds::{
+    PROJECTILE_DOC, behaviour_json, health_json, magazine_json, projectiles_json,
+};
 use crate::error::{CommandError, bad, failed};
 use crate::params::Params;
 use crate::session::{Handler, Registration, Session};
 use crate::spec::{CommandSpec, ParamType as T, param, spec};
 use crate::triggers::{self, Happening};
 use gamecraft_math::{Portable, rad_to_deg, wrap_deg};
-use gamecraft_sim::{Input, MAX_STEP_TICKS, Sim, TICK_HZ};
+use gamecraft_sim::{Input, MAX_PITCH_DEG, MAX_STEP_TICKS, Sim, TICK_HZ};
 use serde_json::{Map, Value, json};
 
 /// The commands of this module.
@@ -36,7 +39,11 @@ pub(crate) const SPECS: &[Registration] = &[
 /// Below this horizontal distance, metres, a `face` point is the character's own position.
 const MIN_FACE_DISTANCE_M: f64 = 1e-9;
 
-const CHARACTERS_DOC: &str = "[{id, name, position, rotation_y_deg, velocity, grounded}]";
+const CHARACTERS_DOC: &str = "[{id, name, position, rotation_y_deg, velocity, grounded, \
+    health: {max, current, armor, down} | null, behaviour: {state, ...} | null, magazine: {left, \
+    shots, ready_in_s, reloading} | null}]";
+
+const INPUT_DOC: &str = "{entity, forward, right, yaw_deg, pitch_deg, run, jump, interact, fire}";
 
 /// The state hash as 16 lowercase hex digits (a JSON number cannot hold a `u64` exactly).
 fn hash(sim: &Sim) -> String {
@@ -57,6 +64,9 @@ fn characters(sim: &Sim) -> Vec<Value> {
                 "rotation_y_deg": e.rotation_y_deg,
                 "velocity": body.velocity,
                 "grounded": body.grounded,
+                "health": health_json(e),
+                "behaviour": behaviour_json(sim, e.id),
+                "magazine": magazine_json(sim, e.id),
             })
         })
         .collect()
@@ -148,14 +158,17 @@ fn step_spec() -> CommandSpec {
          scenario's triggers run for the events of that tick; variables changed by commands \
          since the last step fire their triggers first. The answer lists the events and the \
          triggers that fired (at most 1000 of each; `events_omitted` and `fired_omitted` count \
-         the rest).",
+         the rest). Projectiles fly, hit (`hit` events), take health (`down` at 0) and are \
+         heard (`heard`); behaviours decide.",
         vec![
             param("ticks", T::Integer, "Ticks to advance, 0 to 36000.").default(json!(1)),
             param("seconds", T::Number, "Simulated time to advance, 0 to 600.").unit("s"),
         ],
         &format!(
-            "{{tick, time_s, hash, characters: {CHARACTERS_DOC}, events: [{{tick, event, who?, \
-             zone?, target?, at_s?, name?}}], fired: [{{trigger, tick, event, ok, error?}}]}}"
+            "{{tick, time_s, hash, characters: {CHARACTERS_DOC}, projectiles: [{PROJECTILE_DOC}], \
+             events: [{{tick, event, who?, zone?, target?, at_s?, name?, projectile?, shooter?, \
+             point?, normal?, speed_mps?, energy_j?}}], fired: [{{trigger, tick, event, ok, \
+             error?}}]}}"
         ),
         json!({"seconds": 0.5}),
     )
@@ -211,6 +224,7 @@ fn step(session: &mut Session, p: Params<'_>) -> Result<Value, CommandError> {
     result.insert("time_s".into(), json!(sim.time_s()));
     result.insert("hash".into(), json!(hash(sim)));
     result.insert("characters".into(), json!(characters(sim)));
+    result.insert("projectiles".into(), json!(projectiles_json(sim)));
     report.into_answer(&mut result);
     if ticks > 0 {
         session.bump_view();
@@ -224,7 +238,8 @@ fn input_spec() -> CommandSpec {
         "Input",
         "Stores what a character is asked to do; it holds until replaced. Fields left out keep \
          their last value; a character's first input starts from standing still, facing its \
-         current rotation.",
+         current rotation. A character with a behaviour is taken over: its behaviour stops \
+         deciding until sim.release. A character that is down takes no input.",
         vec![
             param("entity", T::Entity, "The character: its id or name.").required(),
             param(
@@ -261,8 +276,19 @@ fn input_spec() -> CommandSpec {
                 "Held: interacts once, when it turns true, with the nearest interactable \
                  within reach that the character faces.",
             ),
+            param(
+                "pitch_deg",
+                T::Number,
+                "Where the character aims, up from level, -89 to 89; it does not turn the body.",
+            )
+            .unit("deg"),
+            param(
+                "fire",
+                T::Boolean,
+                "Held: the character's launcher fires every `rate_s` while it has shots.",
+            ),
         ],
-        "{entity, forward, right, yaw_deg, run, jump, interact}: the stored input",
+        &format!("{INPUT_DOC}: the stored input"),
         json!({"entity": "Scout", "forward": 1, "face": [0, -60], "run": true}),
     )
     .play()
@@ -277,6 +303,8 @@ fn input_json(id: u64, i: &Input) -> Value {
         "run": i.run,
         "jump": i.jump,
         "interact": i.interact,
+        "pitch_deg": i.pitch_deg,
+        "fire": i.fire,
     })
 }
 
@@ -331,6 +359,17 @@ fn input(session: &mut Session, p: Params<'_>) -> Result<Value, CommandError> {
     if let Some(v) = p.bool("interact")? {
         record.interact = v;
     }
+    if let Some(v) = p.f64("pitch_deg")? {
+        if !(-MAX_PITCH_DEG..=MAX_PITCH_DEG).contains(&v) {
+            return Err(bad(format!(
+                "`pitch_deg` is {v}; it must be from -{MAX_PITCH_DEG} to {MAX_PITCH_DEG} degrees"
+            )));
+        }
+        record.pitch_deg = v;
+    }
+    if let Some(v) = p.bool("fire")? {
+        record.fire = v;
+    }
     sim.set_input(id, record).map_err(failed)?;
     let stored = sim.input(id).copied().unwrap_or(record);
     Ok(input_json(id.0, &stored))
@@ -340,14 +379,15 @@ fn state_spec() -> CommandSpec {
     spec(
         "sim.state",
         "Play State",
-        "Whether a simulation runs and, if so, its tick, hash, characters, stored inputs, \
-         objectives, the messages showing and the last 20 trigger errors.",
+        "Whether a simulation runs and, if so, its tick, hash, characters (with health, \
+         behaviour and magazine), projectiles in flight, stored inputs, objectives, the \
+         messages showing and the last 20 trigger errors.",
         vec![],
         &format!(
             "{{playing: false}} or {{playing: true, tick, time_s, hash, characters: \
-             {CHARACTERS_DOC}, inputs: [{{entity, forward, right, yaw_deg, run, jump, \
-             interact}}], objectives: [{{id, title, status, hidden}}], messages: [{{text, to, \
-             shown_at_s, until_s}}], trigger_errors: [{{trigger, tick, error}}]}}"
+             {CHARACTERS_DOC}, projectiles: [{PROJECTILE_DOC}], inputs: [{INPUT_DOC}], \
+             objectives: [{{id, title, status, hidden}}], messages: [{{text, to, shown_at_s, \
+             until_s}}], trigger_errors: [{{trigger, tick, error}}]}}"
         ),
         json!({}),
     )
@@ -368,6 +408,7 @@ fn state(session: &mut Session, _p: Params<'_>) -> Result<Value, CommandError> {
         "time_s": sim.time_s(),
         "hash": hash(sim),
         "characters": characters(sim),
+        "projectiles": projectiles_json(sim),
         "inputs": inputs,
         "objectives": serde_json::to_value(&sim.world().objectives).map_err(failed)?,
         "messages": crate::scenario_cmds::messages_json(session),

@@ -260,7 +260,9 @@ impl Host {
             "sim.start" if playing => {
                 Err("a simulation is already running; stop it with sim.stop".into())
             }
-            "sim.stop" | "sim.step" | "sim.input" | "message.show" if !playing => {
+            "sim.stop" | "sim.step" | "sim.input" | "sim.fire" | "sim.release" | "message.show"
+                if !playing =>
+            {
                 Err("no simulation is running; start one with sim.start".into())
             }
             _ => Ok(()),

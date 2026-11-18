@@ -121,6 +121,47 @@ built, saved and changed with commands like everything else.
   `objective.list`, decide, send world or scenario commands, step. A variable you change between
   steps fires its `var` triggers at the start of the next step.
 
+## Projectiles and behaviour
+
+Fighting is three components and two commands; they name no weapon, a pack fills them in.
+
+- **`launcher`** on any entity fires projectiles: point masses flown with gravity, the G7 drag
+  function, the air's density (from `environment.temperature_c` at y = 0 and
+  `environment.sea_level_m`, by the standard atmosphere) and the wind (from
+  `wind_direction_deg`, `wind_speed_mps` at 10 m above the ground and less below it). Give the
+  usual G7 ballistic coefficient in lb/in2 times 895.2 as `ballistic_coefficient` (kg/m2). A
+  character fires from its eyes while its input holds `fire` (`sim.input {fire: true,
+  pitch_deg}`; `pitch_deg` aims up or down without turning the body), every `rate_s`, with a
+  `magazine` and a `reload_s`; anything else fires with `sim.fire {entity, yaw_deg?,
+  pitch_deg?}`. Spread (`dispersion_mrad`) is drawn from the world's seed, so the same world and
+  inputs give the same shots.
+- **Hits.** A projectile hits the terrain, any shape (solid or not) and characters (a capsule
+  from feet to head): a `hit` event `{projectile, shooter, target, point, normal, speed_mps,
+  energy_j}`; `target` is null for the terrain. `sim.step` and `sim.state` list the
+  `projectiles` in flight.
+- **`health`** `{max, current, armor}`: a hit takes `energy_j * damage_per_joule - armor`. At 0
+  a `down` event `{who: shooter, target}`; a character that is down stops and takes no input.
+- **Hearing.** A shot gives a `heard` event `{who: listener, target: shooter, point}` to every
+  character within the launcher's `sound_range_m`.
+- **Seeing.** A character sees another within its view range, its field of view and a clear
+  line of sight (the ray maths of `query.line_of_sight`). The range is
+  `min(view_range_m * light, 3.912 / extinction)`: `light` is 1 by day and 0.15 at night (sun
+  below -12 degrees, linear up to 6 degrees above the horizon), and the extinction is the
+  renderer's own for mist (`3.912 * mist^2 / 120` per metre) and rain (`3.912 / (400 * (0.8 /
+  rain)^1.5)`), so a fog of 1 hides everything beyond 120 m.
+- **`behaviour`** `{mode: idle | patrol | guard, route, team, view_range_m, fov_deg,
+  engage_range_m, aim_error_mrad, reaction_s, search_s}` makes a character an enemy: it walks
+  its route or holds its post; on seeing a character of another team (a behaviour's `team` or a
+  tag `team:<name>`; a character without a team is left alone) it turns, waits `reaction_s`, and
+  fires with its aim error; when it hears a shot or loses its enemy it searches there for
+  `search_s`, then returns. Its state is in `sim.step`, `sim.state` and `entity.get`
+  (`behaviour: {state, target?, ...}`). It writes the same inputs a player does: send it
+  `sim.input` and you play it, until `sim.release {entity}`.
+- **Scenarios** react with triggers on `hit`, `down` and `heard`; `who` and `target` filter by
+  entity or `"tag:<tag>"`. "When the last enemy is down": a trigger on `{"event": "down",
+  "target": "tag:enemy"}` that adds 1 to a variable, and one on that variable reaching the count
+  that sets the objective done.
+
 ## Known limits of M0
 
 - Shapes are boxes, spheres and cylinders; there are no meshes, prefabs, scripts or packs yet.

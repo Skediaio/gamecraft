@@ -1,16 +1,19 @@
-//! Ray maths for the queries: a ray against a box turned about Y, a sphere and an upright
-//! capped cylinder. Pure `f64` functions, deterministic (sines through
-//! [`gamecraft_math::Portable`]), never panicking: every division and square root is guarded
-//! and a non-finite result is a miss.
+//! Ray maths, one implementation for the engine's queries (`query.raycast`,
+//! `query.line_of_sight`) and the simulation (projectile hits, perception): a ray against a box
+//! turned about Y, a sphere, an upright capped cylinder and a capsule, and [`cast`] and
+//! [`line_of_sight`] against the terrain and every entity's `shape`. Pure `f64` functions,
+//! deterministic (sines through [`gamecraft_math::Portable`]), never panicking: every division
+//! and square root is guarded and a non-finite result is a miss.
 //!
 //! **A ray that starts inside a shape** (or on its surface) hits it at distance 0, with the
 //! normal pointing back along the ray (`-direction`): the ray is blocked where it starts.
 
 use gamecraft_math::{Portable, deg_to_rad};
+use gamecraft_world::{Entity, EntityId, HeightField, Shape, ShapeKind, World};
 
 /// Where a ray meets a shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct RayHit {
+pub struct RayHit {
     /// Distance along the ray, metres, from 0.
     pub distance_m: f64,
     /// Unit outward normal of the surface at the hit, world axes.
@@ -30,7 +33,7 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
 }
 
 /// The point `origin + t * direction`.
-pub(crate) fn along(origin: [f64; 3], direction: [f64; 3], t: f64) -> [f64; 3] {
+pub fn along(origin: [f64; 3], direction: [f64; 3], t: f64) -> [f64; 3] {
     let [ox, oy, oz] = origin;
     let [dx, dy, dz] = direction;
     [ox + t * dx, oy + t * dy, oz + t * dz]
@@ -38,7 +41,7 @@ pub(crate) fn along(origin: [f64; 3], direction: [f64; 3], t: f64) -> [f64; 3] {
 
 /// `v` scaled to length 1; `None` for a zero or non-finite vector. Scaled by its largest
 /// component first, so very large and very small finite vectors work.
-pub(crate) fn normalize(v: [f64; 3]) -> Option<[f64; 3]> {
+pub fn normalize(v: [f64; 3]) -> Option<[f64; 3]> {
     let [x, y, z] = v;
     let m = x.abs().max(y.abs()).max(z.abs());
     if !(m.is_finite() && m > 0.0) {
@@ -71,7 +74,7 @@ fn inside(direction: [f64; 3]) -> Option<RayHit> {
 /// `half` centred on `center` and turned `yaw_deg` about +Y (counter-clockwise seen from
 /// above). The ray is turned into the box's own frame by the negative yaw and cut by the three
 /// slabs.
-pub(crate) fn ray_box(
+pub fn ray_box(
     origin: [f64; 3],
     direction: [f64; 3],
     center: [f64; 3],
@@ -128,7 +131,7 @@ pub(crate) fn ray_box(
 }
 
 /// A ray against a sphere of `radius` around `center`.
-pub(crate) fn ray_sphere(
+pub fn ray_sphere(
     origin: [f64; 3],
     direction: [f64; 3],
     center: [f64; 3],
@@ -159,7 +162,7 @@ pub(crate) fn ray_sphere(
 
 /// A ray against an upright cylinder of `radius` and `height` whose bottom cap is centred on
 /// `base`, with flat caps.
-pub(crate) fn ray_cylinder(
+pub fn ray_cylinder(
     origin: [f64; 3],
     direction: [f64; 3],
     base: [f64; 3],
@@ -212,6 +215,216 @@ pub(crate) fn ray_cylinder(
         }
     }
     best
+}
+
+/// A ray against a capsule: the points within `radius` of the segment from `a` to `b`. A ray
+/// that starts inside hits at distance 0.
+pub fn ray_capsule(
+    origin: [f64; 3],
+    direction: [f64; 3],
+    a: [f64; 3],
+    b: [f64; 3],
+    radius: f64,
+) -> Option<RayHit> {
+    let dir = normalize(direction)?;
+    if !(radius.is_finite() && radius > 0.0) {
+        return None;
+    }
+    let ba = sub(b, a);
+    let oa = sub(origin, a);
+    let baba = dot(ba, ba);
+    // The point of the axis nearest to `p`.
+    let nearest = |p: [f64; 3]| {
+        let t = if baba > 0.0 {
+            (dot(sub(p, a), ba) / baba).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        along(a, ba, t)
+    };
+    let inside_sq = {
+        let d = sub(origin, nearest(origin));
+        dot(d, d)
+    };
+    if inside_sq <= radius * radius {
+        return inside(dir);
+    }
+    let mut best: Option<f64> = None;
+    let mut consider = |t: f64| {
+        if t.is_finite() && t >= 0.0 && best.is_none_or(|b| t < b) {
+            best = Some(t);
+        }
+    };
+    // The side: the infinite cylinder around the axis, cut to the segment.
+    if baba > 0.0 {
+        let bard = dot(ba, dir);
+        let baoa = dot(ba, oa);
+        let rdoa = dot(dir, oa);
+        let oaoa = dot(oa, oa);
+        let qa = baba - bard * bard;
+        let qb = baba * rdoa - baoa * bard;
+        let qc = baba * oaoa - baoa * baoa - radius * radius * baba;
+        let h = qb * qb - qa * qc;
+        if qa > 0.0 && h >= 0.0 {
+            let t = (-qb - h.sqrt()) / qa;
+            let y = baoa + t * bard;
+            if y > 0.0 && y < baba {
+                consider(t);
+            }
+        }
+    }
+    // The two caps.
+    for end in [a, b] {
+        if let Some(hit) = ray_sphere(origin, dir, end, radius) {
+            consider(hit.distance_m);
+        }
+    }
+    let t = best?;
+    let point = along(origin, dir, t);
+    let normal = normalize(sub(point, nearest(point)))?;
+    finish(t, normal)
+}
+
+/// A ray against one entity's shape: sized by `size * scale`, standing on the entity's
+/// position, a box turned by its `rotation_y_deg`.
+pub fn ray_shape(origin: [f64; 3], dir: [f64; 3], e: &Entity, shape: &Shape) -> Option<RayHit> {
+    let [px, py, pz] = e.position;
+    let [sx, sy, sz] = shape.size.map(|v| v * e.scale);
+    match shape.kind {
+        ShapeKind::Box => ray_box(
+            origin,
+            dir,
+            [px, py + sy / 2.0, pz],
+            [sx / 2.0, sy / 2.0, sz / 2.0],
+            e.rotation_y_deg,
+        ),
+        ShapeKind::Sphere => ray_sphere(origin, dir, [px, py + sy / 2.0, pz], sx / 2.0),
+        ShapeKind::Cylinder => ray_cylinder(origin, dir, e.position, sx / 2.0, sy),
+    }
+}
+
+/// What a [`cast`] hit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Found {
+    /// Where along the ray, and the surface's normal.
+    pub hit: RayHit,
+    /// The entity whose shape was hit, `None` for the terrain.
+    pub entity: Option<EntityId>,
+}
+
+/// The nearest hit within `max_m` of a ray with a unit `dir`: the terrain (the triangles of
+/// `heights`) and the `shape` of every entity, solid or not, except those `skip` names; on a
+/// tie the terrain, then the lowest id. A hit whose point is not finite is no hit.
+pub fn cast(
+    world: &World,
+    heights: Option<&HeightField>,
+    origin: [f64; 3],
+    dir: [f64; 3],
+    max_m: f64,
+    skip: impl Fn(EntityId) -> bool,
+) -> Option<Found> {
+    let mut best: Option<Found> = None;
+    if let Some(field) = heights
+        && let Some(t) = field.raycast(origin, dir, max_m)
+    {
+        let [x, _, z] = along(origin, dir, t);
+        let normal = field.normal_at(x, z).unwrap_or([0.0, 1.0, 0.0]);
+        best = Some(Found {
+            hit: RayHit {
+                distance_m: t,
+                normal,
+            },
+            entity: None,
+        });
+    }
+    for e in world.entities() {
+        let Some(shape) = e.shape() else {
+            continue;
+        };
+        if skip(e.id) {
+            continue;
+        }
+        let Some(hit) = ray_shape(origin, dir, e, shape) else {
+            continue;
+        };
+        if hit.distance_m > max_m {
+            continue;
+        }
+        if best.is_none_or(|b| hit.distance_m < b.hit.distance_m) {
+            best = Some(Found {
+                hit,
+                entity: Some(e.id),
+            });
+        }
+    }
+    best.filter(|f| {
+        along(origin, dir, f.hit.distance_m)
+            .iter()
+            .all(|c| c.is_finite())
+    })
+}
+
+/// A hit this close to the far end of a line of sight does not block it (the ground or the
+/// surface the target point lies on), metres.
+pub const LINE_OF_SIGHT_END_TOLERANCE_M: f64 = 0.001;
+
+/// The answer of [`line_of_sight`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sight {
+    /// Distance from `from` to `to`, metres.
+    pub distance_m: f64,
+    /// What blocks the line, `None` when it is clear.
+    pub blocked_by: Option<Found>,
+    /// The unit direction from `from` to `to` (`[0, 0, 0]` when they coincide).
+    pub direction: [f64; 3],
+}
+
+/// Whether the straight line from `from` to `to` is clear, with the hit rules of [`cast`]: a hit
+/// within [`LINE_OF_SIGHT_END_TOLERANCE_M`] of `to` does not block, a `from` inside a shape is
+/// blocked at distance 0. `None` when the points are too far apart to measure.
+pub fn line_of_sight(
+    world: &World,
+    heights: Option<&HeightField>,
+    from: [f64; 3],
+    to: [f64; 3],
+    skip: impl Fn(EntityId) -> bool,
+) -> Option<Sight> {
+    let delta = sub(to, from);
+    if delta.iter().any(|c| !c.is_finite()) {
+        return None;
+    }
+    let Some(dir) = normalize(delta) else {
+        return Some(Sight {
+            distance_m: 0.0,
+            blocked_by: None,
+            direction: [0.0; 3],
+        });
+    };
+    // The length along the unit direction, exact for the axis-aligned cases.
+    let distance = dot(dir, delta);
+    if !distance.is_finite() {
+        return None;
+    }
+    let reach = distance - LINE_OF_SIGHT_END_TOLERANCE_M;
+    let blocked_by = if reach > 0.0 {
+        cast(world, heights, from, dir, reach, skip)
+    } else {
+        // Shorter than the tolerance: only a start inside a shape blocks.
+        cast(
+            world,
+            heights,
+            from,
+            dir,
+            LINE_OF_SIGHT_END_TOLERANCE_M,
+            skip,
+        )
+        .filter(|f| f.hit.distance_m == 0.0 && f.entity.is_some())
+    };
+    Some(Sight {
+        distance_m: distance,
+        blocked_by,
+        direction: dir,
+    })
 }
 
 #[cfg(test)]
@@ -310,6 +523,28 @@ mod tests {
     }
 
     #[test]
+    fn capsule_side_caps_inside_and_misses() {
+        let (a, b) = ([0.0, 0.3, 0.0], [0.0, 1.5, 0.0]);
+        let h = ray_capsule([5.0, 1.0, 0.0], [-1.0, 0.0, 0.0], a, b, 0.3).unwrap();
+        assert!(
+            close(h.distance_m, 4.7) && close3(h.normal, [1.0, 0.0, 0.0]),
+            "{h:?}"
+        );
+        let h = ray_capsule([0.0, 9.0, 0.0], [0.0, -1.0, 0.0], a, b, 0.3).unwrap();
+        assert!(
+            close(h.distance_m, 7.2) && close3(h.normal, [0.0, 1.0, 0.0]),
+            "{h:?}"
+        );
+        let h = ray_capsule([0.0, 1.0, 0.1], [1.0, 0.0, 0.0], a, b, 0.3).unwrap();
+        assert_eq!(h.distance_m, 0.0);
+        assert!(ray_capsule([5.0, 2.0, 0.0], [-1.0, 0.0, 0.0], a, b, 0.3).is_none());
+        assert!(ray_capsule([5.0, 1.0, 0.0], [1.0, 0.0, 0.0], a, b, 0.3).is_none());
+        // A slanted ray grazing the top cap.
+        let h = ray_capsule([3.0, 1.5 + 0.2, 0.0], [-1.0, 0.0, 0.0], a, b, 0.3).unwrap();
+        assert!(h.distance_m > 2.7 && h.distance_m < 3.0, "{h:?}");
+    }
+
+    #[test]
     fn hostile_numbers_miss_or_hit_finitely() {
         let big = [1e300, -1e300, 1e300];
         for d in [big, [1e-300, 0.0, 0.0], [0.0, -1.0, 0.0]] {
@@ -318,6 +553,7 @@ mod tests {
                     ray_box(o, d, [0.0; 3], [1e300; 3], 1e300),
                     ray_sphere(o, d, big, 1e300),
                     ray_cylinder(o, d, big, 1e300, 1e300),
+                    ray_capsule(o, d, big, [0.0; 3], 1e300),
                 ]
                 .into_iter()
                 .flatten()

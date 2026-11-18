@@ -1,5 +1,6 @@
 //! Looking up entities: `entity.get` and `entity.find`.
 
+use crate::combat_cmds::{BEHAVIOUR_DOC, behaviour_json, health_json, magazine_json};
 use crate::error::{CommandError, bad, failed};
 use crate::params::Params;
 use crate::session::{Handler, Registration, Session};
@@ -29,8 +30,8 @@ fn get_spec() -> CommandSpec {
         "entity.get",
         "Get Entity",
         "Everything about one entity of the current world (the running world while playing): \
-         its placement and components, the ground beneath it, and while playing a character's \
-         body and stored input.",
+         its placement and components, the ground beneath it, its health, and while playing a \
+         character's body and stored input, its behaviour's state and its launcher's magazine.",
         vec![
             param(
                 "id",
@@ -39,11 +40,15 @@ fn get_spec() -> CommandSpec {
             )
             .required(),
         ],
-        "{id, name, position, rotation_y_deg, scale, components: [...], ground_height_m: \
-         number | null (null without ground beneath), height_above_ground_m: number | null, \
-         body: null | {velocity, grounded} (a character while playing), input: null | \
-         {forward, right, yaw_deg, run, jump} (the input stored for a character while \
-         playing)}",
+        &format!(
+            "{{id, name, position, rotation_y_deg, scale, components: [...], ground_height_m: \
+             number | null (null without ground beneath), height_above_ground_m: number | null, \
+             body: null | {{velocity, grounded}} (a character while playing), input: null | \
+             {{forward, right, yaw_deg, pitch_deg, run, jump, interact, fire}} (the input \
+             stored for a character while playing), health: null | {{max, current, armor, \
+             down}}, behaviour: null | {BEHAVIOUR_DOC} (while playing), magazine: null | \
+             {{left, shots, ready_in_s, reloading}} (a launcher while playing)}}"
+        ),
         json!({"id": "Scout"}),
     )
     .query()
@@ -76,6 +81,9 @@ fn get(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
         "height_above_ground_m": ground.map(|g| y - g),
         "body": body,
         "input": input,
+        "health": health_json(entity),
+        "behaviour": session.live().map_or(Value::Null, |sim| behaviour_json(sim, id)),
+        "magazine": session.live().map_or(Value::Null, |sim| magazine_json(sim, id)),
     }))
 }
 

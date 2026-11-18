@@ -300,6 +300,160 @@ const TAGS_FIELDS: &[Field] = &[field(
      \"who\": \"tag:<tag>\" in triggers and by entity.find.",
 )];
 
+const LAUNCHER_FIELDS: &[Field] = &[
+    field(
+        "muzzle_velocity_mps",
+        "number",
+        Some("mps"),
+        "Speed of the projectile leaving the muzzle, above 0 and at most 3000.",
+    ),
+    field(
+        "mass_kg",
+        "number",
+        Some("kg"),
+        "Mass of one projectile, above 0 and at most 1000.",
+    ),
+    field(
+        "ballistic_coefficient",
+        "number",
+        Some("kg/m2"),
+        "G7 ballistic coefficient in kg/m2 (mass over form factor times pi d^2 / 4): the usual \
+         G7 figure in lb/in2 times 895.2. Above 0 and at most 100000.",
+    ),
+    field(
+        "dispersion_mrad",
+        "number",
+        Some("mrad"),
+        "Spread of the shots (radius of a uniform cone), 0 to 500; seeded, so deterministic.",
+    ),
+    field(
+        "rate_s",
+        "number",
+        Some("s"),
+        "Seconds between two shots while firing is held, above 0 and at most 3600.",
+    ),
+    field(
+        "magazine",
+        "integer",
+        None,
+        "Shots before a reload, 1 to 100000.",
+    ),
+    field(
+        "reload_s",
+        "number",
+        Some("s"),
+        "Seconds a reload takes once the magazine is empty, 0 to 3600.",
+    ),
+    field(
+        "damage_per_joule",
+        "number",
+        None,
+        "Damage per joule of kinetic energy at the hit, 0 to 1e6 (a hit takes energy times \
+         this, less the target's armor).",
+    ),
+    field(
+        "muzzle_height_m",
+        "number",
+        Some("m"),
+        "Muzzle height above the entity's position, 0 to 10000; a character fires from its \
+         eyes instead.",
+    ),
+    field(
+        "max_flight_s",
+        "number",
+        Some("s"),
+        "Longest flight of a projectile, above 0 and at most 600.",
+    ),
+    field(
+        "sound_range_m",
+        "number",
+        Some("m"),
+        "Characters within this distance of the muzzle hear a shot (`heard`), 0 to 100000.",
+    ),
+];
+
+const HEALTH_FIELDS: &[Field] = &[
+    field(
+        "max",
+        "number",
+        None,
+        "Full health, above 0 and at most 1e9.",
+    ),
+    field(
+        "current",
+        "number",
+        None,
+        "Health now, 0 to max; at 0 the entity is down (a character stops and takes no input).",
+    ),
+    field(
+        "armor",
+        "number",
+        None,
+        "Damage every hit loses before it counts, 0 to 1e9.",
+    ),
+];
+
+const BEHAVIOUR_FIELDS: &[Field] = &[
+    field(
+        "mode",
+        "\"idle\"|\"patrol\"|\"guard\"",
+        None,
+        "What it does when nothing caught its attention: stand, walk its route, or hold its \
+         post (where it stood at the start).",
+    ),
+    field(
+        "route",
+        "[[x, z], ...]",
+        Some("m"),
+        "The patrol's points, at most 256; a patrol needs one at least.",
+    ),
+    field(
+        "team",
+        "string",
+        None,
+        "Its side; characters of another non-empty team (a behaviour's team or a tag \
+         `team:<name>`) are enemies. Empty: no side.",
+    ),
+    field(
+        "view_range_m",
+        "number",
+        Some("m"),
+        "How far it sees in daylight and clear air, above 0 and at most 10000; night, mist and \
+         rain shorten it.",
+    ),
+    field(
+        "fov_deg",
+        "number",
+        Some("deg"),
+        "Field of view, above 0 and at most 360.",
+    ),
+    field(
+        "engage_range_m",
+        "number",
+        Some("m"),
+        "It fires at a seen enemy within this distance and runs towards one farther away, \
+         above 0 and at most 10000.",
+    ),
+    field(
+        "aim_error_mrad",
+        "number",
+        Some("mrad"),
+        "Aim error (radius of a uniform cone, drawn per shot), 0 to 1000.",
+    ),
+    field(
+        "reaction_s",
+        "number",
+        Some("s"),
+        "Seconds between first seeing an enemy and firing, 0 to 3600.",
+    ),
+    field(
+        "search_s",
+        "number",
+        Some("s"),
+        "Seconds it searches after losing sight of an enemy or hearing a shot, 0 to 3600.",
+    ),
+];
+
 const KINDS: &[Kind] = &[
     Kind {
         kind: "shape",
@@ -357,6 +511,33 @@ const KINDS: &[Kind] = &[
         fields: TAGS_FIELDS,
         minimal: || json!({"type": "tags"}),
         example: || json!({"type": "tags", "tags": ["beacon", "team:red"]}),
+    },
+    Kind {
+        kind: "launcher",
+        summary: "Something that fires projectiles (a rifle, a bow, a mortar): on a character \
+                  while its input holds `fire`, on anything with sim.fire. Projectiles fly with \
+                  gravity, G7 drag, air density and wind, and hit terrain, shapes and characters.",
+        fields: LAUNCHER_FIELDS,
+        minimal: || json!({"type": "launcher"}),
+        example: || json!({"type": "launcher", "muzzle_velocity_mps": 790, "mass_kg": 0.0109, "ballistic_coefficient": 200, "dispersion_mrad": 0.3, "rate_s": 1.2, "magazine": 5, "reload_s": 3}),
+    },
+    Kind {
+        kind: "health",
+        summary: "What hits take away; at 0 the entity is down (`down` event) and a character \
+                  stops.",
+        fields: HEALTH_FIELDS,
+        minimal: || json!({"type": "health"}),
+        example: || json!({"type": "health", "max": 100, "current": 100, "armor": 5}),
+    },
+    Kind {
+        kind: "behaviour",
+        summary: "A small state machine for a character: patrol, guard or idle; on seeing an \
+                  enemy it reacts and fires, on hearing a shot it searches, then returns. It \
+                  writes the same inputs a player does; sim.input takes it over until \
+                  sim.release.",
+        fields: BEHAVIOUR_FIELDS,
+        minimal: || json!({"type": "behaviour"}),
+        example: || json!({"type": "behaviour", "mode": "patrol", "route": [[0, -20], [15, -20]], "team": "red", "reaction_s": 0.8}),
     },
 ];
 

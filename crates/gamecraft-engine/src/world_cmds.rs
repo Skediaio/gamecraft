@@ -223,16 +223,40 @@ fn environment_set_spec() -> CommandSpec {
             ),
             param("mist", T::Number, "Mist density, 0 to 1."),
             param("rain", T::Number, "Rain intensity, 0 to 1."),
+            param(
+                "temperature_c",
+                T::Number,
+                "Air temperature at world y = 0, -90 to 60; with sea_level_m it sets the air \
+                 density projectiles fly through.",
+            )
+            .unit("degC"),
+            param(
+                "sea_level_m",
+                T::Number,
+                "Height of world y = 0 above sea level, -500 to 11000.",
+            )
+            .unit("m"),
         ],
         "{environment: {time_of_day_h, day_of_year, latitude_deg, wind_direction_deg, \
-         wind_speed_mps, cloud_cover, mist, rain}, sun: {azimuth_deg, elevation_deg}}",
+         wind_speed_mps, cloud_cover, mist, rain, temperature_c, sea_level_m}, sun: \
+         {azimuth_deg, elevation_deg}}",
         json!({"time_of_day_h": 18.5, "cloud_cover": 0.6, "rain": 0.2}),
     )
 }
 
+/// The environment as JSON, every field shown (a file leaves out the air's defaults).
+pub(crate) fn environment_json(env: &Environment) -> Result<Value, CommandError> {
+    let mut v = serde_json::to_value(env).map_err(failed)?;
+    if let Value::Object(m) = &mut v {
+        m.insert("temperature_c".into(), json!(env.temperature_c));
+        m.insert("sea_level_m".into(), json!(env.sea_level_m));
+    }
+    Ok(v)
+}
+
 fn environment_set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
     let mut env: Environment = edit.world.environment.clone();
-    let fields: [(&str, &mut f64); 7] = [
+    let fields: [(&str, &mut f64); 9] = [
         ("time_of_day_h", &mut env.time_of_day_h),
         ("latitude_deg", &mut env.latitude_deg),
         ("wind_direction_deg", &mut env.wind_direction_deg),
@@ -240,6 +264,8 @@ fn environment_set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandE
         ("cloud_cover", &mut env.cloud_cover),
         ("mist", &mut env.mist),
         ("rain", &mut env.rain),
+        ("temperature_c", &mut env.temperature_c),
+        ("sea_level_m", &mut env.sea_level_m),
     ];
     for (name, slot) in fields {
         if let Some(v) = p.f64(name)? {
@@ -251,7 +277,7 @@ fn environment_set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandE
     }
     probe(|w| w.environment = env.clone())?;
     let sun = env.sun();
-    let environment = serde_json::to_value(&env).map_err(failed)?;
+    let environment = environment_json(&env)?;
     edit.world.environment = env;
     Ok(json!({
         "environment": environment,

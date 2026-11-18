@@ -15,6 +15,7 @@
 //! No GPU, no files, no clock: everything here is deterministic. Conventions: metres, Y up,
 //! the ground plane is x and z, north is -Z and east is +X; an entity's position is its base.
 
+mod combat;
 mod component;
 mod entity;
 mod environment;
@@ -27,11 +28,12 @@ mod world;
 #[cfg(test)]
 mod tests;
 
+pub use combat::{Behaviour, BehaviourMode, Health, Launcher};
 pub use component::{
     Character, Component, Interactable, Light, Plant, Shape, ShapeKind, Tags, Zone, ZoneShape,
 };
 pub use entity::{Entity, EntityDraft, EntityId};
-pub use environment::{Environment, SunPosition};
+pub use environment::{Environment, STANDARD_TEMPERATURE_C, SunPosition};
 pub use error::WorldError;
 pub use scenario::{
     CompareOp, Condition, EntityRef, Objective, ObjectiveStatus, Step, TAG_PREFIX, Trigger,

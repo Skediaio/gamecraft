@@ -37,11 +37,11 @@
 //! panic hunt picks the new command up by itself.
 
 mod catalog_cmds;
+mod combat_cmds;
 mod entity_cmds;
 mod error;
 mod example;
 mod find_cmds;
-mod geometry;
 mod geometry_cmds;
 mod inspect_cmds;
 mod params;

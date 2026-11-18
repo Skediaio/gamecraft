@@ -212,6 +212,8 @@ fn never_below_the_ground_with_random_inputs() {
                 run: rng.below(2) == 1,
                 jump: rng.below(4) == 0,
                 interact: false,
+                pitch_deg: 0.0,
+                fire: false,
             };
             sim.set_input(id, input).unwrap();
         }

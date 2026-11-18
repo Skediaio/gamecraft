@@ -160,7 +160,7 @@ fn the_new_components_take_their_defaults() {
     assert!(e.tags().is_empty());
     assert!(!e.has_tag("x"));
     assert_eq!(
-        Component::KINDS,
+        Component::KINDS[..7],
         [
             "shape",
             "plant",

@@ -55,6 +55,11 @@ actions are commands, messages; `docs/design/scenarios.md`) is done 2026-11-18, 
 of Lantern as its test (`crates/gamecraft-engine/tests/lantern.rs`). Open for P1: lights drawn by
 the renderer, the full game as an example, played through the CLI.
 
+The mechanisms of P2 (projectiles with G7 drag, air density and wind; health; sight reduced by
+night, mist and rain; hearing; patrol and engage behaviour; `docs/design/ballistics.md`) are done
+2026-11-18, with a miniature skirmish as their test (`crates/gamecraft-engine/tests/skirmish.rs`).
+Open for P2: tracers and impacts drawn, the full game as an example.
+
 **Done when:** an agent plays each from start to finish over MCP, a second run gives the same
 state hash, and a picture of each exists.
 

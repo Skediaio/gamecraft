@@ -256,6 +256,35 @@ pub enum When {
     },
     /// The simulation started.
     Start,
+    /// A projectile hit something. `who` is the shooter, `target` the entity hit (a character
+    /// or a shape; a hit on the terrain has none).
+    Hit {
+        /// Only this shooter, or shooters with this tag.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        who: Option<EntityRef>,
+        /// Only this entity hit, or entities with this tag.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<EntityRef>,
+    },
+    /// A hit used up a character's health. `who` is the shooter, `target` the character that
+    /// went down.
+    Down {
+        /// Only this shooter, or shooters with this tag.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        who: Option<EntityRef>,
+        /// Only this character, or characters with this tag (`tag:enemy`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<EntityRef>,
+    },
+    /// A character heard a shot. `who` is the character that heard it, `target` the shooter.
+    Heard {
+        /// Only this listener, or listeners with this tag.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        who: Option<EntityRef>,
+        /// Only this shooter, or shooters with this tag.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<EntityRef>,
+    },
 }
 
 impl When {
@@ -268,6 +297,9 @@ impl When {
             When::Time { .. } => "time",
             When::Var { .. } => "var",
             When::Start => "start",
+            When::Hit { .. } => "hit",
+            When::Down { .. } => "down",
+            When::Heard { .. } => "heard",
         }
     }
 
@@ -275,7 +307,12 @@ impl When {
     pub fn has_who(&self) -> bool {
         matches!(
             self,
-            When::Enter { .. } | When::Leave { .. } | When::Interact { .. }
+            When::Enter { .. }
+                | When::Leave { .. }
+                | When::Interact { .. }
+                | When::Hit { .. }
+                | When::Down { .. }
+                | When::Heard { .. }
         )
     }
 
@@ -293,7 +330,10 @@ impl When {
                     who.validate(ctx, &field("who"))?;
                 }
             }
-            When::Interact { target, who } => {
+            When::Interact { target, who }
+            | When::Hit { who, target }
+            | When::Down { who, target }
+            | When::Heard { who, target } => {
                 if let Some(target) = target {
                     target.validate(ctx, &field("target"))?;
                 }

@@ -1,7 +1,7 @@
 # Projectiles, ballistics, damage and simple behaviour
 
 The mechanisms prototype P2 (a skirmish: a small map, one rifle, a few enemies) needs. Status:
-designed 2026-11-18. The rifle, its cartridge and the enemies are pack data; everything here
+built 2026-11-18 (see *As built*). The rifle, its cartridge and the enemies are pack data; everything here
 names no weapon (AGENTS.md rule 16).
 
 ## Projectiles
@@ -67,3 +67,25 @@ Enough for enemies that patrol and react; navigation proper is M7.
 - Penetration of thin shapes, ricochets, materials (later, with physics, M4).
 - Animation of aiming and firing (M6).
 - Sound of shots (M8).
+
+## As built (2026-11-18)
+
+- Drag is `a = -rho * Cd_G7(M) / (2 * BC) * |v_rel| * v_rel`, with BC in kg/m2 (mass over form
+  factor times reference area; a G7 BC in lb/in2 times 703.07 gives kg/m2, and the usual
+  figure times 895.2 gives this formula's value with the reference-area constant folded in).
+  Against a published reference trajectory (.308, 168 gr, G7 BC 0.223, 2750 ft/s) the time of
+  flight is within 0.5 %, the velocity within 1 % and the path within 6 in at 1000 yd.
+- The launcher also carries `max_flight_s` and `sound_range_m`; the behaviour also carries
+  `view_range_m`, `fov_deg` and `search_s`.
+- Event roles: for `hit` and `down`, `who` is the shooter and `target` the one hit; for
+  `heard`, `who` is the listener and `target` the shooter.
+- A character's team is its behaviour's `team`, else a `team:<name>` tag; a character without a
+  team is never engaged.
+- Sight range is `min(view_range * light, 3.912 / (mist + rain extinction))`, with light 0.15 at
+  night (sun at or below -12 degrees) and 1 by day (+6 degrees and above), linear between.
+- Wind is given at 10 m above the ground and follows a logarithmic profile with a roughness
+  length of 0.03 m.
+- Every shape stops a shot, solid or not; a shooter cannot hit itself in the first 0.25 s; the
+  shooter's own motion is not added to the projectile.
+- The ray maths lives in `gamecraft-sim/src/ray.rs`, shared by projectiles, sight and the
+  engine's `query.raycast` and `query.line_of_sight`.

@@ -57,6 +57,8 @@ fn script(rng: &mut Rng) -> Input {
         run: rng.below(2) == 0,
         jump: rng.below(5) == 0,
         interact: false,
+        pitch_deg: 0.0,
+        fire: false,
     }
 }
 

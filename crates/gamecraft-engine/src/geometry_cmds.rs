@@ -4,15 +4,15 @@
 //! `shape` component of every entity, solid or not: a box turned by the entity's
 //! `rotation_y_deg`, a sphere or a capped cylinder, sized by `size * scale` and standing on the
 //! entity's position. Plants and characters are not hit yet. A ray that starts inside a shape
-//! hits it at distance 0 (see [`crate::geometry`]).
+//! hits it at distance 0. The ray maths is [`gamecraft_sim::ray`], the very code the simulation
+//! uses for projectiles and perception.
 
 use crate::error::{CommandError, bad};
-use crate::geometry::{RayHit, along, normalize, ray_box, ray_cylinder, ray_sphere};
 use crate::params::Params;
 use crate::session::{Handler, Registration, Session};
 use crate::spec::{CommandSpec, ParamType as T, param, spec};
 use gamecraft_math::{Portable, rad_to_deg};
-use gamecraft_world::{Entity, Shape, ShapeKind};
+use gamecraft_sim::ray::{self, Found, along, normalize};
 use serde_json::{Map, Value, json};
 
 /// The commands of this module.
@@ -37,9 +37,6 @@ const RAY_MIN_M: f64 = 0.01;
 const RAY_MAX_M: f64 = 100_000.0;
 /// `max_m` when left out, metres.
 const RAY_DEFAULT_M: f64 = 1000.0;
-/// A hit this close to the far end of a line of sight does not block it (the ground or the
-/// surface the target point lies on), metres.
-const LINE_OF_SIGHT_END_TOLERANCE_M: f64 = 0.001;
 
 const NOT_HIT: &str = "Plants and characters are not hit yet.";
 
@@ -74,82 +71,35 @@ fn ground_height(session: &Session, p: Params<'_>) -> Result<Value, CommandError
     Ok(json!({"x": x, "z": z, "height_m": height, "normal": normal, "slope_deg": slope}))
 }
 
-/// What a ray hit.
-struct Found<'w> {
-    hit: RayHit,
-    /// The entity, `None` for the terrain.
-    entity: Option<&'w Entity>,
-}
-
-/// A ray against one entity's shape.
-fn ray_shape(origin: [f64; 3], dir: [f64; 3], e: &Entity, shape: &Shape) -> Option<RayHit> {
-    let [px, py, pz] = e.position;
-    let [sx, sy, sz] = shape.size.map(|v| v * e.scale);
-    match shape.kind {
-        ShapeKind::Box => ray_box(
-            origin,
-            dir,
-            [px, py + sy / 2.0, pz],
-            [sx / 2.0, sy / 2.0, sz / 2.0],
-            e.rotation_y_deg,
-        ),
-        ShapeKind::Sphere => ray_sphere(origin, dir, [px, py + sy / 2.0, pz], sx / 2.0),
-        ShapeKind::Cylinder => ray_cylinder(origin, dir, e.position, sx / 2.0, sy),
-    }
-}
-
-/// The nearest hit within `max_m` of a ray with a unit `dir`: the terrain and every shape;
-/// on a tie the terrain, then the lowest id.
-fn cast(session: &Session, origin: [f64; 3], dir: [f64; 3], max_m: f64) -> Option<Found<'_>> {
-    let mut best: Option<Found<'_>> = None;
-    if let Some(field) = session.current_heights()
-        && let Some(t) = field.raycast(origin, dir, max_m)
-    {
-        let [x, _, z] = along(origin, dir, t);
-        let normal = field.normal_at(x, z).unwrap_or([0.0, 1.0, 0.0]);
-        best = Some(Found {
-            hit: RayHit {
-                distance_m: t,
-                normal,
-            },
-            entity: None,
-        });
-    }
-    for e in session.current_world().entities() {
-        let Some(shape) = e.shape() else {
-            continue;
-        };
-        let Some(hit) = ray_shape(origin, dir, e, shape) else {
-            continue;
-        };
-        if hit.distance_m > max_m {
-            continue;
-        }
-        if best
-            .as_ref()
-            .is_none_or(|b| hit.distance_m < b.hit.distance_m)
-        {
-            best = Some(Found {
-                hit,
-                entity: Some(e),
-            });
-        }
-    }
-    best.filter(|f| {
-        along(origin, dir, f.hit.distance_m)
-            .iter()
-            .all(|c| c.is_finite())
-    })
+/// The nearest hit within `max_m` of a ray with a unit `dir` in the current world.
+fn cast(session: &Session, origin: [f64; 3], dir: [f64; 3], max_m: f64) -> Option<Found> {
+    ray::cast(
+        session.current_world(),
+        session.current_heights(),
+        origin,
+        dir,
+        max_m,
+        |_| false,
+    )
 }
 
 /// `{kind, entity?, name?, point, normal, distance_m}` of a hit.
-fn describe(found: &Found<'_>, origin: [f64; 3], dir: [f64; 3]) -> Map<String, Value> {
+fn describe(
+    session: &Session,
+    found: &Found,
+    origin: [f64; 3],
+    dir: [f64; 3],
+) -> Map<String, Value> {
     let mut v = Map::new();
     match found.entity {
-        Some(e) => {
+        Some(id) => {
+            let name = session
+                .current_world()
+                .entity(id)
+                .map_or("", |e| e.name.as_str());
             v.insert("kind".into(), json!("entity"));
-            v.insert("entity".into(), json!(e.id.0));
-            v.insert("name".into(), json!(e.name));
+            v.insert("entity".into(), json!(id.0));
+            v.insert("name".into(), json!(name));
         }
         None => {
             v.insert("kind".into(), json!("terrain"));
@@ -222,7 +172,7 @@ fn raycast(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
     };
     let mut v = Map::new();
     v.insert("hit".into(), json!(true));
-    v.extend(describe(&found, origin, dir));
+    v.extend(describe(session, &found, origin, dir));
     Ok(Value::Object(v))
 }
 
@@ -254,36 +204,22 @@ fn line_of_sight_spec() -> CommandSpec {
 fn line_of_sight(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
     let from = p.point3("from")?.ok_or_else(|| bad("missing `from`"))?;
     let to = p.point3("to")?.ok_or_else(|| bad("missing `to`"))?;
-    let [fx, fy, fz] = from;
-    let [tx, ty, tz] = to;
-    let delta = [tx - fx, ty - fy, tz - fz];
-    if delta.iter().any(|c| !c.is_finite()) {
-        return Err(bad(format!(
+    let sight = ray::line_of_sight(
+        session.current_world(),
+        session.current_heights(),
+        from,
+        to,
+        |_| false,
+    )
+    .ok_or_else(|| {
+        bad(format!(
             "`from` {from:?} and `to` {to:?} are too far apart to measure"
-        )));
-    }
-    let Some(dir) = normalize(delta) else {
-        return Ok(json!({"clear": true, "distance_m": 0.0}));
+        ))
+    })?;
+    let Some(found) = sight.blocked_by else {
+        return Ok(json!({"clear": true, "distance_m": sight.distance_m}));
     };
-    // The length along the unit direction, exact for the axis-aligned cases.
-    let distance = dir.iter().zip(delta).map(|(d, v)| d * v).sum::<f64>();
-    if !distance.is_finite() {
-        return Err(bad(format!(
-            "`from` {from:?} and `to` {to:?} are too far apart to measure"
-        )));
-    }
-    let reach = distance - LINE_OF_SIGHT_END_TOLERANCE_M;
-    let blocked = if reach > 0.0 {
-        cast(session, from, dir, reach)
-    } else {
-        // Shorter than the tolerance: only a start inside a shape blocks.
-        cast(session, from, dir, LINE_OF_SIGHT_END_TOLERANCE_M)
-            .filter(|f| f.hit.distance_m == 0.0 && f.entity.is_some())
-    };
-    let Some(found) = blocked else {
-        return Ok(json!({"clear": true, "distance_m": distance}));
-    };
-    let mut b = describe(&found, from, dir);
+    let mut b = describe(session, &found, from, sight.direction);
     b.remove("normal");
-    Ok(json!({"clear": false, "distance_m": distance, "blocked_by": Value::Object(b)}))
+    Ok(json!({"clear": false, "distance_m": sight.distance_m, "blocked_by": Value::Object(b)}))
 }

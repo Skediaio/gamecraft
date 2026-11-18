@@ -1,5 +1,6 @@
 //! Unit tests of the crate, one file per area.
 
+mod combat;
 mod document;
 mod fuzz;
 mod scenario;

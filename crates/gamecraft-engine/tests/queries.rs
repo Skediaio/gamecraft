@@ -721,7 +721,10 @@ fn component_list_describes_every_component_and_its_examples_parse() {
             "zone",
             "interactable",
             "light",
-            "tags"
+            "tags",
+            "launcher",
+            "health",
+            "behaviour"
         ]
     );
     for c in list {

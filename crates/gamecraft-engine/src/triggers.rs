@@ -1,6 +1,7 @@
 //! Running a scenario's triggers while playing (`docs/design/scenarios.md`, *Running*).
 //!
-//! The simulation detects `enter`, `leave`, `interact` and `time` events during a tick; the
+//! The simulation detects `enter`, `leave`, `interact`, `time`, `hit`, `down` and `heard`
+//! events during a tick; the
 //! session adds `start` (on `sim.start`) and `var` (a variable changed). After each tick the
 //! session hands every event, in order, to [`happen`]: each enabled trigger of the running
 //! world that waits for it, whose references match and whose condition holds, runs its
@@ -131,6 +132,9 @@ impl Happening {
             (Happening::Sim(EventKind::Enter { .. }), When::Enter { .. })
             | (Happening::Sim(EventKind::Leave { .. }), When::Leave { .. })
             | (Happening::Sim(EventKind::Interact { .. }), When::Interact { .. })
+            | (Happening::Sim(EventKind::Hit { .. }), When::Hit { .. })
+            | (Happening::Sim(EventKind::Down { .. }), When::Down { .. })
+            | (Happening::Sim(EventKind::Heard { .. }), When::Heard { .. })
             | (Happening::Start, When::Start) => true,
             (Happening::Sim(EventKind::Time { at_s }), When::Time { at_s: t }) => at_s == t,
             (Happening::Var(name), When::Var { name: n }) => name == n,
@@ -302,14 +306,24 @@ fn resolve(world: &World, reference: &EntityRef, field: &str) -> Result<EntityId
         .map_err(|e| format!("when.{field} \"{}\": {e}", reference.0))
 }
 
-/// Whether the acting entity passes a `who` filter.
-fn who_passes(world: &World, who: EntityId, filter: Option<&EntityRef>) -> Result<bool, String> {
+/// Whether `entity` passes a filter of the trigger's `field` (`who`, `zone`, `target`): an
+/// entity reference or `tag:<tag>`. No filter passes everything; a filter does not pass an
+/// event without that entity (a hit on the terrain has no target).
+fn passes(
+    world: &World,
+    entity: Option<EntityId>,
+    filter: Option<&EntityRef>,
+    field: &str,
+) -> Result<bool, String> {
     let Some(filter) = filter else {
         return Ok(true);
     };
+    let Some(entity) = entity else {
+        return Ok(false);
+    };
     match filter.tag() {
-        Some(tag) => Ok(world.entity(who).is_some_and(|e| e.has_tag(tag))),
-        None => Ok(resolve(world, filter, "who")? == who),
+        Some(tag) => Ok(world.entity(entity).is_some_and(|e| e.has_tag(tag))),
+        None => Ok(resolve(world, filter, field)? == entity),
     }
 }
 
@@ -325,17 +339,13 @@ fn matches(world: &World, when: &When, happening: &Happening) -> Result<Option<P
     let (who, subject) = (kind.who(), kind.target());
     let (wanted, filter, field) = match when {
         When::Enter { zone, who } | When::Leave { zone, who } => (Some(zone), who.as_ref(), "zone"),
-        When::Interact { target, who } => (target.as_ref(), who.as_ref(), "target"),
+        When::Interact { target, who }
+        | When::Hit { who, target }
+        | When::Down { who, target }
+        | When::Heard { who, target } => (target.as_ref(), who.as_ref(), "target"),
         _ => return Ok(Some((who, subject))),
     };
-    if let (Some(wanted), Some(subject)) = (wanted, subject)
-        && resolve(world, wanted, field)? != subject
-    {
-        return Ok(None);
-    }
-    if let Some(who) = who
-        && !who_passes(world, who, filter)?
-    {
+    if !passes(world, subject, wanted, field)? || !passes(world, who, filter, "who")? {
         return Ok(None);
     }
     Ok(Some((who, subject)))

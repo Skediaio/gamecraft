@@ -2,7 +2,10 @@
 
 use crate::error::Ctx;
 use crate::limits::{MAX_COORDINATE_M, SCALE_MAX, SCALE_MIN};
-use crate::{Character, Component, Interactable, Light, Plant, Shape, WorldError, Zone};
+use crate::{
+    Behaviour, Character, Component, Health, Interactable, Launcher, Light, Plant, Shape,
+    WorldError, Zone,
+};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -134,6 +137,43 @@ impl Entity {
             Component::Light(l) => Some(l),
             _ => None,
         })
+    }
+
+    /// The launcher component, if any.
+    pub fn launcher(&self) -> Option<&Launcher> {
+        self.components.iter().find_map(|c| match c {
+            Component::Launcher(l) => Some(l),
+            _ => None,
+        })
+    }
+
+    /// The health component, if any.
+    pub fn health(&self) -> Option<&Health> {
+        self.components.iter().find_map(|c| match c {
+            Component::Health(h) => Some(h),
+            _ => None,
+        })
+    }
+
+    /// The health component, if any, to change.
+    pub fn health_mut(&mut self) -> Option<&mut Health> {
+        self.components.iter_mut().find_map(|c| match c {
+            Component::Health(h) => Some(h),
+            _ => None,
+        })
+    }
+
+    /// The behaviour component, if any.
+    pub fn behaviour(&self) -> Option<&Behaviour> {
+        self.components.iter().find_map(|c| match c {
+            Component::Behaviour(b) => Some(b),
+            _ => None,
+        })
+    }
+
+    /// Whether the entity has a `health` component that is used up.
+    pub fn is_down(&self) -> bool {
+        self.health().is_some_and(Health::is_down)
     }
 
     /// The entity's tags, empty without a `tags` component.

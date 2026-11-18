@@ -81,7 +81,7 @@ fn inspect(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
         "playing": session.is_playing(),
         "tick": session.live().map(|s| s.tick()),
         "terrain": terrain,
-        "environment": serde_json::to_value(&world.environment).map_err(failed)?,
+        "environment": crate::world_cmds::environment_json(&world.environment)?,
         "sun": {
             "azimuth_deg": sun.azimuth_deg,
             "elevation_deg": sun.elevation_deg,

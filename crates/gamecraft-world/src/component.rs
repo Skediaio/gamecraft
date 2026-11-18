@@ -1,6 +1,7 @@
 //! Components: the typed pieces of data an entity carries.
 
 use crate::WorldError;
+use crate::combat::{Behaviour, Health, Launcher};
 use crate::error::Ctx;
 use crate::limits::{
     INTERACT_REACH_MAX_M, LIGHT_INTENSITY_MAX_CD, LIGHT_RANGE_MAX_M, MAX_NAME_CHARS,
@@ -30,11 +31,17 @@ pub enum Component {
     Light(Light),
     /// Free labels that triggers and queries filter by.
     Tags(Tags),
+    /// Something that fires projectiles.
+    Launcher(Launcher),
+    /// What hits take away.
+    Health(Health),
+    /// A small state machine that patrols, reacts and fires.
+    Behaviour(Behaviour),
 }
 
 impl Component {
     /// Every component type name, in the order the engine lists them.
-    pub const KINDS: [&'static str; 7] = [
+    pub const KINDS: [&'static str; 10] = [
         "shape",
         "plant",
         "character",
@@ -42,10 +49,13 @@ impl Component {
         "interactable",
         "light",
         "tags",
+        "launcher",
+        "health",
+        "behaviour",
     ];
 
     /// The type name of this component (`shape`, `plant`, `character`, `zone`,
-    /// `interactable`, `light` or `tags`), as in JSON.
+    /// `interactable`, `light`, `tags`, `launcher`, `health` or `behaviour`), as in JSON.
     pub fn kind(&self) -> &'static str {
         match self {
             Component::Shape(_) => "shape",
@@ -55,6 +65,9 @@ impl Component {
             Component::Interactable(_) => "interactable",
             Component::Light(_) => "light",
             Component::Tags(_) => "tags",
+            Component::Launcher(_) => "launcher",
+            Component::Health(_) => "health",
+            Component::Behaviour(_) => "behaviour",
         }
     }
 
@@ -68,6 +81,9 @@ impl Component {
             Component::Interactable(i) => i.validate(ctx),
             Component::Light(l) => l.validate(ctx),
             Component::Tags(t) => t.validate(ctx),
+            Component::Launcher(l) => l.validate(ctx),
+            Component::Health(h) => h.validate(ctx),
+            Component::Behaviour(b) => b.validate(ctx),
         }
     }
 }

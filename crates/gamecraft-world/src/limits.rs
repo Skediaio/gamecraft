@@ -86,3 +86,42 @@ pub const MAX_CONDITION_DEPTH: usize = 8;
 pub const MAX_CONDITION_ITEMS: usize = 64;
 /// Latest `at_s` of a `time` event, seconds of simulated time.
 pub const TRIGGER_TIME_MAX_S: f64 = 1e9;
+
+/// Coldest air at the world's ground level (`environment.temperature_c`), degrees Celsius.
+pub const TEMPERATURE_MIN_C: f64 = -90.0;
+/// Hottest air at the world's ground level, degrees Celsius.
+pub const TEMPERATURE_MAX_C: f64 = 60.0;
+/// Lowest height of world y = 0 above sea level (`environment.sea_level_m`), metres.
+pub const SEA_LEVEL_MIN_M: f64 = -500.0;
+/// Highest height of world y = 0 above sea level, metres: the top of the troposphere, where the
+/// barometric formula of the standard atmosphere used for the air ends.
+pub const SEA_LEVEL_MAX_M: f64 = 11_000.0;
+
+/// Fastest muzzle velocity of a `launcher`, metres per second.
+pub const MUZZLE_VELOCITY_MAX_MPS: f64 = 3000.0;
+/// Heaviest projectile of a `launcher`, kilograms.
+pub const PROJECTILE_MASS_MAX_KG: f64 = 1000.0;
+/// Largest ballistic coefficient of a `launcher`, kilograms per square metre.
+pub const BALLISTIC_COEFFICIENT_MAX: f64 = 100_000.0;
+/// Widest dispersion of a `launcher`, milliradians.
+pub const DISPERSION_MAX_MRAD: f64 = 500.0;
+/// Longest time between shots, or of a reload, seconds.
+pub const LAUNCHER_TIME_MAX_S: f64 = 3600.0;
+/// Most projectiles in one magazine of a `launcher`.
+pub const MAGAZINE_MAX: u32 = 100_000;
+/// Largest damage per joule of a `launcher`.
+pub const DAMAGE_PER_JOULE_MAX: f64 = 1e6;
+/// Longest flight of a projectile, seconds.
+pub const MAX_FLIGHT_MAX_S: f64 = 600.0;
+/// Largest range at which a shot is heard, metres.
+pub const SOUND_RANGE_MAX_M: f64 = 100_000.0;
+/// Most health (and armour) of a `health` component.
+pub const HEALTH_MAX: f64 = 1e9;
+/// Most points of a `behaviour`'s route.
+pub const MAX_ROUTE_POINTS: usize = 256;
+/// Largest view, engage or search range of a `behaviour`, metres.
+pub const BEHAVIOUR_RANGE_MAX_M: f64 = 10_000.0;
+/// Largest aim error of a `behaviour`, milliradians.
+pub const AIM_ERROR_MAX_MRAD: f64 = 1000.0;
+/// Longest reaction or search time of a `behaviour`, seconds.
+pub const BEHAVIOUR_TIME_MAX_S: f64 = 3600.0;

@@ -105,6 +105,7 @@ const MODULES: &[&[Registration]] = &[
     crate::world_cmds::SPECS,
     crate::entity_cmds::SPECS,
     crate::play_cmds::SPECS,
+    crate::combat_cmds::SPECS,
     crate::inspect_cmds::SPECS,
     crate::find_cmds::SPECS,
     crate::geometry_cmds::SPECS,

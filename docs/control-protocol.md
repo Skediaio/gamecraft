@@ -111,7 +111,7 @@ degrees, times seconds; an entity is its id or its name.
 | `world.set` | `{name?, seed?}` | `null`; renames the world or changes its seed |
 | `terrain.set` | `{kind? = "noise", size_m? = 256, cell_m? = 2, height_m? = 0, seed?, relief_m? = 40, feature_m? = 200, octaves? = 5, roughness? = 0.5}` | `{cols, rows, min_height_m, max_height_m}`; a square centred on the origin, `flat` (`height_m`) or seeded `noise` (the other keys); keys of the other kind are refused; entities are not moved |
 | `terrain.clear` | `{}` | `null`; no ground |
-| `environment.set` | `{time_of_day_h?, day_of_year?, latitude_deg?, wind_direction_deg?, wind_speed_mps?, cloud_cover?, mist?, rain?}` | `{environment: {time_of_day_h, day_of_year, latitude_deg, wind_direction_deg, wind_speed_mps, cloud_cover, mist, rain}, sun: {azimuth_deg, elevation_deg}}`; only the fields given change |
+| `environment.set` | `{time_of_day_h?, day_of_year?, latitude_deg?, wind_direction_deg?, wind_speed_mps?, cloud_cover?, mist?, rain?, temperature_c?, sea_level_m?}` | `{environment: {time_of_day_h, day_of_year, latitude_deg, wind_direction_deg, wind_speed_mps, cloud_cover, mist, rain, temperature_c, sea_level_m}, sun: {azimuth_deg, elevation_deg}}`; only the fields given change; `temperature_c` (at world y = 0, default 15) and `sea_level_m` (the height of y = 0 above sea level, default 0) give the air density projectiles fly through |
 
 ### Entities
 
@@ -132,16 +132,21 @@ Components, as in the file format (fields left out take their defaults):
 `{"type": "zone", "shape": "circle" | "box", "radius_m", "size": [x, z], "height_m"}`,
 `{"type": "interactable", "reach_m", "prompt"}`,
 `{"type": "light", "color": [r, g, b], "intensity_cd", "range_m", "on"}`,
-`{"type": "tags", "tags": ["..."]}`.
+`{"type": "tags", "tags": ["..."]}`,
+`{"type": "launcher", "muzzle_velocity_mps", "mass_kg", "ballistic_coefficient", "dispersion_mrad", "rate_s", "magazine", "reload_s", "damage_per_joule", "muzzle_height_m", "max_flight_s", "sound_range_m"}` (the ballistic coefficient is G7, in kg/m2: the usual lb/in2 figure times 895.2),
+`{"type": "health", "max", "current", "armor"}`,
+`{"type": "behaviour", "mode": "idle" | "patrol" | "guard", "route": [[x, z], ...], "team", "view_range_m", "fov_deg", "engage_range_m", "aim_error_mrad", "reaction_s", "search_s"}`.
 
 ### Playing
 
 | Command | Params | Result |
 |---|---|---|
 | `sim.start` | `{}` | `{tick: 0, hash, characters: [ids], events, fired}`; plays a copy of the document; the `start` triggers run |
-| `sim.input` | `{entity, forward?, right?, yaw_deg?, face?, run?, jump?, interact?}` | `{entity, forward, right, yaw_deg, run, jump, interact}`: the stored input; it holds until replaced, fields left out keep their value; `yaw_deg` or `face` (`[x, z]`), not both; `interact` held interacts once, when it turns true |
-| `sim.step` | `{ticks? = 1, seconds?}` | `{tick, time_s, hash, characters: [{id, name, position, rotation_y_deg, velocity, grounded}], events: [{tick, event, ...}], fired: [{trigger, tick, event, ok, error?}]}`; whole ticks of 1/60 s, at most 36000 per call; the triggers run after each tick; at most 1000 events and 1000 fired listed (`events_omitted`, `fired_omitted` count the rest) |
-| `sim.state` | `{}` | `{playing: false}` or `{playing: true, tick, time_s, hash, characters: [...], inputs: [{entity, forward, right, yaw_deg, run, jump, interact}], objectives, messages: [{text, to, shown_at_s, until_s}], trigger_errors: [{trigger, tick, error}]}`; the last 20 trigger errors |
+| `sim.input` | `{entity, forward?, right?, yaw_deg?, face?, run?, jump?, interact?, pitch_deg?, fire?}` | `{entity, forward, right, yaw_deg, pitch_deg, run, jump, interact, fire}`: the stored input; it holds until replaced, fields left out keep their value; `yaw_deg` or `face` (`[x, z]`), not both; `interact` held interacts once, when it turns true; `pitch_deg` (-89 to 89) is where the character aims; `fire` held fires its launcher every `rate_s`; a character with a behaviour is taken over until `sim.release`; a character that is down takes no input |
+| `sim.fire` | `{entity, yaw_deg?, pitch_deg?}` | `{entity, projectile, magazine: {left, shots, ready_in_s, reloading}}`; fires the entity's launcher now (anything with a `launcher`, a character too); `yaw_deg` defaults to its rotation, `pitch_deg` (-90 to 90) to a character's input pitch, else 0; refused while the launcher is not ready (it says how long to wait) or the entity is down |
+| `sim.release` | `{entity}` | `{entity, released, behaviour}`; hands a character an agent took over back to its behaviour |
+| `sim.step` | `{ticks? = 1, seconds?}` | `{tick, time_s, hash, characters: [{id, name, position, rotation_y_deg, velocity, grounded, health, behaviour, magazine}], projectiles: [{id, shooter, position, velocity, speed_mps, age_s}], events: [{tick, event, ...}], fired: [{trigger, tick, event, ok, error?}]}`; whole ticks of 1/60 s, at most 36000 per call; the triggers run after each tick; at most 1000 events and 1000 fired listed (`events_omitted`, `fired_omitted` count the rest); `health` is `{max, current, armor, down}`, `behaviour` `{state, target?, wait_s?, point?, left_s?, waypoint, taken_over}` and `magazine` `{left, shots, ready_in_s, reloading}`, each null without the component |
+| `sim.state` | `{}` | `{playing: false}` or `{playing: true, tick, time_s, hash, characters: [...], projectiles: [...], inputs: [{entity, forward, right, yaw_deg, pitch_deg, run, jump, interact, fire}], objectives, messages: [{text, to, shown_at_s, until_s}], trigger_errors: [{trigger, tick, error}]}`; the last 20 trigger errors |
 | `sim.stop` | `{keep? = false}` | `{tick, kept}`; throws the running world away, or with `keep` makes it the document as one undo step |
 
 While a simulation runs, the World, Entities and Scenarios commands change the running world
@@ -156,7 +161,7 @@ While a simulation runs, the World, Entities and Scenarios commands change the r
 | `objective.add` | `{id, title, status? = "open", hidden? = false}` | `{id, title, status, hidden}`; `status` is `open`, `done` or `failed` |
 | `objective.set` | `{id, title?, status?, hidden?}` | `{id, title, status, hidden}`; only the fields given change |
 | `objective.remove` | `{id}` | `null` |
-| `trigger.add` | `{id, when, if?, do, once? = true, enabled? = true}` | the trigger; every command of `do` is checked against its spec now (world commands and `message.show` only; `$who` and `$target` only as the whole value of an entity parameter of an `enter`, `leave` or `interact` trigger) |
+| `trigger.add` | `{id, when, if?, do, once? = true, enabled? = true}` | the trigger; every command of `do` is checked against its spec now (world commands and `message.show` only; `$who` and `$target` only as the whole value of an entity parameter of an `enter`, `leave`, `interact`, `hit`, `down` or `heard` trigger) |
 | `trigger.set` | `{id, when?, if?, do?, once?, enabled?}` | the trigger; only the fields given change, then the whole trigger is checked again |
 | `trigger.remove` | `{id}` | `null` |
 | `message.show` | `{text, to?, seconds? = 5}` | `{text, to, shown_at_s, until_s}`; while playing only; listed in `sim.state` until it expires |
@@ -164,12 +169,16 @@ While a simulation runs, the World, Entities and Scenarios commands change the r
 | `objective.list` | `{}` | `{objectives: [{id, title, status, hidden}], open, done, failed}` |
 
 A trigger: `when` is `{"event": "enter" | "leave", "zone", "who"?}`, `{"event": "interact",
-"target"?, "who"?}`, `{"event": "time", "at_s"}`, `{"event": "var", "name"}` or `{"event":
-"start"}` (`zone`, `target` and `who` are entity ids or names, `who` also `"tag:<tag>"`); `if`
+"target"?, "who"?}`, `{"event": "time", "at_s"}`, `{"event": "var", "name"}`, `{"event":
+"start"}`, `{"event": "hit" | "down", "who"? (the shooter), "target"? (the entity hit or
+downed)}` or `{"event": "heard", "who"? (the listener), "target"? (the shooter)}` (`zone`,
+`target` and `who` are entity ids or names, or `"tag:<tag>"`); `if`
 is `{"var", "op": "==" | "!=" | "<" | "<=" | ">" | ">=", "value"}`, `{"all": [...]}` or
 `{"any": [...]}`; `do` is `[{"command", "params"?}]`. Events in a step's answer: `{tick, event:
 "enter" | "leave", who, zone}`, `{tick, event: "interact", who, target}`, `{tick, event: "time",
-at_s}`, `{tick, event: "var", name}`, `{tick, event: "start"}`. A trigger's commands run as one
+at_s}`, `{tick, event: "var", name}`, `{tick, event: "start"}`, `{tick, event: "hit", projectile,
+shooter, target (null for the terrain), point, normal, speed_mps, energy_j}`, `{tick, event:
+"down", who, target}`, `{tick, event: "heard", who, target, point}`. A trigger's commands run as one
 all-or-nothing transaction on the running world; a failure is reported (`fired` with `ok:
 false`, `trigger_errors`) and changes nothing. Triggers fired by triggers nest at most 32 deep.
 
@@ -178,7 +187,7 @@ false`, `trigger_errors`) and changes nothing. Triggers fired by triggers nest a
 | Command | Params | Result |
 |---|---|---|
 | `world.inspect` | `{entities? = true, limit? = 200, offset? = 0}` | below |
-| `entity.get` | `{id}` | `{id, name, position, rotation_y_deg, scale, components, ground_height_m, height_above_ground_m, body, input}`; `body` (`{velocity, grounded}`) and `input` while playing, for a character, else null |
+| `entity.get` | `{id}` | `{id, name, position, rotation_y_deg, scale, components, ground_height_m, height_above_ground_m, body, input, health, behaviour, magazine}`; `body` (`{velocity, grounded}`) and `input` while playing, for a character, else null; `health` (`{max, current, armor, down}`) with a `health` component; `behaviour` (its state) and `magazine` (its launcher's) while playing |
 | `entity.find` | `{name?, component?, tag?, near?, radius_m?, limit? = 50}` | `{total, entities: [{id, name, position, components, distance_m?}]}`; part of the name in any case, a component type, a tag (exactly), a horizontal circle round `near` (`[x, z]`); by distance with `near`, else by id |
 | `query.ground_height` | `{x, z}` | `{x, z, height_m, normal, slope_deg}`; the terrain only, null outside it |
 | `query.raycast` | `{origin, direction, max_m? = 1000}` | `{hit: false}` or `{hit: true, kind: "terrain" \| "entity", entity?, name?, point, normal, distance_m}`; the nearest of the terrain and every shape, solid or not; plants and characters are not hit yet; a ray that starts inside a shape hits at distance 0 |

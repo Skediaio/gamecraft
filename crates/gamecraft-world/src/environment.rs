@@ -3,7 +3,8 @@
 use crate::WorldError;
 use crate::error::Ctx;
 use crate::limits::{
-    DAY_OF_YEAR_MAX, DAY_OF_YEAR_MIN, LATITUDE_MAX_DEG, TIME_OF_DAY_MAX_H, WIND_SPEED_MAX_MPS,
+    DAY_OF_YEAR_MAX, DAY_OF_YEAR_MIN, LATITUDE_MAX_DEG, SEA_LEVEL_MAX_M, SEA_LEVEL_MIN_M,
+    TEMPERATURE_MAX_C, TEMPERATURE_MIN_C, TIME_OF_DAY_MAX_H, WIND_SPEED_MAX_MPS,
 };
 use gamecraft_math::{Portable, deg_to_rad, rad_to_deg, wrap_deg};
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,27 @@ pub struct Environment {
     pub mist: f64,
     /// Rain intensity, 0 to 1. Default 0.
     pub rain: f64,
+    /// Air temperature at world y = 0, degrees Celsius, -90 to 60; it falls by 6.5 degrees per
+    /// kilometre upwards. With `sea_level_m` it gives the density of the air projectiles fly
+    /// through. Default 15 (the standard atmosphere). Written only when not the default.
+    #[serde(skip_serializing_if = "is_default_temperature")]
+    pub temperature_c: f64,
+    /// Height of world y = 0 above sea level, metres, -500 to 11000. Default 0. Written only
+    /// when not the default.
+    #[serde(skip_serializing_if = "is_default_sea_level")]
+    pub sea_level_m: f64,
+}
+
+/// The temperature of the standard atmosphere at sea level, degrees Celsius.
+pub const STANDARD_TEMPERATURE_C: f64 = 15.0;
+
+// Bit equality: only the exact default is left out, so every other value reads back the same.
+fn is_default_temperature(v: &f64) -> bool {
+    v.to_bits() == STANDARD_TEMPERATURE_C.to_bits()
+}
+
+fn is_default_sea_level(v: &f64) -> bool {
+    v.to_bits() == 0f64.to_bits()
 }
 
 impl Default for Environment {
@@ -42,6 +64,8 @@ impl Default for Environment {
             cloud_cover: 0.3,
             mist: 0.0,
             rain: 0.0,
+            temperature_c: STANDARD_TEMPERATURE_C,
+            sea_level_m: 0.0,
         }
     }
 }
@@ -150,6 +174,20 @@ impl Environment {
         ctx.range("environment.cloud_cover", self.cloud_cover, 0.0, 1.0, "")?;
         ctx.range("environment.mist", self.mist, 0.0, 1.0, "")?;
         ctx.range("environment.rain", self.rain, 0.0, 1.0, "")?;
+        ctx.range(
+            "environment.temperature_c",
+            self.temperature_c,
+            TEMPERATURE_MIN_C,
+            TEMPERATURE_MAX_C,
+            " degrees Celsius",
+        )?;
+        ctx.range(
+            "environment.sea_level_m",
+            self.sea_level_m,
+            SEA_LEVEL_MIN_M,
+            SEA_LEVEL_MAX_M,
+            " metres",
+        )?;
         Ok(())
     }
 }

@@ -363,13 +363,16 @@ fn objective_list(session: &Session, _p: Params<'_>) -> Result<Value, CommandErr
 
 const WHEN_DOC: &str = "The event: {\"event\": \"enter\"|\"leave\", \"zone\", \"who\"?}, \
     {\"event\": \"interact\", \"target\"?, \"who\"?}, {\"event\": \"time\", \"at_s\"}, \
-    {\"event\": \"var\", \"name\"} or {\"event\": \"start\"}. `zone` and `target` are entity ids \
-    or names; `who` is one, or \"tag:<tag>\".";
+    {\"event\": \"var\", \"name\"}, {\"event\": \"start\"}, or {\"event\": \"hit\"|\"down\", \
+    \"who\"? (the shooter), \"target\"? (the entity hit or downed)} and {\"event\": \"heard\", \
+    \"who\"? (the listener), \"target\"? (the shooter)}. `zone`, `target` and `who` are entity \
+    ids or names, or \"tag:<tag>\".";
 const IF_DOC: &str = "A condition over the variables: {\"var\", \"op\": \
     \"==\"|\"!=\"|\"<\"|\"<=\"|\">\"|\">=\", \"value\"}, {\"all\": [...]} or {\"any\": [...]}.";
 const DO_DOC: &str = "The commands to run, in order, as one transaction: [{\"command\", \
     \"params\"?}], at most 64; world commands and message.show. A parameter that takes an entity \
-    may be \"$who\" (the entity that caused the event) or \"$target\" (the zone or the target).";
+    may be \"$who\" (the entity that caused the event) or \"$target\" (the zone or the target; \
+    for hit, down and heard the event's `target`).";
 
 fn trigger_add_spec() -> CommandSpec {
     spec(
@@ -507,7 +510,7 @@ fn check_steps(id: &str, when: &When, steps: &[Step]) -> Result<(), CommandError
             if !has {
                 return Err(bad(format!(
                     "{at}: `{placeholder}` has no value: a `{}` event has no entity for it; \
-                     `{WHO}` and `{TARGET}` belong to enter, leave and interact",
+                     `{WHO}` and `{TARGET}` belong to enter, leave, interact, hit, down and heard",
                     when.event()
                 )));
             }

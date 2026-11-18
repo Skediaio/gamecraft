@@ -1,8 +1,9 @@
 //! The example world every spec's `example` runs on.
 
 use gamecraft_world::{
-    Character, CompareOp, Component, Condition, EntityDraft, Objective, ObjectiveStatus, Plant,
-    Shape, ShapeKind, Step, Terrain, TerrainSource, Trigger, VarValue, When, World, WorldError,
+    Character, CompareOp, Component, Condition, EntityDraft, Health, Launcher, Objective,
+    ObjectiveStatus, Plant, Shape, ShapeKind, Step, Terrain, TerrainSource, Trigger, VarValue,
+    When, World, WorldError,
 };
 
 /// The plant library species of the example oak.
@@ -11,7 +12,8 @@ pub const EXAMPLE_SPECIES: &str = "quercus-robur";
 /// A small valley: noise terrain of 128 m at 2 m cells (seed 7, relief 12 m); entity 1 a solid
 /// box named `Crate` at `[-6, 0, 4]`, not on the ground (`entity.snap_to_ground` puts it there),
 /// entity 2 a plant `Oak` (`quercus-robur`) on the ground at x 8, z -10,
-/// entity 3 a character named `Scout` on the ground at (0, 0), facing north. Its scenario: a
+/// entity 3 a character named `Scout` on the ground at (0, 0), facing north, with a default
+/// `launcher` and `health`. Its scenario: a
 /// variable `score` = 0, an objective `find-oak` ("Find the oak") and a trigger `oak-found`
 /// that marks it done when `score` changes to 3 or more.
 pub fn example_world() -> World {
@@ -58,7 +60,11 @@ fn build() -> Result<World, WorldError> {
     world.add_entity(EntityDraft {
         name: "Scout".into(),
         position: on_ground(0.0, 0.0),
-        components: vec![Component::Character(Character::default())],
+        components: vec![
+            Component::Character(Character::default()),
+            Component::Launcher(Launcher::default()),
+            Component::Health(Health::default()),
+        ],
         ..EntityDraft::default()
     })?;
     world.vars.insert("score".into(), VarValue::Number(0.0));
