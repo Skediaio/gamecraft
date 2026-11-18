@@ -1,0 +1,128 @@
+//! The help texts.
+
+pub const HELP: &str = "\
+gamecraft-cli: the command line of GameCraft
+
+Usage: gamecraft-cli <subcommand> [options]
+       gamecraft-cli <subcommand> --help
+       gamecraft-cli --version | --help
+
+Subcommands:
+  commands   List every command: id, parameters, summary
+  run        Open or create a world, run commands and scripts, save with --out
+  info       Print a world file's state as JSON
+  render     Draw a world file to a PNG (needs a GPU)
+  play       Play a world file for a while and print the state hash (the file is not changed)
+  new        Write an empty world file
+  serve      JSON-lines server on stdin and stdout, for scripts
+  mcp        Model Context Protocol server on stdin and stdout, for agents
+  help       This text; `help <subcommand>` explains one
+
+Results go to stdout as JSON, diagnostics to stderr.
+Exit codes: 0 success, 1 a command or file failed, 2 a mistake in the command line.";
+
+pub const COMMANDS: &str = "\
+Usage: gamecraft-cli commands [--filter TEXT] [--json]
+
+Lists the commands, one block each: id, parameters and summary. These are the ids that
+`run --cmd`, `serve` and `mcp` accept.
+
+Options:
+  --filter TEXT   Only commands whose id or label contains TEXT (any case)
+  --json          The list as JSON, as the method engine.commands gives it";
+
+pub const RUN: &str = "\
+Usage: gamecraft-cli run [FILE] [--new JSON] [--cmd ID [--params JSON]]... [--script FILE]...
+                         [--out FILE] [--keep-going]
+
+Opens the world FILE (a .gamecraft file) or, with --new, starts a world with the parameters of
+file.new (without either, an empty world), runs the steps in the order given, prints one line of
+JSON per result, and saves the document with --out. It stops at the first step that fails, saves
+nothing and exits 1. Play commands work inside one run: sim.start, sim.input, sim.step,
+sim.state, sim.stop.
+
+Options:
+  --new JSON      Parameters of file.new, e.g. '{\"name\": \"Valley\", \"seed\": 7}'. Not with FILE
+  --cmd ID        A command to run; may be repeated
+  --params JSON   The parameters of the --cmd right before it, a JSON object
+  --script FILE   A JSON list of steps, [[\"id\", {params}], ...] or
+                  [{\"command\": \"id\", \"params\": {...}}, ...]; may be repeated and mixed with --cmd
+  --out FILE      Save the document afterwards (a .gamecraft file; replaces an existing one)
+  --keep-going    Carry on after a failing step: its line is
+                  {\"failed\": id, \"step\": n, \"error\": text}, --out still saves, exit code 1
+
+Example:
+  gamecraft-cli run --new '{\"name\": \"Valley\"}' \\
+      --cmd terrain.set --params '{\"kind\": \"noise\", \"size_m\": 128, \"cell_m\": 2, \"relief_m\": 8}' \\
+      --out valley.gamecraft";
+
+pub const INFO: &str = "\
+Usage: gamecraft-cli info FILE
+
+Prints the state of a .gamecraft file as JSON, as the command world.inspect gives it (at most
+1000 entities).";
+
+pub const RENDER: &str = "\
+Usage: gamecraft-cli render FILE --out PNG [--size WxH] [--camera JSON]
+                            [--follow ENTITY [--view first|third] [--distance M]]
+
+Draws the world to a PNG on the GPU and prints what the renderer says (the camera it used, what
+it drew, problems) as one line of JSON. Without a camera the whole world is framed. Without a GPU
+it fails (exit 1) and says so; everything else works without one.
+
+Options:
+  --out PNG        The picture to write (replaced if it exists)
+  --size WxH       Pixels, 16 to 3840 wide and 16 to 2160 tall (default 960x540)
+  --camera JSON    '{\"position\": [x, y, z], \"target\": [x, y, z], \"fov_y_deg\": 60}', metres
+  --follow ENTITY  Through the eyes of an entity (id or name) or behind it
+  --view V         With --follow: first (the character's eyes) or third (the default)
+  --distance M     With --follow and the third person: metres behind the entity (default 6)";
+
+pub const PLAY: &str = "\
+Usage: gamecraft-cli play FILE [--script FILE] [--seconds S | --ticks N]
+                          [--out-state FILE] [--picture PNG]
+
+Starts the simulation of the world FILE, runs the script (steps as for run, typically sim.input
+and sim.step), steps on until the total time given is reached, and prints sim.state as one line
+of JSON, the state hash included. Two runs of the same arguments print the same hash. The file is
+never changed.
+
+Options:
+  --script FILE    Steps to run after the simulation starts
+  --seconds S      Total simulated time, in seconds of 60 ticks each (stepping stops at the
+                   script's own end when that is later)
+  --ticks N        The same in ticks
+  --out-state FILE Also write the state to FILE as JSON
+  --picture PNG    Draw the last state to PNG (needs a GPU); the state line gets a \"picture\" key";
+
+pub const NEW: &str = "\
+Usage: gamecraft-cli new FILE [--name NAME] [--seed N]
+
+Writes an empty world (no terrain, the default environment, no entities) to FILE, a .gamecraft
+file that must not exist yet, and prints {path, bytes, name, seed}.";
+
+pub const SERVE: &str = "\
+Usage: gamecraft-cli serve [--automation-read-root DIR] [--automation-write-root DIR] [--file FILE]
+
+The JSON-lines protocol on stdin and stdout: one request per line, one reply per line
+({\"id\", \"method\", \"params\"}; docs/control-protocol.md). Nothing listens on a network port.
+Files are touched only inside the roots given: file.open reads inside --automation-read-root,
+file.save and view.render with a path write inside --automation-write-root. Without them there
+is no file access.
+
+Options:
+  --automation-read-root DIR   Where file.open may read
+  --automation-write-root DIR  Where file.save and pictures may write
+  --file FILE                  Start with this world open (its path is not remembered: file.save
+                               needs a path)";
+
+pub const MCP: &str = "\
+Usage: gamecraft-cli mcp [--automation-read-root DIR] [--automation-write-root DIR] [--file FILE]
+
+The Model Context Protocol server (JSON-RPC 2.0, one message per line) on stdin and stdout, over
+the same commands as serve. The flags are those of serve.
+
+Options:
+  --automation-read-root DIR   Where file.open may read
+  --automation-write-root DIR  Where file.save and pictures may write
+  --file FILE                  Start with this world open";

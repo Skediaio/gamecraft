@@ -235,7 +235,6 @@ dependencies = [
  "gamecraft-engine",
  "gamecraft-math",
  "gamecraft-world",
- "serde",
  "serde_json",
 ]
 
@@ -244,10 +243,9 @@ name = "gamecraft-cli"
 version = "0.0.0"
 dependencies = [
  "gamecraft-automation",
- "gamecraft-engine",
  "gamecraft-render",
  "gamecraft-world",
- "pollster",
+ "png",
  "serde_json",
 ]
 

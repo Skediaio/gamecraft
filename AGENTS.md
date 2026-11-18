@@ -28,8 +28,8 @@ The product name is written **GameCraft** in prose. Machine names are lowercase 
 crates (`gamecraft-*`), binaries (`gamecraft`, `gamecraft-cli`), environment variables
 (`GAMECRAFT_*`). The native file extension is `.gamecraft`.
 
-**Status (2026-11-18): M0, the foundation, is being built; nothing is released.** One path is
-meant to work end to end at the end of M0: a command edits the world document, the simulation
+**Status (2026-11-18): M0, the foundation, is done; nothing is released.** One path works end
+to end: a command edits the world document, the simulation
 steps it deterministically and answers with a state hash, and a picture of it is drawn with
 VisionCraft's renderer, all from `gamecraft-cli` and over MCP. What is done and what is open:
 `docs/roadmap.md`, starting at **Current focus**. Everything else in this file and in `docs/` is

@@ -12,8 +12,10 @@ workspace = true
 
 [dependencies]
 gamecraft-world = { workspace = true }
-gamecraft-engine = { workspace = true }
 gamecraft-automation = { workspace = true }
 gamecraft-render = { workspace = true }
 serde_json = { workspace = true }
-pollster = { workspace = true }
+
+[dev-dependencies]
+# Decodes the pictures the tests draw.
+png = { workspace = true }

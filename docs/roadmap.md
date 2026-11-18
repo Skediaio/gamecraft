@@ -9,9 +9,9 @@ The order follows the three promises of `AGENTS.md`: first a world an agent can 
 
 ## Current focus
 
-**M0, the foundation.** Then M1, so there is something to walk in.
+**Prototype P1 (Lantern)**: scenarios are being built. Then M1, so a person can walk in it too.
 
-## M0: Foundation (in progress)
+## M0: Foundation (done 2026-11-18)
 
 One path works end to end, from the command line and over MCP: a command edits the world, the
 simulation steps it deterministically, commands change the world while it runs, a picture is
@@ -26,7 +26,7 @@ drawn with VisionCraft's renderer.
 | `gamecraft-engine`: session, command specs, world commands on the document and on a running world, queries, undo, play commands | done 2026-11-18 |
 | `gamecraft-render`: terrain, shapes, plants, sky and weather through VisionCraft; PNG out | done 2026-11-18 |
 | `gamecraft-automation`: JSON lines, MCP, host commands (`file.*`, `edit.*`, `view.render`) | done 2026-11-18 |
-| `gamecraft-cli`: `commands`, `run`, `batch`, `serve`, `mcp`, `render` | open |
+| `gamecraft-cli`: `run`, `play`, `info`, `render`, `commands`, `new`, `serve`, `mcp` (`docs/guide/command-line.md`) | done 2026-11-18 |
 | `docs/agent.md` with a worked example that a test runs | done 2026-11-18 |
 
 **Done when:** an agent with only the MCP server builds a small valley with trees and a
