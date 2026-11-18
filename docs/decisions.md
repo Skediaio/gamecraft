@@ -20,6 +20,10 @@ browser build simple. A database has two places:
   builds an embedded store (pure Rust, chosen when needed) next to it for what scanning files
   would make slow: finding entities by name, tag or area across all layers, which prefab is used
   where, which asset is referenced by what. Deleting it loses nothing.
+  Preferred: a SQLite-compatible store, because agents and developers already speak SQL; best
+  the pure-Rust rewrite from the libSQL/Turso people (MIT) if it is mature when M3 needs it,
+  otherwise SQLite natively and no index in the browser. Not SurrealDB: its Business Source
+  Licence does not fit an MIT engine whose games anyone must be free to ship.
 - **Persistent servers** (M9): a world that runs for weeks with many players keeps its live state
   and the players' progress in a server database, and writes snapshots and journals. That is
   operational data, not the game's source.
