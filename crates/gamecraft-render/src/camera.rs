@@ -11,14 +11,17 @@ pub const FOV_MIN_DEG: f64 = 5.0;
 pub const FOV_MAX_DEG: f64 = 150.0;
 
 /// Vertical field of view of [`Camera::framing`], degrees.
-const FRAMING_FOV_DEG: f64 = 60.0;
-/// How far above the horizon [`Camera::framing`] looks down from, degrees. Below half the
-/// field of view, so a band of sky stays at the top of the picture.
+const FRAMING_FOV_DEG: f64 = 40.0;
+/// How far above the horizon [`Camera::framing`] looks down from, degrees. The narrow field of
+/// view keeps the perspective gentle, so a wide landscape can fill the picture; far land and
+/// sky show above the terrain only when the relief or the margin leaves room.
 const FRAMING_ELEVATION_DEG: f64 = 24.0;
 /// Compass direction from the scene to [`Camera::framing`]: south-east.
 const FRAMING_AZIMUTH_DEG: f64 = 135.0;
 /// Share of the half frame the scene's corners may reach in [`Camera::framing`].
-const FRAMING_MARGIN: f64 = 0.92;
+const FRAMING_MARGIN: f64 = 0.95;
+/// The aspect [`Camera::framing`] assumes when given one that is not finite and positive.
+const FRAMING_DEFAULT_ASPECT: f64 = 16.0 / 9.0;
 /// Bisection steps of the framing distance.
 const FRAMING_STEPS: u32 = 48;
 /// Half extent of the box framed when the world holds nothing, metres.
@@ -68,10 +71,15 @@ impl Camera {
     /// The box framed holds the terrain (the height field when given, else the terrain
     /// recipe's square and height range) and every entity from its base to its top. The camera
     /// looks at the box's centre from the south-east, 24 degrees above the horizon, with a
-    /// 60 degree field of view, as close as it can while every corner of the box stays inside
-    /// a square frame (so any landscape picture shows all of it). An empty world frames 20 m
-    /// round the origin.
-    pub fn framing(world: &World, heights: Option<&HeightField>) -> Camera {
+    /// 40 degree field of view, as close as it can while every corner of the box stays inside
+    /// a frame of width / height `aspect` (with a 5 % margin). An `aspect` that is not finite
+    /// and positive counts as 16 / 9. An empty world frames 20 m round the origin.
+    pub fn framing(world: &World, heights: Option<&HeightField>, aspect: f64) -> Camera {
+        let aspect = if aspect.is_finite() && aspect > 0.0 {
+            aspect
+        } else {
+            FRAMING_DEFAULT_ASPECT
+        };
         let (lo, hi) = world_bounds(world, heights);
         let centre = (lo + hi) * 0.5;
         let radius = ((hi - lo).length() * 0.5).max(FRAMING_MIN_RADIUS_M);
@@ -97,7 +105,7 @@ impl Camera {
         let fits = |camera: &Camera| {
             corners.iter().all(|c| {
                 camera
-                    .project(c.to_array(), 1.0)
+                    .project(c.to_array(), aspect)
                     .is_some_and(|[x, y]| x.abs() <= FRAMING_MARGIN && y.abs() <= FRAMING_MARGIN)
             })
         };
@@ -106,6 +114,13 @@ impl Camera {
         let half = deg_to_rad(FRAMING_FOV_DEG / 2.0);
         let angle = (FRAMING_MARGIN * half.tan()).atan();
         let mut far = radius / angle.sin() * 1.001;
+        // A frame narrower than it is tall needs more room than the sphere's vertical fit.
+        for _ in 0..FRAMING_STEPS {
+            if fits(&at(far)) {
+                break;
+            }
+            far *= 2.0;
+        }
         let mut near = 0.0;
         for _ in 0..FRAMING_STEPS {
             let mid = (near + far) / 2.0;

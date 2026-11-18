@@ -3,6 +3,9 @@
 //! - [`terrain_chunks`]: a height field as chunks of at most [`TERRAIN_CHUNK_CELLS`] cells per
 //!   side, each cell split along the diagonal from sample (col, row) to (col + 1, row + 1), the
 //!   same two triangles `HeightField::height_at` interpolates over, with layer weights by slope.
+//! - [`terrain_apron`]: a ring of extra mesh round the terrain that eases its edge down (or up)
+//!   to the endless ground plane. It is scenery only, **not walkable ground**: the height field
+//!   and the simulation know nothing of it, and nothing may stand on it or be placed by it.
 //! - [`unit_box`], [`unit_sphere`], [`unit_cylinder`]: the shapes, one metre across and tall,
 //!   standing on the origin (base at y = 0), to be scaled per entity.
 //! - [`character`]: a character's body and the visor that shows where it faces.
@@ -204,6 +207,184 @@ fn terrain_chunk(
         mesh,
         weights,
     }
+}
+
+/// Rings of vertices of the apron beyond the terrain's own border ring.
+pub const APRON_RINGS: usize = 6;
+/// The narrowest apron, metres.
+pub const APRON_MIN_WIDTH_M: f64 = 16.0;
+/// The apron's width as a share of the terrain's size.
+pub const APRON_WIDTH_SHARE: f64 = 0.15;
+
+/// How wide the apron round `heights` is, metres: `max(16 m, 15 % of the size)`.
+pub fn apron_width_m(heights: &HeightField) -> f64 {
+    let [x0, z0] = heights.min();
+    let [x1, z1] = heights.max();
+    let size = (x1 - x0).max(z1 - z0);
+    APRON_MIN_WIDTH_M.max(APRON_WIDTH_SHARE * size)
+}
+
+/// `t` eased: 0 at 0, 1 at 1, flat at both ends.
+fn smoothstep(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// A ring of mesh round the height field that blends its border down (or up) to the endless
+/// ground plane at `plane_height_m`, so the terrain does not end in a wall.
+///
+/// Ring 0 is the terrain's border samples, bit for bit (same positions, normals and weights as
+/// [`terrain_chunks`]); ring [`APRON_RINGS`] lies [`apron_width_m`] outside the square at the
+/// plane's height with the grass layer. In between the height follows a smoothstep from the
+/// border height to the plane height, and the layer weights fade to grass the same way.
+/// Normals come from the apron's own surface (the terrain's at ring 0). The mesh is one chunk
+/// at (0, 0); an empty chunk when the field has fewer than two samples per side.
+///
+/// The apron is scenery, **not walkable ground**: the height field and the simulation are
+/// unchanged and know nothing of it.
+pub fn terrain_apron(heights: &HeightField, plane_height_m: f64) -> TerrainChunkMesh {
+    let (cols, rows) = (heights.cols(), heights.rows());
+    if cols < 2 || rows < 2 {
+        return TerrainChunkMesh::default();
+    }
+    let (lc, lr) = (cols - 1, rows - 1);
+    // The border samples clockwise seen from above, starting at the north-west corner, each
+    // with its outward direction (diagonal at the corners).
+    let mut ring: Vec<(usize, usize, [f64; 2])> = Vec::new();
+    let out = |c: usize, r: usize| {
+        let ox = if c == 0 {
+            -1.0
+        } else if c == lc {
+            1.0
+        } else {
+            0.0
+        };
+        let oz = if r == 0 {
+            -1.0
+        } else if r == lr {
+            1.0
+        } else {
+            0.0
+        };
+        [ox, oz]
+    };
+    for c in 0..lc {
+        ring.push((c, 0, out(c, 0)));
+    }
+    for r in 0..lr {
+        ring.push((lc, r, out(lc, r)));
+    }
+    for c in (1..=lc).rev() {
+        ring.push((c, lr, out(c, lr)));
+    }
+    for r in (1..=lr).rev() {
+        ring.push((0, r, out(0, r)));
+    }
+    let per = ring.len();
+    let width = apron_width_m(heights);
+    let [x0, z0] = heights.min();
+    let cell = heights.cell_m();
+    let mut positions: Vec<[f64; 3]> = Vec::with_capacity(per * (APRON_RINGS + 1));
+    let mut border_weights: Vec<[u8; 8]> = Vec::with_capacity(per);
+    for k in 0..=APRON_RINGS {
+        let t = k as f64 / APRON_RINGS as f64;
+        let s = smoothstep(t);
+        for &(c, r, [ox, oz]) in &ring {
+            let h = heights.sample(c, r).map_or(0.0, f64::from);
+            // The same formula as the terrain's vertices, so ring 0 agrees bit for bit.
+            let x = x0 + c as f64 * cell;
+            let z = z0 + r as f64 * cell;
+            if k == 0 {
+                let [_, ny, _] = terrain_normal(heights, c, r);
+                border_weights.push(layer_weights(ny));
+                positions.push([x, h, z]);
+            } else {
+                positions.push([
+                    x + ox * width * t,
+                    h + (plane_height_m - h) * s,
+                    z + oz * width * t,
+                ]);
+            }
+        }
+    }
+    // Triangles: quads between ring k and k + 1, wound to face up.
+    let idx = |k: usize, i: usize| u32::try_from(k * per + i % per).unwrap_or(u32::MAX);
+    let mut tris: Vec<[u32; 3]> = Vec::new();
+    for k in 0..APRON_RINGS {
+        for i in 0..per {
+            let (a, b) = (idx(k, i), idx(k, i + 1));
+            let (c, d) = (idx(k + 1, i), idx(k + 1, i + 1));
+            tris.push([a, b, d]);
+            tris.push([a, d, c]);
+        }
+    }
+    // Normals: area-weighted from the apron's triangles; the terrain's own on ring 0.
+    let mut sums = vec![[0.0f64; 3]; positions.len()];
+    for tri in &tris {
+        let p = tri.map(|i| positions.get(i as usize).copied().unwrap_or([0.0; 3]));
+        let [a, b, c] = p;
+        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let n = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        for i in tri {
+            if let Some(sum) = sums.get_mut(*i as usize) {
+                for (s, n) in sum.iter_mut().zip(n) {
+                    *s += n;
+                }
+            }
+        }
+    }
+    let mut mesh = MeshData::default();
+    let mut weights = Vec::with_capacity(positions.len());
+    for (n, (position, sum)) in positions.iter().zip(&sums).enumerate() {
+        let (k, i) = (n / per, n % per);
+        let normal = match (k, ring.get(i)) {
+            (0, Some(&(c, r, _))) => terrain_normal(heights, c, r),
+            _ => normalised(*sum),
+        };
+        let w = if k == 0 {
+            border_weights.get(i).copied().unwrap_or([0; 8])
+        } else {
+            let [_, ny, _] = normal;
+            fade_to_grass(layer_weights(ny), smoothstep(k as f64 / APRON_RINGS as f64))
+        };
+        mesh.vertex(*position, normal);
+        weights.push(w);
+    }
+    for [a, b, c] in tris {
+        mesh.triangle(a, b, c);
+    }
+    TerrainChunkMesh {
+        first_col: 0,
+        first_row: 0,
+        mesh,
+        weights,
+    }
+}
+
+/// `weights` moved `share` (0 to 1) of the way to all grass, still summing to 255.
+fn fade_to_grass(weights: [u8; 8], share: f64) -> [u8; 8] {
+    let keep = 1.0 - share.clamp(0.0, 1.0);
+    let scaled = |layer: usize| {
+        let w = weights.get(layer).copied().map_or(0.0, f64::from);
+        (w * keep).round().clamp(0.0, 255.0) as u8
+    };
+    let (e, r) = (scaled(LAYER_EARTH), scaled(LAYER_ROCK));
+    let mut out = [0u8; 8];
+    for (layer, w) in [
+        (LAYER_GRASS, 255u8.saturating_sub(e).saturating_sub(r)),
+        (LAYER_EARTH, e),
+        (LAYER_ROCK, r),
+    ] {
+        if let Some(slot) = out.get_mut(layer) {
+            *slot = w;
+        }
+    }
+    out
 }
 
 /// The unit upward normal of the height field at sample (`col`, `row`), from central

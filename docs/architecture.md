@@ -130,7 +130,9 @@ to a repository of their own that both projects depend on (`decisions.md`).
 ## Structural debt
 
 - The world is one file. A project with several worlds, prefabs and mods needs a directory
-  layout (M3).
+  layout with layers and binary terrain tiles (M3; `decisions.md`, *One JSON file is M0's format*).
+- Undo keeps whole copies of the world (100 of them); it must keep changes instead before worlds
+  grow (M3).
 - The renderer adapter rebuilds everything when the world changes. It needs to update only what
   changed before worlds grow (M3).
 - Positions reach the renderer as `f32` relative to the world origin. Beyond a few kilometres

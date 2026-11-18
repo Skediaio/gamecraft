@@ -280,7 +280,7 @@ fn valley() -> (World, HeightField) {
 }
 
 fn assert_frames(camera: &Camera, lo: [f64; 3], hi: [f64; 3]) {
-    for aspect in [16.0 / 9.0, 4.0 / 3.0, 1.0] {
+    for aspect in [16.0 / 9.0, 21.0 / 9.0] {
         for k in 0..8 {
             let corner = [
                 if k & 1 == 0 { lo[0] } else { hi[0] },
@@ -304,9 +304,43 @@ fn framing_sees_every_corner_of_the_terrain() {
     let (y0, y1) = hf.height_range();
     let [x0, z0] = hf.min();
     let [x1, z1] = hf.max();
-    let camera = Camera::framing(&world, Some(&hf));
+    let camera = Camera::framing(&world, Some(&hf), 16.0 / 9.0);
     camera.validate().unwrap();
     assert_frames(&camera, [x0, f64::from(y0), z0], [x1, f64::from(y1), z1]);
+    for aspect in [1.0, 16.0 / 9.0, 21.0 / 9.0] {
+        let camera = Camera::framing(&world, Some(&hf), aspect);
+        let mut xs = Vec::new();
+        for k in 0..8 {
+            let corner = [
+                if k & 1 == 0 { x0 } else { x1 },
+                f64::from(if k & 2 == 0 { y0 } else { y1 }),
+                if k & 4 == 0 { z0 } else { z1 },
+            ];
+            let [x, y] = camera.project(corner, aspect).unwrap();
+            assert!(
+                x.abs() <= 1.0 && y.abs() <= 1.0,
+                "{corner:?} {x} {y} at {aspect}"
+            );
+            xs.push(x);
+        }
+        if (aspect - 16.0 / 9.0).abs() < 1e-9 {
+            let span = xs.iter().fold(f64::MIN, |a, b| a.max(*b))
+                - xs.iter().fold(f64::MAX, |a, b| a.min(*b));
+            assert!(
+                span / 2.0 >= 0.70,
+                "terrain spans {span} of 2 at 16:9: {xs:?}"
+            );
+        }
+    }
+    // A bad aspect falls back to 16:9.
+    assert_eq!(
+        Camera::framing(&world, Some(&hf), f64::NAN),
+        Camera::framing(&world, Some(&hf), 16.0 / 9.0)
+    );
+    assert_eq!(
+        Camera::framing(&world, Some(&hf), -2.0),
+        Camera::framing(&world, Some(&hf), 16.0 / 9.0)
+    );
     // From above, to the south-east of the centre.
     let [cx, cy, cz] = camera.position;
     assert!(
@@ -319,12 +353,12 @@ fn framing_sees_every_corner_of_the_terrain() {
     assert!(distance < 1000.0, "{distance}");
 
     // Without the height field the recipe's box is framed.
-    let camera = Camera::framing(&world, None);
+    let camera = Camera::framing(&world, None, 16.0 / 9.0);
     assert_frames(&camera, [-256.0, -30.0, -256.0], [256.0, 30.0, 256.0]);
 
     // An empty world frames the origin; a world of entities frames them.
     let mut empty = World::new("empty", 0);
-    let camera = Camera::framing(&empty, None);
+    let camera = Camera::framing(&empty, None, 16.0 / 9.0);
     assert_frames(&camera, [-10.0, 0.0, -10.0], [10.0, 2.0, 10.0]);
     empty
         .add_entity(EntityDraft {
@@ -338,7 +372,7 @@ fn framing_sees_every_corner_of_the_terrain() {
             ..EntityDraft::default()
         })
         .unwrap();
-    let camera = Camera::framing(&empty, None);
+    let camera = Camera::framing(&empty, None, 16.0 / 9.0);
     assert_frames(&camera, [100.0, 0.0, -40.0], [100.0, 6.0, -40.0]);
 }
 
@@ -539,4 +573,70 @@ fn a_plant_generates_parts_with_wind_weights() {
         assert!(p.indices.iter().all(|&i| (i as usize) < p.positions.len()));
     }
     assert!(plants::generate("no-such-plant", 1, 1.0).is_none());
+}
+
+#[test]
+fn the_apron_joins_the_terrain_and_ends_at_the_plane() {
+    let (_world, hf) = valley();
+    let plane = 3.5;
+    let apron = mesh::terrain_apron(&hf, plane);
+    let width = mesh::apron_width_m(&hf);
+    assert_eq!(width, 76.8);
+    let [x0, z0] = hf.min();
+    let [x1, z1] = hf.max();
+    let (lc, lr) = (hf.cols() - 1, hf.rows() - 1);
+    let per = 2 * (lc + lr);
+    let m = &apron.mesh;
+    assert_eq!(m.positions.len(), per * (mesh::APRON_RINGS + 1));
+    assert_eq!(m.normals.len(), m.positions.len());
+    assert_eq!(apron.weights.len(), m.positions.len());
+    // Inner ring: the terrain's border vertices, bit for bit.
+    let terrain: Vec<[f32; 3]> = mesh::terrain_chunks(&hf)
+        .into_iter()
+        .flat_map(|c| c.mesh.positions)
+        .collect();
+    for p in m.positions.iter().take(per) {
+        assert!(terrain.contains(p), "{p:?} is not a terrain vertex");
+    }
+    // Outer ring at the plane height and the full width away.
+    for p in m.positions.iter().skip(per * mesh::APRON_RINGS) {
+        assert_eq!(p[1], plane as f32);
+        let (x, z) = (f64::from(p[0]), f64::from(p[2]));
+        let outside = (x0 - x).max(x - x1).max(z0 - z).max(z - z1);
+        assert!((outside - width).abs() < 1e-3, "{p:?}");
+    }
+    // Beyond the inner ring nothing lies inside or on the square.
+    for p in m.positions.iter().skip(per) {
+        let (x, z) = (f64::from(p[0]), f64::from(p[2]));
+        assert!(
+            x < x0 || x > x1 || z < z0 || z > z1,
+            "{p:?} is over the terrain"
+        );
+    }
+    for p in m.positions.iter() {
+        let (x, z) = (f64::from(p[0]), f64::from(p[2]));
+        assert!(
+            !(x > x0 && x < x1 && z > z0 && z < z1),
+            "{p:?} is inside the square"
+        );
+    }
+    // Indices in range, triangles face up, normals unit and upward, weights sum to 255.
+    assert!(m.indices.iter().all(|&i| (i as usize) < m.positions.len()));
+    assert_eq!(m.triangle_count(), 2 * per * mesh::APRON_RINGS);
+    for [a, b, c] in m.triangles() {
+        let p = [a, b, c].map(|i| m.positions[i as usize]);
+        let n = cross(sub(p[1], p[0]), sub(p[2], p[0]));
+        assert!(n[1] > 0.0, "triangle {p:?} faces down");
+    }
+    for n in &m.normals {
+        let len = n.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>().sqrt();
+        assert!((len - 1.0).abs() < 1e-5 && n[1] > 0.0, "{n:?}");
+    }
+    for w in &apron.weights {
+        assert_eq!(w.iter().map(|v| u32::from(*v)).sum::<u32>(), 255);
+    }
+    let outer = apron.weights.iter().skip(per * mesh::APRON_RINGS);
+    for w in outer {
+        assert_eq!(w[mesh::LAYER_GRASS], 255);
+    }
 }

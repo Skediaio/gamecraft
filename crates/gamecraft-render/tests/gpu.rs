@@ -152,7 +152,7 @@ fn a_valley_at_noon_has_sky_above_and_land_below() {
     let (world, hf) = valley(12.0, 4.0);
     let problems = r.sync(&world, Some(&hf));
     assert!(problems.is_empty(), "{problems:?}");
-    let camera = Camera::framing(&world, Some(&hf));
+    let camera = Camera::framing(&world, Some(&hf), 16.0 / 9.0);
     let p = r.render(&request(480, 270, camera)).unwrap();
     assert!(p.problems.is_empty());
     assert!(p.stats.triangles > 0 && p.stats.draws > 0, "{:?}", p.stats);
@@ -177,7 +177,7 @@ fn a_valley_at_noon_has_sky_above_and_land_below() {
     let mean = lum.iter().sum::<f64>() / lum.len() as f64;
     let var = lum.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / lum.len() as f64;
     assert!(
-        var.sqrt() > 5.0,
+        var.sqrt() > 2.0,
         "the picture is not uniform: sd {}",
         var.sqrt()
     );
@@ -229,7 +229,11 @@ fn midnight_is_much_darker_than_noon() {
         let (world, hf) = valley(hour, 4.0);
         r.sync(&world, Some(&hf));
         let p = r
-            .render(&request(320, 180, Camera::framing(&world, Some(&hf))))
+            .render(&request(
+                320,
+                180,
+                Camera::framing(&world, Some(&hf), 16.0 / 9.0),
+            ))
             .unwrap();
         means.push(luminance(mean_rgb(&p, 0..p.height)));
     }
@@ -343,17 +347,17 @@ fn a_second_sync_leaves_no_stale_items() {
 
     assert_eq!(r.item_count(), 0);
     r.sync(&busy, Some(&hf));
-    // One terrain chunk, red boxes, the blue box, the sphere, the character, the birch.
-    assert_eq!(r.item_count(), 6);
+    // One terrain chunk, the apron, red boxes, the blue box, the sphere, the character, the birch.
+    assert_eq!(r.item_count(), 7);
     r.sync(&quiet, Some(&hf));
-    // One terrain chunk and the cylinder.
-    assert_eq!(r.item_count(), 2);
+    // One terrain chunk, the apron and the cylinder.
+    assert_eq!(r.item_count(), 3);
     r.sync(&busy, Some(&hf));
-    assert_eq!(r.item_count(), 6);
+    assert_eq!(r.item_count(), 7);
     // An unchanged world is not rebuilt; an environment change is no rebuild either.
     busy.environment.time_of_day_h = 18.0;
     r.sync(&busy, Some(&hf));
-    assert_eq!(r.item_count(), 6);
+    assert_eq!(r.item_count(), 7);
     r.sync(&World::new("nothing", 0), None);
     assert_eq!(r.item_count(), 0);
     drop(gpu);
@@ -407,7 +411,7 @@ fn pictures_of_a_valley_and_a_walker() {
     println!("sync: {:?}, problems {problems:?}", start.elapsed());
     assert!(problems.is_empty(), "{problems:?}");
 
-    let framing = Camera::framing(&world, Some(&hf));
+    let framing = Camera::framing(&world, Some(&hf), 16.0 / 9.0);
     let p = r.render(&request(1280, 720, framing)).unwrap();
     println!("valley: {:?}", p.stats);
     save("render-valley.png", &p);

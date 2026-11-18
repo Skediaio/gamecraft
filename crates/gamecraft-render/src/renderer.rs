@@ -304,9 +304,10 @@ impl WorldRenderer {
         };
         match field.as_deref() {
             Some(h) => {
-                scene.terrain(h, self.terrain_material);
+                let plane = border_mean(h);
+                scene.terrain(h, plane, self.terrain_material);
                 scene.r.set_ground(Some(vc::Ground {
-                    height: border_mean(h) as f32,
+                    height: plane as f32,
                     color: GROUND_COLOR,
                     ..Default::default()
                 }));
@@ -440,8 +441,14 @@ impl Scene<'_> {
         id
     }
 
-    fn terrain(&mut self, h: &HeightField, material: vc::MaterialId) {
-        for chunk in mesh::terrain_chunks(h) {
+    /// The terrain chunks plus the apron that eases their edge down to the ground plane at
+    /// `plane_height_m` (scenery, not walkable).
+    fn terrain(&mut self, h: &HeightField, plane_height_m: f64, material: vc::MaterialId) {
+        let apron = mesh::terrain_apron(h, plane_height_m);
+        let chunks = mesh::terrain_chunks(h)
+            .into_iter()
+            .chain((!apron.mesh.positions.is_empty()).then_some(apron));
+        for chunk in chunks {
             let tc = vc::TerrainChunk {
                 positions: &chunk.mesh.positions,
                 normals: &chunk.mesh.normals,

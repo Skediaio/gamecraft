@@ -8,6 +8,31 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-18: One JSON file is M0's format, not the game's
+
+A single `.gamecraft` JSON file is fine for a test valley and wrong for a large game: one change
+rewrites the whole file, two people (or agents) editing different places conflict, and loading
+means parsing everything. The format for M3 and later:
+
+- **A project is a directory**, and a pack is one too. A world is split into **layers** (one
+  file per area or per kind: `layers/village.json`, `layers/forest-north.json`), each a list of
+  entities, so an edit touches one small file and diffs and merges stay readable.
+- **Bulk data is binary, beside the text**: terrain heights and painted layers as tiles
+  (`terrain/tile_x_z.bin`, a few hundred kilobytes each, loaded by distance), models and textures
+  in their own formats (glTF, KTX2). Text files refer to them by path.
+- **Recipes over results** (rule 2): a forest of 100 000 trees is one generator entry with a seed
+  and an area, not 100 000 entities; the trees exist only in memory and on the GPU.
+- **At runtime nothing is JSON**: the engine holds compact structures in memory, streams tiles in
+  and out, and the simulation never touches a file.
+- **Saved games are not the world file**: a save is the base world's identity plus the changes
+  made while playing (and later the journal), in a compact binary form.
+- **Distribution** packs a project or a pack into one bundle file.
+
+What has to change in the code before worlds grow (also under *Structural debt* in
+`architecture.md`): undo keeps whole copies of the world and must keep changes instead; a live
+command copies the running world and must apply a change set; the renderer rebuilds on change
+and must update what changed.
+
 ### 2026-11-18: The command line is the main door, MCP the second
 
 An agent with a shell drives GameCraft through `gamecraft-cli`, as with 3DCraft's
@@ -114,11 +139,6 @@ Candidates: rules as data only (triggers and actions that are commands); WebAsse
 with a narrow host interface (sandboxed, deterministic, any source language, runs in the browser
 too); an embedded scripting language. An agent writes any of them; what matters is sandboxing,
 determinism, hot reload and what a mod may do.
-
-### The project on disk (blocks M3)
-
-One file per world works for M0. A game needs worlds, prefabs, resources and mods: a directory
-of text files with a layering rule, and perhaps a single-file bundle for distribution.
 
 ### Networking model (blocks M9)
 
