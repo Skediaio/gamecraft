@@ -52,8 +52,7 @@ They run alongside the milestones and pull work forward where they need it.
 
 Status: the scenario mechanism of P1 (zones, interaction, variables, objectives, triggers whose
 actions are commands, messages; `docs/design/scenarios.md`) is done 2026-11-18, with a miniature
-of Lantern as its test (`crates/gamecraft-engine/tests/lantern.rs`). Open for P1: lights drawn by
-the renderer, the full game as an example, played through the CLI.
+of Lantern as its test (`crates/gamecraft-engine/tests/lantern.rs`). Lights are drawn since 2026-11-18.
 
 The mechanisms of P2 (projectiles with G7 drag, air density and wind; health; sight reduced by
 night, mist and rain; hearing; patrol and engage behaviour; `docs/design/ballistics.md`) are done
@@ -64,18 +63,29 @@ Both games exist as `examples/lantern` and `examples/skirmish` (2026-11-18): bui
 commands (`build.json`), won by a scripted player (`playthrough.json`) with pinned hashes.
 What they found awkward in the engine, and what follows from it:
 
-- `sim.input {face}` turns once instead of tracking the point: being made a held aim.
-- Messages are static text and trigger conditions read only variables: being given
-  `{var}` substitution and objective conditions.
-- No way to ask for a ballistic aim: being added as `query.aim`.
-- Scattered entities share one name and cannot keep areas clear: being fixed.
+- `sim.input {face}` turned once instead of tracking the point: now a held facing, also of an
+  entity (`face_entity`), done 2026-11-19.
+- Messages were static text and trigger conditions read only variables: `{var:name}`,
+  `{who}`, `{target}` in trigger messages and `{objective, status}` conditions, done 2026-11-19.
+- No way to ask for a ballistic aim: `query.aim`, flown with the simulation's own model, done
+  2026-11-19.
+- Scatter could not keep areas clear: `exclude` circles, done 2026-11-19 (names were already
+  numbered).
 - Scripts cannot react (a player script is a fixed list): scripting, M5.
 - Characters get stuck on solids without waypoints: navigation, M7.
 
 **Done when:** an agent plays each from start to finish over MCP, a second run gives the same
 state hash, and a picture of each exists.
 
-## M1: Walk
+## M1: Walk (in progress)
+
+Done 2026-11-18: `apps/gamecraft`, the window on winit and wgpu, native and in the browser
+(Trunk), with a fixed-step loop and interpolated display, keyboard and mouse to input records,
+first- and third-person cameras, lights drawn, and `--stdin` so an agent drives the window a
+person watches; a headless Chromium smoke test walks in the browser. Open: gamepad, the socket
+control channel and `--bridge`, the hash proven equal in wasm, a real native window tried by a
+person.
+
 
 A person and an agent are in the same world, in a window and in the browser.
 

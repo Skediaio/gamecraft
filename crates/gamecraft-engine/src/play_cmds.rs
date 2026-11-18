@@ -8,8 +8,7 @@ use crate::params::Params;
 use crate::session::{Handler, Registration, Session};
 use crate::spec::{CommandSpec, ParamType as T, param, spec};
 use crate::triggers::{self, Happening};
-use gamecraft_math::{Portable, rad_to_deg, wrap_deg};
-use gamecraft_sim::{Input, MAX_PITCH_DEG, MAX_STEP_TICKS, Sim, TICK_HZ};
+use gamecraft_sim::{Face, Input, MAX_PITCH_DEG, MAX_STEP_TICKS, Sim, TICK_HZ};
 use serde_json::{Map, Value, json};
 
 /// The commands of this module.
@@ -43,7 +42,8 @@ const CHARACTERS_DOC: &str = "[{id, name, position, rotation_y_deg, velocity, gr
     health: {max, current, armor, down} | null, behaviour: {state, ...} | null, magazine: {left, \
     shots, ready_in_s, reloading} | null}]";
 
-const INPUT_DOC: &str = "{entity, forward, right, yaw_deg, pitch_deg, run, jump, interact, fire}";
+const INPUT_DOC: &str = "{entity, forward, right, yaw_deg, pitch_deg, run, jump, interact, fire, \
+    face: [x, z] | null, face_entity: id | null, face_pitch}";
 
 /// The state hash as 16 lowercase hex digits (a JSON number cannot hold a `u64` exactly).
 fn hash(sim: &Sim) -> String {
@@ -238,8 +238,14 @@ fn input_spec() -> CommandSpec {
         "Input",
         "Stores what a character is asked to do; it holds until replaced. Fields left out keep \
          their last value; a character's first input starts from standing still, facing its \
-         current rotation. A character with a behaviour is taken over: its behaviour stops \
-         deciding until sim.release. A character that is down takes no input.",
+         current rotation. `face` and `face_entity` are held: every tick, before anybody \
+         moves, the character turns towards the point or the entity (a character's chest), and \
+         with `face_entity` and a launcher it also aims the pitch at it, allowing for the drop \
+         in a vacuum (query.aim gives the exact solution against drag and wind); `pitch_deg` \
+         given takes the pitch back. `yaw_deg` replaces a held facing, and `face: null` or \
+         `face_entity: null` clears it, keeping the current facing. A character with a \
+         behaviour is taken over: its behaviour stops deciding until sim.release. A character \
+         that is down takes no input.",
         vec![
             param("entity", T::Entity, "The character: its id or name.").required(),
             param(
@@ -255,15 +261,24 @@ fn input_spec() -> CommandSpec {
             param(
                 "yaw_deg",
                 T::Number,
-                "The facing, counter-clockwise from north seen from above; give this or `face`.",
+                "The facing, counter-clockwise from north seen from above; replaces a held \
+                 `face` or `face_entity`. Give one of the three.",
             )
             .unit("deg"),
             param(
                 "face",
                 T::Point2,
-                "Turns the character towards the ground point [x, z]; give this or `yaw_deg`.",
+                "Held: the character keeps turning towards the ground point [x, z], every tick; \
+                 null clears a held facing, keeping the current one.",
             )
             .unit("m"),
+            param(
+                "face_entity",
+                T::Entity,
+                "Held: the character keeps turning towards this entity (its id or name; a \
+                 character's chest), every tick, and aims its launcher's pitch at it; null \
+                 clears a held facing, keeping the current one.",
+            ),
             param("run", T::Boolean, "Run instead of walk."),
             param(
                 "jump",
@@ -279,7 +294,8 @@ fn input_spec() -> CommandSpec {
             param(
                 "pitch_deg",
                 T::Number,
-                "Where the character aims, up from level, -89 to 89; it does not turn the body.",
+                "Where the character aims, up from level, -89 to 89; it does not turn the body. \
+                 It takes the pitch back from a held `face_entity`.",
             )
             .unit("deg"),
             param(
@@ -305,6 +321,15 @@ fn input_json(id: u64, i: &Input) -> Value {
         "interact": i.interact,
         "pitch_deg": i.pitch_deg,
         "fire": i.fire,
+        "face": match i.face {
+            Some(Face::Point(p)) => json!(p),
+            _ => Value::Null,
+        },
+        "face_entity": match i.face {
+            Some(Face::Entity { id, .. }) => json!(id.0),
+            _ => Value::Null,
+        },
+        "face_pitch": matches!(i.face, Some(Face::Entity { pitch: true, .. })),
     })
 }
 
@@ -327,8 +352,20 @@ fn input(session: &mut Session, p: Params<'_>) -> Result<Value, CommandError> {
         yaw_deg: entity.rotation_y_deg,
         ..Input::default()
     });
-    if p.has("yaw_deg") && p.has("face") {
-        return Err(bad("give `yaw_deg` or `face`, not both"));
+    let facings = ["yaw_deg", "face", "face_entity"]
+        .into_iter()
+        .filter(|name| p.has(name))
+        .count();
+    if facings > 1 {
+        return Err(bad(
+            "give one of `yaw_deg`, `face` and `face_entity`, not both or all three",
+        ));
+    }
+    let face_entity = p.entity_named("face_entity", sim.world())?;
+    if face_entity == Some(id) {
+        return Err(bad(format!(
+            "`face_entity` is the character itself (entity {id}); give another entity"
+        )));
     }
     if let Some(v) = p.f64("forward")? {
         record.forward = v;
@@ -338,6 +375,10 @@ fn input(session: &mut Session, p: Params<'_>) -> Result<Value, CommandError> {
     }
     if let Some(v) = p.f64("yaw_deg")? {
         record.yaw_deg = v;
+        record.face = None;
+    }
+    if p.is_null("face") || p.is_null("face_entity") {
+        record.face = None;
     }
     if let Some([x, z]) = p.point2("face")? {
         let (dx, dz) = (x - ex, z - ez);
@@ -347,8 +388,21 @@ fn input(session: &mut Session, p: Params<'_>) -> Result<Value, CommandError> {
                 "`face` [{x}, {z}] is where the character stands; give a point away from it"
             )));
         }
-        // yaw_forward(yaw) = (-sin yaw, 0, -cos yaw), so yaw = atan2(-dx, -dz).
-        record.yaw_deg = wrap_deg(rad_to_deg((-dx).patan2(-dz)));
+        // The simulation turns the stored input towards it, now and every tick.
+        record.face = Some(Face::Point([x, z]));
+    }
+    if let Some(target) = face_entity {
+        record.face = Some(Face::Entity {
+            id: target,
+            pitch: entity.launcher().is_some() && !p.has("pitch_deg"),
+        });
+    } else if p.has("pitch_deg")
+        && let Some(Face::Entity { id: target, .. }) = record.face
+    {
+        record.face = Some(Face::Entity {
+            id: target,
+            pitch: false,
+        });
     }
     if let Some(v) = p.bool("run")? {
         record.run = v;

@@ -59,6 +59,7 @@ fn script(rng: &mut Rng) -> Input {
         interact: false,
         pitch_deg: 0.0,
         fire: false,
+        face: None,
     }
 }
 

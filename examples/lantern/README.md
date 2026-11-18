@@ -12,7 +12,7 @@ Everything here was made with engine commands only, nothing else.
 |---|---|
 | `build.json` | The `gamecraft-cli run` script that builds the whole world from nothing: terrain, environment, trees, rocks, the player, the beacons, objectives, variables and triggers |
 | `world.gamecraft` | The result of that script (a test checks that building it again gives the same world) |
-| `playthrough.json` | A `gamecraft-cli play` script: a player that walks to each beacon with `face` and `forward` and lights it with `interact`. It wins at 86.9 s |
+| `playthrough.json` | A `gamecraft-cli play` script: a player that runs to each beacon with a held `face` and `forward` and lights it with `interact`. It wins at 86.8 s |
 
 ## Build
 
@@ -58,3 +58,7 @@ Valley: noise terrain 256 m, 2 m cells, relief 30 m, seed 11. Player at the cent
 1.6 m/s, run speed 5 m/s (the playthrough runs). Beacons: Meadow (-45, -35), Pines (-30, 60),
 Ford (60, 75), Hill (100, 5), Ridge (30, -85); each lights when the player faces it within 2 m
 and interacts.
+
+Each beacon's message counts the lit ones (`"The Meadow beacon is lit: {var:lit} of 5."`), the
+losing trigger at 300 s fires only while the objective `light-all` is still open, and the trees
+keep the start and every beacon clear (`exclude` of `entity.scatter`).

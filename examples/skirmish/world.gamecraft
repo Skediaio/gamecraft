@@ -410,17 +410,17 @@
       "id": 21,
       "name": "Pine 1",
       "position": [
-        -17.59387208182262,
-        3.185025482576379,
-        -54.49009589476081
+        119.39006195323594,
+        5.003937585852696,
+        58.83010651358645
       ],
-      "rotation_y_deg": 26.232025237842723,
-      "scale": 1.0451898730186497,
+      "rotation_y_deg": 229.0400336619532,
+      "scale": 0.886575643512594,
       "components": [
         {
           "type": "plant",
           "species": "pinus-sylvestris",
-          "seed": 929598893,
+          "seed": 580447042,
           "growth": 1.0
         }
       ]
@@ -429,17 +429,17 @@
       "id": 22,
       "name": "Pine 2",
       "position": [
-        89.57933044876283,
-        -1.026854354696418,
-        101.79571936422657
+        -160.0095398511505,
+        -10.581428309503478,
+        8.994993187697107
       ],
-      "rotation_y_deg": 176.78248382212035,
-      "scale": 1.1554873736446176,
+      "rotation_y_deg": 251.43701234448488,
+      "scale": 1.1554117606610865,
       "components": [
         {
           "type": "plant",
           "species": "pinus-sylvestris",
-          "seed": 3816204721,
+          "seed": 3057528207,
           "growth": 1.0
         }
       ]
@@ -448,17 +448,17 @@
       "id": 23,
       "name": "Pine 3",
       "position": [
-        -33.698821264808885,
-        -1.9281013013149269,
-        -138.01881772954508
+        -60.601168286630504,
+        -6.6207517238703355,
+        101.0161005457368
       ],
-      "rotation_y_deg": 120.9602147543355,
-      "scale": 0.9920658016217428,
+      "rotation_y_deg": 287.60049281109207,
+      "scale": 1.0869536472855317,
       "components": [
         {
           "type": "plant",
           "species": "pinus-sylvestris",
-          "seed": 3081141326,
+          "seed": 1314492666,
           "growth": 1.0
         }
       ]
@@ -467,17 +467,17 @@
       "id": 24,
       "name": "Pine 4",
       "position": [
-        -52.4160494843035,
-        -9.990886445601877,
-        142.62007645183502
+        25.48188716575512,
+        -1.2369341795820132,
+        48.51329802246336
       ],
-      "rotation_y_deg": 62.28904262790792,
-      "scale": 0.8415621682843547,
+      "rotation_y_deg": 294.99305611088147,
+      "scale": 1.035197284716109,
       "components": [
         {
           "type": "plant",
           "species": "pinus-sylvestris",
-          "seed": 2525411614,
+          "seed": 4018801964,
           "growth": 1.0
         }
       ]
@@ -486,17 +486,17 @@
       "id": 25,
       "name": "Pine 5",
       "position": [
-        141.49856779034351,
-        1.854571452117609,
-        -60.49415110354417
+        50.312938136611294,
+        -7.388231656124631,
+        129.6971104945274
       ],
-      "rotation_y_deg": 68.79741025006027,
-      "scale": 1.0678578853227423,
+      "rotation_y_deg": 320.4500383004062,
+      "scale": 1.04897409407945,
       "components": [
         {
           "type": "plant",
           "species": "pinus-sylvestris",
-          "seed": 2673338979,
+          "seed": 926805194,
           "growth": 1.0
         }
       ]
@@ -505,17 +505,17 @@
       "id": 26,
       "name": "Pine 6",
       "position": [
-        34.2119818976474,
-        -8.265221334772127,
-        156.69893828037075
+        -37.333786400684524,
+        1.4980246217789392,
+        -45.838738089473125
       ],
-      "rotation_y_deg": 230.8385861138439,
-      "scale": 0.8483737234138028,
+      "rotation_y_deg": 250.25834193024315,
+      "scale": 1.1487723198597801,
       "components": [
         {
           "type": "plant",
           "species": "pinus-sylvestris",
-          "seed": 3744914268,
+          "seed": 3112150917,
           "growth": 1.0
         }
       ]
@@ -1414,78 +1414,16 @@
             "add": -1,
             "name": "enemies_left"
           }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 8,
+            "text": "{target} is down, {var:enemies_left} left"
+          }
         }
       ],
       "once": false,
-      "enabled": true
-    },
-    {
-      "id": "3-left",
-      "when": {
-        "event": "var",
-        "name": "enemies_left"
-      },
-      "if": {
-        "var": "enemies_left",
-        "op": "==",
-        "value": 3.0
-      },
-      "do": [
-        {
-          "command": "message.show",
-          "params": {
-            "seconds": 8,
-            "text": "3 left"
-          }
-        }
-      ],
-      "once": true,
-      "enabled": true
-    },
-    {
-      "id": "2-left",
-      "when": {
-        "event": "var",
-        "name": "enemies_left"
-      },
-      "if": {
-        "var": "enemies_left",
-        "op": "==",
-        "value": 2.0
-      },
-      "do": [
-        {
-          "command": "message.show",
-          "params": {
-            "seconds": 8,
-            "text": "2 left"
-          }
-        }
-      ],
-      "once": true,
-      "enabled": true
-    },
-    {
-      "id": "1-left",
-      "when": {
-        "event": "var",
-        "name": "enemies_left"
-      },
-      "if": {
-        "var": "enemies_left",
-        "op": "==",
-        "value": 1.0
-      },
-      "do": [
-        {
-          "command": "message.show",
-          "params": {
-            "seconds": 8,
-            "text": "1 left"
-          }
-        }
-      ],
-      "once": true,
       "enabled": true
     },
     {
@@ -1495,9 +1433,17 @@
         "name": "enemies_left"
       },
       "if": {
-        "var": "enemies_left",
-        "op": "==",
-        "value": 0.0
+        "all": [
+          {
+            "var": "enemies_left",
+            "op": "==",
+            "value": 0.0
+          },
+          {
+            "objective": "alive",
+            "status": "open"
+          }
+        ]
       },
       "do": [
         {
@@ -1530,6 +1476,10 @@
       "when": {
         "event": "down",
         "target": "tag:player"
+      },
+      "if": {
+        "objective": "clear",
+        "status": "open"
       },
       "do": [
         {

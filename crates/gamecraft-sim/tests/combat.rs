@@ -172,7 +172,10 @@ fn a_shot_into_the_ground_hits_the_terrain() {
     sim.fire(gun, Some(0.0), Some(-30.0)).unwrap();
     let hit = first_hit(&mut sim, 1.0);
     let p = hit_point(&hit);
-    assert!(p[1].abs() < 1e-6 && (p[2] + 1.5 / gamecraft_math::Portable::ptan(30f64.to_radians())).abs() < 0.05);
+    assert!(
+        p[1].abs() < 1e-6
+            && (p[2] + 1.5 / gamecraft_math::Portable::ptan(30f64.to_radians())).abs() < 0.05
+    );
     assert!(matches!(hit, EventKind::Hit { target: None, .. }));
 }
 

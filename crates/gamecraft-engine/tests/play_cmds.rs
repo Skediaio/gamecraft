@@ -132,7 +132,7 @@ fn input_merges_fields_and_starts_from_rest_and_the_current_rotation() {
         .unwrap();
     assert_eq!(
         r,
-        json!({"entity": 3, "forward": 1.0, "right": 0.0, "yaw_deg": 30.0, "run": false, "jump": false, "interact": false, "pitch_deg": 0.0, "fire": false})
+        json!({"entity": 3, "forward": 1.0, "right": 0.0, "yaw_deg": 30.0, "run": false, "jump": false, "interact": false, "pitch_deg": 0.0, "fire": false, "face": null, "face_entity": null, "face_pitch": false})
     );
     let r = s
         .run(
@@ -144,7 +144,7 @@ fn input_merges_fields_and_starts_from_rest_and_the_current_rotation() {
     let len = 1.25_f64.sqrt();
     assert_eq!(
         r,
-        json!({"entity": 3, "forward": 1.0 / len, "right": -0.5 / len, "yaw_deg": 30.0, "run": true, "jump": false, "interact": false, "pitch_deg": 0.0, "fire": false})
+        json!({"entity": 3, "forward": 1.0 / len, "right": -0.5 / len, "yaw_deg": 30.0, "run": true, "jump": false, "interact": false, "pitch_deg": 0.0, "fire": false, "face": null, "face_entity": null, "face_pitch": false})
     );
     let r = s
         .run(
@@ -365,4 +365,214 @@ fn start_on_a_world_without_characters() {
         s.run("sim.step", &json!({"ticks": 0})).unwrap()["tick"],
         json!(0)
     );
+}
+
+/// A flat field: `Player` at the origin, `Other` 20 m east, `Shooter` (with a rifle) 20 m west.
+fn field() -> Session {
+    let mut s = Session::new(World::new("Field", 4));
+    let mut run = |c: &str, p: Value| s.run(c, &p).unwrap();
+    run(
+        "terrain.set",
+        json!({"kind": "flat", "size_m": 256, "cell_m": 4}),
+    );
+    run(
+        "entity.add",
+        json!({"name": "Player", "at": [0, 0], "components": [{"type": "character"}]}),
+    );
+    run(
+        "entity.add",
+        json!({"name": "Other", "at": [20, 0], "components": [{"type": "character"}]}),
+    );
+    run(
+        "entity.add",
+        json!({"name": "Shooter", "at": [-20, 0], "components": [
+            {"type": "character"}, {"type": "launcher", "muzzle_velocity_mps": 300}]}),
+    );
+    run("sim.start", json!({}));
+    s
+}
+
+fn yaw_of(s: &Session, name: &str) -> f64 {
+    let w = s.current_world();
+    w.entity(w.find(name).unwrap()).unwrap().rotation_y_deg
+}
+
+fn assert_yaw(s: &Session, name: &str, want: f64) {
+    let got = yaw_of(s, name);
+    let off = (got - want).abs();
+    assert!(
+        off.min(360.0 - off) < 1e-6,
+        "{name}: yaw {got}, wanted {want}"
+    );
+}
+
+#[test]
+fn face_is_held_every_tick_until_a_yaw_or_null_replaces_it() {
+    let mut s = field();
+    let run = |s: &mut Session, c: &str, p: Value| s.run(c, &p).unwrap();
+    let r = run(
+        &mut s,
+        "sim.input",
+        json!({"entity": "Player", "face": [0, -10]}),
+    );
+    assert_eq!(r["face"], json!([0.0, -10.0]));
+    assert_eq!(r["yaw_deg"], json!(0.0));
+    // The game master moves the player: the next tick turns it to the point again.
+    run(&mut s, "entity.set", json!({"id": "Player", "at": [10, 0]}));
+    run(&mut s, "sim.step", json!({"ticks": 1}));
+    assert_yaw(&s, "Player", 45.0); // north-west
+    // An entity: followed as it moves.
+    let r = run(
+        &mut s,
+        "sim.input",
+        json!({"entity": "Player", "face_entity": "Other"}),
+    );
+    assert_eq!(
+        (r["face"].clone(), r["face_entity"].clone()),
+        (json!(null), json!(2))
+    );
+    run(&mut s, "entity.set", json!({"id": "Other", "at": [10, 30]}));
+    run(&mut s, "sim.step", json!({"ticks": 1}));
+    assert_yaw(&s, "Player", 180.0); // south
+    // A later input without a facing keeps it.
+    run(
+        &mut s,
+        "sim.input",
+        json!({"entity": "Player", "run": true}),
+    );
+    run(&mut s, "entity.set", json!({"id": "Other", "at": [-10, 0]}));
+    run(&mut s, "sim.step", json!({"ticks": 1}));
+    assert_yaw(&s, "Player", 90.0); // west
+    // `yaw_deg` replaces it.
+    let r = run(
+        &mut s,
+        "sim.input",
+        json!({"entity": "Player", "yaw_deg": 270}),
+    );
+    assert_eq!(r["face_entity"], json!(null));
+    run(&mut s, "entity.set", json!({"id": "Other", "at": [10, 30]}));
+    run(&mut s, "sim.step", json!({"ticks": 1}));
+    assert_yaw(&s, "Player", 270.0);
+    // `face: null` clears a point and keeps the facing it had.
+    run(
+        &mut s,
+        "sim.input",
+        json!({"entity": "Player", "face": [10, 40]}),
+    );
+    run(&mut s, "sim.step", json!({"ticks": 1}));
+    let r = run(
+        &mut s,
+        "sim.input",
+        json!({"entity": "Player", "face": null}),
+    );
+    assert_eq!(r["face"], json!(null));
+    let held = yaw_of(&s, "Player");
+    run(
+        &mut s,
+        "entity.set",
+        json!({"id": "Player", "at": [-30, 0]}),
+    );
+    run(&mut s, "sim.step", json!({"ticks": 1}));
+    assert_yaw(&s, "Player", held);
+    // `face_entity: null` clears an entity.
+    run(
+        &mut s,
+        "sim.input",
+        json!({"entity": "Player", "face_entity": "Other"}),
+    );
+    let r = run(
+        &mut s,
+        "sim.input",
+        json!({"entity": "Player", "face_entity": null}),
+    );
+    assert_eq!(r["face_entity"], json!(null));
+    let state = s.run("sim.state", &json!({})).unwrap();
+    assert!(
+        state["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["face_entity"].is_null())
+    );
+}
+
+#[test]
+fn face_entity_aims_the_pitch_of_a_launcher_until_pitch_deg_is_given() {
+    let mut s = field();
+    let r = s
+        .run(
+            "sim.input",
+            &json!({"entity": "Shooter", "face_entity": "Other"}),
+        )
+        .unwrap();
+    assert_eq!(r["face_pitch"], json!(true));
+    // Other is 40 m east, its chest below the shooter's eyes: aimed a little down, plus drop.
+    s.run("sim.step", &json!({"ticks": 1})).unwrap();
+    let state = s.run("sim.state", &json!({})).unwrap();
+    let input = state["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["entity"] == json!(3))
+        .unwrap()
+        .clone();
+    let pitch = input["pitch_deg"].as_f64().unwrap();
+    assert!(pitch != 0.0 && pitch.abs() < 2.0, "{input}");
+    assert_yaw(&s, "Shooter", 270.0);
+    // A pitch given by hand takes the pitch back; the yaw still follows.
+    let r = s
+        .run("sim.input", &json!({"entity": "Shooter", "pitch_deg": 5}))
+        .unwrap();
+    assert_eq!(
+        (r["face_pitch"].clone(), r["face_entity"].clone()),
+        (json!(false), json!(2))
+    );
+    s.run("entity.set", &json!({"id": "Other", "at": [-20, -30]}))
+        .unwrap();
+    s.run("sim.step", &json!({"ticks": 1})).unwrap();
+    assert_yaw(&s, "Shooter", 0.0);
+    let state = s.run("sim.state", &json!({})).unwrap();
+    assert_eq!(state["inputs"][0]["entity"], json!(3), "{state}");
+    assert_eq!(state["inputs"][0]["pitch_deg"], json!(5.0), "{state}");
+    // `face_entity` with `pitch_deg` in the same call: the yaw is held, the pitch is the one given.
+    let r = s
+        .run(
+            "sim.input",
+            &json!({"entity": "Shooter", "face_entity": "Other", "pitch_deg": 1}),
+        )
+        .unwrap();
+    assert_eq!(r["face_pitch"], json!(false));
+    // A character without a launcher holds no pitch.
+    let r = s
+        .run(
+            "sim.input",
+            &json!({"entity": "Player", "face_entity": "Other"}),
+        )
+        .unwrap();
+    assert_eq!(r["face_pitch"], json!(false));
+}
+
+#[test]
+fn bad_facings_are_refused_naming_the_parameter() {
+    let mut s = field();
+    for (params, needles) in [
+        (
+            json!({"entity": "Player", "face": [0, -5], "face_entity": "Other"}),
+            vec!["not both"],
+        ),
+        (
+            json!({"entity": "Player", "yaw_deg": 3, "face_entity": "Other"}),
+            vec!["not both"],
+        ),
+        (
+            json!({"entity": "Player", "face_entity": "Player"}),
+            vec!["`face_entity`", "itself"],
+        ),
+        (
+            json!({"entity": "Player", "face_entity": "Nobody"}),
+            vec!["`face_entity`", "Nobody"],
+        ),
+    ] {
+        refuse(&mut s, "sim.input", params, &needles);
+    }
 }

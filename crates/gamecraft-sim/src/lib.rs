@@ -50,6 +50,14 @@
 //!
 //! 1. **Facing.** With an input record the entity's `rotation_y_deg` becomes the input's
 //!    (wrapped) `yaw_deg`. Without one the character keeps its rotation and wants no motion.
+//!    An input that holds a [`Face`] turns first: at the start of every tick, after the
+//!    behaviours decided and before anybody moves, characters in id order get the `yaw_deg`
+//!    that faces the point, or the entity's [`aim::aim_point`] (a character's chest), from
+//!    where they stand; with [`Face::Entity`] `pitch` and a launcher, also the `pitch_deg`
+//!    that allows for the drop in a vacuum from the muzzle
+//!    ([`behaviour::aim_pitch_deg`], as behaviours aim; [`aim::solve`] gives the exact
+//!    solution against drag and wind). A point under the character's feet, or an entity that
+//!    no longer exists, leaves the facing as it was. A character that is down does not turn.
 //! 2. **Wanted horizontal velocity.** `yaw_forward(yaw) * forward + right * right`, the
 //!    `(forward, right)` pair clamped to the unit disc, times `run_speed_mps` when running
 //!    and `walk_speed_mps` otherwise; "right" is the facing turned 90 degrees clockwise seen
@@ -94,6 +102,7 @@ use gamecraft_math::{StateHasher, wrap_deg};
 use gamecraft_world::{EntityId, HeightField, World};
 use serde::{Deserialize, Serialize};
 
+pub mod aim;
 pub mod ballistics;
 pub mod behaviour;
 pub mod combat;
@@ -141,6 +150,24 @@ const HASH_MARK_COMBAT: u64 = 0xC0BA_7C0B_A7C0_BA7C;
 const HASH_MARK_INSIDE: u64 = 0x5A0E_5A0E_5A0E_5A0E;
 /// Marks the held interactions in the state hash.
 const HASH_MARK_HELD: u64 = 0x1A7E_1A7E_1A7E_1A7E;
+/// Marks the held facings in the state hash.
+const HASH_MARK_FACE: u64 = 0xFACE_FACE_FACE_FACE;
+
+/// What a character keeps facing, turned towards at the start of every tick (see the crate
+/// docs, *Facing*).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Face {
+    /// A point of the ground plane, `[x, z]`.
+    Point([f64; 2]),
+    /// An entity's aim point ([`aim::aim_point`]: a character's chest).
+    Entity {
+        /// The entity.
+        id: EntityId,
+        /// Also aim the pitch at it, when the character has a launcher.
+        pitch: bool,
+    },
+}
 
 /// What a character is asked to do, until the record is replaced.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -164,6 +191,8 @@ pub struct Input {
     pub pitch_deg: f64,
     /// Held: the character's launcher fires every `rate_s` (while it has shots).
     pub fire: bool,
+    /// Held: what the character keeps turning towards, every tick; `None` keeps `yaw_deg`.
+    pub face: Option<Face>,
 }
 
 /// The moving state of one character that is not in the document. A new body is at rest and
@@ -325,8 +354,10 @@ impl Sim {
 
     /// Stores the input of a character; it holds until replaced. `forward` and `right` are
     /// clamped to the unit disc, `yaw_deg` is wrapped and `pitch_deg` clamped to
-    /// [`MAX_PITCH_DEG`]; a non-finite field is an error. A character with a behaviour is taken
-    /// over: its behaviour stops deciding until [`Sim::release`].
+    /// [`MAX_PITCH_DEG`]; a non-finite field (or `face` point) or a `face` entity that does not
+    /// exist is an error. A held `face` turns the stored input at once, and again every tick. A
+    /// character with a behaviour is taken over: its behaviour stops deciding until
+    /// [`Sim::release`].
     pub fn set_input(&mut self, id: EntityId, input: Input) -> Result<(), SimError> {
         let entity = self.world.entity(id).ok_or(SimError::NoEntity(id))?;
         if entity.character().is_none() {
@@ -353,6 +384,18 @@ impl Sim {
                 )));
             }
         }
+        match input.face {
+            Some(Face::Point([x, z])) if !(x.is_finite() && z.is_finite()) => {
+                return Err(SimError::BadInput(format!(
+                    "`face` of the input for entity {id} is [{x}, {z}]; it must be a point \
+                     [x, z] of finite metres"
+                )));
+            }
+            Some(Face::Entity { id: target, .. }) if self.world.entity(target).is_none() => {
+                return Err(SimError::NoEntity(target));
+            }
+            _ => {}
+        }
         let (forward, right) = clamp_to_disc(input.forward, input.right);
         self.inputs.insert(
             id,
@@ -367,7 +410,56 @@ impl Sim {
         if behaves {
             self.taken_over.insert(id);
         }
+        self.turn(id);
         Ok(())
+    }
+
+    /// Turns the input of `id` towards what it holds in `face`, if anything (see the crate
+    /// docs, *Facing*).
+    fn turn(&mut self, id: EntityId) {
+        let Some(input) = self.inputs.get(&id).copied() else {
+            return;
+        };
+        let Some(face) = input.face else {
+            return;
+        };
+        let Some(me) = self.world.entity(id) else {
+            return;
+        };
+        if me.is_down() {
+            return;
+        }
+        let (to, pitch) = match face {
+            Face::Point([x, z]) => ([x, me.position[1], z], false),
+            Face::Entity { id: target, pitch } => match self.world.entity(target) {
+                Some(t) => (aim::aim_point(t), pitch),
+                None => return,
+            },
+        };
+        let mut turned = input;
+        if let Some(yaw) = behaviour::yaw_towards(me.position, to) {
+            turned.yaw_deg = yaw;
+        }
+        if pitch && let Some(launcher) = me.launcher() {
+            let from = combat::muzzle(me, launcher);
+            turned.pitch_deg = behaviour::aim_pitch_deg(from, to, launcher.muzzle_velocity_mps);
+        }
+        if turned != input {
+            self.inputs.insert(id, turned);
+        }
+    }
+
+    /// Every input holding a `face` turns, in id order.
+    fn turn_all(&mut self) {
+        let facing: Vec<EntityId> = self
+            .inputs
+            .iter()
+            .filter(|(_, i)| i.face.is_some())
+            .map(|(id, _)| *id)
+            .collect();
+        for id in facing {
+            self.turn(id);
+        }
     }
 
     /// Hands a character taken over by [`Sim::set_input`] back to its behaviour, which decides
@@ -642,6 +734,7 @@ impl Sim {
         let ids: Vec<EntityId> = self.bodies.keys().copied().collect();
         for _ in 0..ticks.min(MAX_STEP_TICKS) {
             self.think();
+            self.turn_all();
             let around = Surroundings {
                 heights: self.heights.as_deref(),
                 solids: &self.solids,
@@ -812,7 +905,8 @@ impl Sim {
 
     /// A hash of everything that moves or decides what moves next: the tick, the running world,
     /// every character's body and input, in id order, and (when there are any) which
-    /// characters are inside which zones and which hold `interact`; and, when there are any,
+    /// characters are inside which zones and which hold `interact`, the inputs' held facings;
+    /// and, when there are any,
     /// the projectiles in flight, the launchers' magazines, every health, the behaviours'
     /// states, the inputs' aim and fire, the agents' take-overs and the shots heard but not yet
     /// acted on. Events waiting to be taken are not part of it. Equal histories give equal
@@ -867,6 +961,29 @@ impl Sim {
             hasher.write_u64(u64::MAX);
             for id in &self.held {
                 hasher.write_u64(id.0);
+            }
+        }
+        let facing: Vec<(EntityId, Face)> = self
+            .inputs
+            .iter()
+            .filter_map(|(id, i)| i.face.map(|f| (*id, f)))
+            .collect();
+        if !facing.is_empty() {
+            hasher.write_u64(HASH_MARK_FACE);
+            for (id, face) in facing {
+                hasher.write_u64(id.0);
+                match face {
+                    Face::Point([x, z]) => {
+                        hasher.write_u64(0);
+                        hasher.write_f64(x);
+                        hasher.write_f64(z);
+                    }
+                    Face::Entity { id: target, pitch } => {
+                        hasher.write_u64(1);
+                        hasher.write_u64(target.0);
+                        hasher.write_bool(pitch);
+                    }
+                }
             }
         }
         self.hash_combat(&mut hasher);

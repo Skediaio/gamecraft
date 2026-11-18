@@ -217,8 +217,10 @@ fn fired_of<'a>(run: &'a Run, trigger: &str) -> Vec<&'a Value> {
 }
 
 /// The state hash at the end of the diligent run. It must be the same on every platform: a
-/// change here means the simulation or the triggers' results changed.
-const GOLDEN_HASH: &str = "00faed105492146f";
+/// change here means the simulation or the triggers' results changed. It moved on 2026-11-19
+/// (from 00faed105492146f) when `face` became a held facing: the player keeps turning towards
+/// the beacon every tick, and the held point is part of the state hash.
+const GOLDEN_HASH: &str = "d4e0b83b3a0991b8";
 
 #[test]
 fn a_diligent_player_lights_every_beacon_before_the_mist() {

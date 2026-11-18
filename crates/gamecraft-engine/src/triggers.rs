@@ -9,6 +9,13 @@
 //! `once` is disabled when it has run successfully. Variables changed by a trigger's commands
 //! are `var` events run in the same pass, depth first, at most [`MAX_TRIGGER_DEPTH`] deep.
 //! A failing trigger leaves the world as it was before it and is reported, never fatal.
+//!
+//! The `text` of a `message.show` inside a trigger is filled in when the step runs:
+//! `{var:<name>}` becomes the variable's value (a text without quotes), `{who}` and
+//! `{target}` the names of the event's entities (their id when nameless). A placeholder
+//! without a value (an unknown variable, `{who}` of an event without one) stays as written
+//! and is reported once per trigger and placeholder in the trigger errors; the trigger still
+//! runs. Other braces are plain text.
 
 use crate::session::Session;
 use crate::spec::Scope;
@@ -90,6 +97,8 @@ pub(crate) struct PlayLog {
     pub(crate) fired_counts: BTreeMap<String, u64>,
     /// Variables changed by commands since their `var` events last ran.
     pub(crate) pending_vars: Vec<String>,
+    /// (trigger, placeholder) of the message placeholders without a value reported so far.
+    pub(crate) reported_placeholders: BTreeSet<(String, String)>,
     /// The answer being collected.
     pub(crate) report: Report,
 }
@@ -197,6 +206,15 @@ fn record_event(session: &mut Session, tick: u64, happening: &Happening) {
     }
 }
 
+/// Keeps a trigger error for `sim.state`, the last [`MAX_TRIGGER_ERRORS`] of them.
+fn record_error(play: &mut PlayLog, trigger: &str, tick: u64, error: &str) {
+    play.errors
+        .push_back(json!({"trigger": trigger, "tick": tick, "error": error}));
+    while play.errors.len() > MAX_TRIGGER_ERRORS {
+        play.errors.pop_front();
+    }
+}
+
 fn record_fired(
     session: &mut Session,
     trigger: &str,
@@ -220,11 +238,7 @@ fn record_fired(
             if let Value::Object(m) = &mut fired {
                 m.insert("error".into(), json!(error));
             }
-            play.errors
-                .push_back(json!({"trigger": trigger, "tick": tick, "error": error}));
-            while play.errors.len() > MAX_TRIGGER_ERRORS {
-                play.errors.pop_front();
-            }
+            record_error(play, trigger, tick, &error);
         }
     }
     let report = &mut play.report;
@@ -270,7 +284,7 @@ fn run_triggers(
             }
         };
         if let Some(condition) = &trigger.condition
-            && !condition.holds(&world.vars)
+            && !condition.holds(&world.vars, &world.objectives)
         {
             continue;
         }
@@ -285,7 +299,7 @@ fn run_triggers(
             record_fired(session, &id, tick, happening, Err(why));
             continue;
         }
-        match run_actions(session, &trigger, who, target) {
+        match run_actions(session, &trigger, tick, who, target) {
             Ok(changed) => {
                 record_fired(session, &id, tick, happening, Ok(()));
                 chain.push(id.clone());
@@ -389,13 +403,14 @@ fn substitute(
 fn run_actions(
     session: &mut Session,
     trigger: &Trigger,
+    tick: u64,
     who: Option<EntityId>,
     target: Option<EntityId>,
 ) -> Result<Vec<String>, String> {
     let saved_live = session.live().cloned();
     let saved_messages = session.play().messages.clone();
     let saved_pending = std::mem::take(&mut session.play_mut().pending_vars);
-    let outcome = run_steps(session, trigger, who, target);
+    let outcome = run_steps(session, trigger, tick, who, target);
     let changed = std::mem::replace(&mut session.play_mut().pending_vars, saved_pending);
     match outcome {
         Ok(()) => {
@@ -413,9 +428,109 @@ fn run_actions(
     }
 }
 
+/// The start of a variable placeholder in a message.
+const VAR_PLACEHOLDER: &str = "{var:";
+
+/// The name of an entity for a message: its name, or its id when it has none.
+fn entity_name(world: &World, id: EntityId) -> String {
+    match world.entity(id) {
+        Some(e) if !e.name.is_empty() => e.name.clone(),
+        _ => id.0.to_string(),
+    }
+}
+
+/// `text` with its placeholders filled in from `world` and the event's entities, and the
+/// placeholders that have no value (see the module docs).
+fn fill_text(
+    text: &str,
+    world: &World,
+    who: Option<EntityId>,
+    target: Option<EntityId>,
+) -> (String, Vec<String>) {
+    let mut out = String::with_capacity(text.len());
+    let mut missing = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        let (before, from_brace) = rest.split_at(open);
+        out.push_str(before);
+        let Some(close) = from_brace.find('}') else {
+            out.push_str(from_brace);
+            return (out, missing);
+        };
+        let (placeholder, after) = from_brace.split_at(close + 1);
+        let value = match placeholder {
+            "{who}" => Some(who.map(|id| entity_name(world, id))),
+            "{target}" => Some(target.map(|id| entity_name(world, id))),
+            _ => placeholder
+                .strip_prefix(VAR_PLACEHOLDER)
+                .and_then(|p| p.strip_suffix('}'))
+                .map(|name| {
+                    world.vars.get(name).map(|v| match v {
+                        VarValue::Text(t) => t.clone(),
+                        other => other.to_string(),
+                    })
+                }),
+        };
+        match value {
+            Some(Some(filled)) => out.push_str(&filled),
+            Some(None) => {
+                missing.push(placeholder.to_string());
+                out.push_str(placeholder);
+            }
+            None => {
+                // Not a placeholder: keep the brace and read on after it.
+                out.push('{');
+                rest = from_brace.get(1..).unwrap_or("");
+                continue;
+            }
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    (out, missing)
+}
+
+/// The parameters of a `message.show` step with its `text` filled in; the placeholders
+/// without a value are reported once per trigger.
+fn fill_message(
+    session: &mut Session,
+    trigger: &str,
+    tick: u64,
+    params: Value,
+    who: Option<EntityId>,
+    target: Option<EntityId>,
+) -> Value {
+    let Value::Object(mut map) = params else {
+        return params;
+    };
+    let Some(text) = map.get("text").and_then(Value::as_str) else {
+        return Value::Object(map);
+    };
+    let Some(world) = session.live().map(Sim::world) else {
+        return Value::Object(map);
+    };
+    let (filled, missing) = fill_text(text, world, who, target);
+    map.insert("text".into(), Value::String(filled));
+    let play = session.play_mut();
+    for placeholder in missing {
+        if play
+            .reported_placeholders
+            .insert((trigger.to_string(), placeholder.clone()))
+        {
+            let error = format!(
+                "message.show: `{placeholder}` has no value here (no such variable, or no \
+                 such entity for this event); it is shown as written"
+            );
+            record_error(play, trigger, tick, &error);
+        }
+    }
+    Value::Object(map)
+}
+
 fn run_steps(
     session: &mut Session,
     trigger: &Trigger,
+    tick: u64,
     who: Option<EntityId>,
     target: Option<EntityId>,
 ) -> Result<(), String> {
@@ -437,8 +552,11 @@ fn run_steps(
                 ));
             }
         }
-        let params =
+        let mut params =
             substitute(&step.params, who, target, event).map_err(|why| format!("{at}: {why}"))?;
+        if step.command == MESSAGE_COMMAND {
+            params = fill_message(session, &trigger.id, tick, params, who, target);
+        }
         session
             .run(&step.command, &params)
             .map_err(|e| format!("{at}: {e}"))?;

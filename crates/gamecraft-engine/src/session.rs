@@ -109,6 +109,7 @@ const MODULES: &[&[Registration]] = &[
     crate::inspect_cmds::SPECS,
     crate::find_cmds::SPECS,
     crate::geometry_cmds::SPECS,
+    crate::aim_cmds::SPECS,
     crate::catalog_cmds::SPECS,
     crate::scatter_cmds::SPECS,
     crate::scenario_cmds::SPECS,

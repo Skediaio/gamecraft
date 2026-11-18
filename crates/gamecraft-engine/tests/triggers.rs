@@ -288,3 +288,128 @@ fn the_same_scenario_and_inputs_give_the_same_hash_events_and_fired_every_tick()
         .sum();
     assert!(fired >= 4, "the scenario did something: {fired}");
 }
+
+fn messages(s: &mut Session) -> Vec<String> {
+    let state = s.run("sim.state", &json!({})).unwrap();
+    state["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["text"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn messages_of_triggers_show_variables_and_the_names_of_the_event() {
+    let mut s = gate_world();
+    s.run(
+        "trigger.add",
+        &json!({"id": "in", "when": {"event": "enter", "zone": "Gate", "who": "tag:player"},
+                "do": [{"command": "var.set", "params": {"name": "passed", "add": 1}},
+                       {"command": "message.show", "params": {
+                           "text": "{who} passed {target}: {var:passed} so far. {var:nope} {nothing}"}}]}),
+    )
+    .unwrap();
+    s.run("var.set", &json!({"name": "colour", "value": "red"}))
+        .unwrap();
+    s.run(
+        "trigger.add",
+        &json!({"id": "count", "when": {"event": "var", "name": "passed"}, "once": false,
+                "do": [{"command": "message.show", "params": {
+                    "text": "{var:colour} {who}/{var:passed}"}}]}),
+    )
+    .unwrap();
+    s.run("sim.start", &json!({})).unwrap();
+    walk_north(&mut s);
+    s.run("sim.step", &json!({"seconds": 6})).unwrap();
+    // Values at the moment the step runs: after the var.set before it. Text values are written
+    // without quotes; unknown names stay as written.
+    assert_eq!(
+        messages(&mut s),
+        vec![
+            "Player passed Gate: 1 so far. {var:nope} {nothing}".to_string(),
+            "red {who}/1".to_string()
+        ]
+    );
+    // The unknown names were reported once each, naming the trigger; the triggers still ran.
+    s.run("var.set", &json!({"name": "passed", "add": 1}))
+        .unwrap();
+    s.run("sim.step", &json!({"ticks": 1})).unwrap();
+    assert!(messages(&mut s).contains(&"red {who}/2".to_string()));
+    let state = s.run("sim.state", &json!({})).unwrap();
+    let errors = state["trigger_errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert_eq!(errors[0]["trigger"], json!("in"));
+    assert!(
+        errors[0]["error"].as_str().unwrap().contains("{var:nope}"),
+        "{errors:?}"
+    );
+    assert_eq!(errors[1]["trigger"], json!("count"));
+    assert!(
+        errors[1]["error"].as_str().unwrap().contains("{who}"),
+        "{errors:?}"
+    );
+    let scenario = s.run("scenario.inspect", &json!({})).unwrap();
+    let count = scenario["triggers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "count")
+        .unwrap()
+        .clone();
+    assert_eq!(count["fired"], json!(2), "{count}");
+}
+
+#[test]
+fn objective_conditions_gate_triggers_alone_and_inside_any() {
+    let mut s = gate_world();
+    s.run(
+        "objective.add",
+        &json!({"id": "goal", "title": "Pass the gate"}),
+    )
+    .unwrap();
+    s.run(
+        "trigger.add",
+        &json!({"id": "while-open", "when": {"event": "var", "name": "passed"}, "once": false,
+                "if": {"objective": "goal", "status": "open"},
+                "do": [{"command": "var.set", "params": {"name": "open_hits", "add": 1}}]}),
+    )
+    .unwrap();
+    s.run(
+        "trigger.add",
+        &json!({"id": "after", "when": {"event": "var", "name": "passed"}, "once": false,
+                "if": {"any": [{"objective": "goal", "status": "done"},
+                               {"objective": "goal", "status": "failed"}]},
+                "do": [{"command": "var.set", "params": {"name": "late_hits", "add": 1}}]}),
+    )
+    .unwrap();
+    s.run("var.set", &json!({"name": "open_hits", "value": 0}))
+        .unwrap();
+    s.run("var.set", &json!({"name": "late_hits", "value": 0}))
+        .unwrap();
+    s.run("sim.start", &json!({})).unwrap();
+    s.run("var.set", &json!({"name": "passed", "add": 1}))
+        .unwrap();
+    s.run("sim.step", &json!({"ticks": 1})).unwrap();
+    s.run("objective.set", &json!({"id": "goal", "status": "done"}))
+        .unwrap();
+    s.run("var.set", &json!({"name": "passed", "add": 1}))
+        .unwrap();
+    s.run("sim.step", &json!({"ticks": 1})).unwrap();
+    assert_eq!(var(&s, "open_hits"), VarValue::Number(1.0));
+    assert_eq!(var(&s, "late_hits"), VarValue::Number(1.0));
+    assert_eq!(
+        s.current_world().objectives[0].status,
+        ObjectiveStatus::Done
+    );
+    // A bad objective condition is refused when the trigger is added.
+    let e = s
+        .run(
+            "trigger.add",
+            &json!({"id": "bad", "when": {"event": "start"},
+                    "if": {"objective": "goal", "status": "won"}, "do": []}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("open, done, failed"), "{e}");
+}

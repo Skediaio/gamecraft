@@ -34,7 +34,7 @@ Dependencies point downwards only (`cargo xtask layers`).
 | L4 | `gamecraft-render` | the adapter: world in, VisionCraft renderer calls and pictures out | visioncraft-render, visioncraft-flora, wgpu, glam, png |
 | L4 | `gamecraft-automation` | `Host` (session, files, pictures), JSON lines, MCP | serde, serde_json |
 | L5 | `gamecraft-cli` | the command line; wires the renderer into the host | pollster |
-| L5 | `gamecraft` *(planned, M1)* | the window, native and wasm | winit or eframe, wgpu |
+| L5 | `gamecraft` | the window, native and wasm: the game loop, input to input records, cameras | winit, wgpu |
 
 ## The world document
 
@@ -109,7 +109,8 @@ The simulation's promise (rule 3) rests on five habits:
 - **Seeded randomness.** `gamecraft_math::Rng`, forked per use from the world seed.
 - **A hash of everything that moves or decides what moves next.** `Sim::state_hash` covers the
   tick, the static content of the running world, and for every character its position,
-  rotation, velocity, grounded flag and input record. Tests pin golden hashes; a replay compares
+  rotation, velocity, grounded flag, input record and held facing, and the state of
+  zones, projectiles, health and behaviours when there is any. Tests pin golden hashes; a replay compares
   them.
 
 Not yet proven: the same hash in a wasm build (the test runner for it is a roadmap item of M1).

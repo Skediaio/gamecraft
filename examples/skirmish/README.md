@@ -11,7 +11,7 @@ Everything here was made with engine commands only, nothing else.
 |---|---|
 | `build.json` | The `gamecraft-cli run` script that builds the whole world: terrain, environment, trees, cover, player, enemies with their behaviour, objectives, variables and triggers |
 | `world.gamecraft` | The result of that script (a test checks that building it again gives the same world) |
-| `playthrough.json` | A `gamecraft-cli play` script: a scripted player that moves from cover to cover, aims every shot with a correction for drop and wind, and wins at 52.8 s with 43 health left |
+| `playthrough.json` | A `gamecraft-cli play` script: a scripted player that moves from cover to cover, keeps each enemy in its sights with `face_entity`, and wins at 53.3 s with 43 health left |
 
 ## The weapons
 
@@ -47,10 +47,20 @@ gamecraft-cli play examples/skirmish/world.gamecraft \
 gamecraft-cli play examples/skirmish/world.gamecraft --seconds 120
 ```
 
-`playthrough.json` holds the inputs only (`sim.input` with `face`, `yaw_deg`, `pitch_deg`,
-`fire`, `sim.step`), as an agent or a keyboard would send them. Each shot's `yaw_deg` and
-`pitch_deg` were worked out by flying a test shot with the engine's own G7 drag, air density and
-wind profile until it hit the target's chest, leading a moving target by its velocity.
+`playthrough.json` holds the inputs only (`sim.input` with `face`, `face_entity`, `fire`,
+`sim.step`), as an agent or a keyboard would send them. `face [x, z]` is held, so one input walks
+the player to the next cover; `face_entity` keeps an enemy in the sights, turning every tick and
+aiming the pitch at its chest with the drop allowed for, so `fire` hits. Within 75 m the wind
+moves the bullet by about a centimetre, so the script needs no wind correction. A script is a
+fixed list and cannot use the answer of a query; an agent that plays over MCP can ask
+`query.aim {"from": "Player", "to": "Hill Sentry"}` for the exact yaw and pitch against drag
+and wind (and `drop_m`, `drift_m`, `time_of_flight_s`) and send them as `yaw_deg` and
+`pitch_deg`.
+
+The triggers count the enemies down in one message (`"{target} is down, {var:enemies_left}
+left"`), and the end triggers read the objectives: the village is only cleared while `alive`
+is open, and the player is only lost while `clear` is open. The trees keep the wall line, the
+village, the barn and the start clear (`exclude` of `entity.scatter`).
 
 ## Open it in the window
 

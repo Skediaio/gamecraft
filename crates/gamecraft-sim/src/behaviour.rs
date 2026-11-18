@@ -153,7 +153,7 @@ pub fn team_of(e: &Entity) -> Option<&str> {
 
 /// The yaw (degrees, counter-clockwise from north) that faces from `from` to `to`; `None`
 /// when they coincide horizontally.
-fn yaw_towards(from: [f64; 3], to: [f64; 3]) -> Option<f64> {
+pub(crate) fn yaw_towards(from: [f64; 3], to: [f64; 3]) -> Option<f64> {
     let (dx, dz) = (to[0] - from[0], to[2] - from[2]);
     let d = (dx * dx + dz * dz).sqrt();
     // yaw_forward(yaw) = (-sin yaw, 0, -cos yaw), so yaw = atan2(-dx, -dz).

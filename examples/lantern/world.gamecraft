@@ -581,17 +581,17 @@
       "id": 30,
       "name": "Birch 12",
       "position": [
-        -45.55663920909853,
-        -1.8124497663322279,
-        -31.374397485563854
+        -56.096805871591656,
+        0.4735216498881251,
+        39.524929364966056
       ],
-      "rotation_y_deg": 144.8320761633552,
-      "scale": 0.9424293888937798,
+      "rotation_y_deg": 322.9975934422095,
+      "scale": 0.8675970469456863,
       "components": [
         {
           "type": "plant",
           "species": "betula-pendula",
-          "seed": 725817764,
+          "seed": 1574293950,
           "growth": 1.0
         }
       ]
@@ -600,17 +600,17 @@
       "id": 31,
       "name": "Birch 13",
       "position": [
-        -72.82570629463356,
-        -0.8403045719830292,
-        81.00674036154197
+        -49.401680305091716,
+        1.126715266453511,
+        97.89835481972491
       ],
-      "rotation_y_deg": 116.77652392280098,
-      "scale": 1.1636934258865859,
+      "rotation_y_deg": 221.51051250995343,
+      "scale": 0.8022779140200345,
       "components": [
         {
           "type": "plant",
           "species": "betula-pendula",
-          "seed": 24458915,
+          "seed": 2565447362,
           "growth": 1.0
         }
       ]
@@ -619,17 +619,17 @@
       "id": 32,
       "name": "Birch 14",
       "position": [
-        -73.86375099347197,
-        1.9403023638096517,
-        -51.78398487002703
+        -42.19103452882698,
+        -3.150530697515643,
+        -23.71455753786683
       ],
-      "rotation_y_deg": 209.33928513977244,
-      "scale": 0.8708495617037268,
+      "rotation_y_deg": 88.76935891682919,
+      "scale": 1.1264023652753379,
       "components": [
         {
           "type": "plant",
           "species": "betula-pendula",
-          "seed": 3504718710,
+          "seed": 520749325,
           "growth": 1.0
         }
       ]
@@ -1416,7 +1416,7 @@
           "command": "message.show",
           "params": {
             "seconds": 6,
-            "text": "The Meadow beacon is lit."
+            "text": "The Meadow beacon is lit: {var:lit} of 5."
           }
         }
       ],
@@ -1466,7 +1466,7 @@
           "command": "message.show",
           "params": {
             "seconds": 6,
-            "text": "The Pines beacon is lit."
+            "text": "The Pines beacon is lit: {var:lit} of 5."
           }
         }
       ],
@@ -1516,7 +1516,7 @@
           "command": "message.show",
           "params": {
             "seconds": 6,
-            "text": "The Ford beacon is lit."
+            "text": "The Ford beacon is lit: {var:lit} of 5."
           }
         }
       ],
@@ -1566,7 +1566,7 @@
           "command": "message.show",
           "params": {
             "seconds": 6,
-            "text": "The Hill beacon is lit."
+            "text": "The Hill beacon is lit: {var:lit} of 5."
           }
         }
       ],
@@ -1616,7 +1616,7 @@
           "command": "message.show",
           "params": {
             "seconds": 6,
-            "text": "The Ridge beacon is lit."
+            "text": "The Ridge beacon is lit: {var:lit} of 5."
           }
         }
       ],
@@ -1732,9 +1732,8 @@
         "at_s": 300.0
       },
       "if": {
-        "var": "lit",
-        "op": "<",
-        "value": 5.0
+        "objective": "light-all",
+        "status": "open"
       },
       "do": [
         {

@@ -101,7 +101,12 @@ fn skirmish_world_is_what_its_build_script_builds() {
 
 /// The state hash after the Lantern playthrough and 125 s in all (the mist has risen once, at
 /// 120 s). A change means the simulation, the triggers or the world of the example changed.
-const LANTERN_HASH: &str = "dbac71f254d2f7ab";
+///
+/// Moved on 2026-11-19 from dbac71f254d2f7ab: `face` became a held facing (part of the state
+/// hash), the playthrough lights each beacon in the tick it stops (one input instead of three),
+/// and the world changed (trees kept clear of the start and the beacons with `exclude`,
+/// messages with `{var:lit}`, the losing trigger conditioned on the objective).
+const LANTERN_HASH: &str = "f2c1e0c554fd093b";
 
 #[test]
 fn lantern_is_won_by_the_playthrough_and_replays_to_the_same_hash() {
@@ -134,7 +139,13 @@ fn lantern_is_lost_by_standing_still() {
 
 /// The state hash after the Skirmish playthrough and 60 s in all (the last enemy falls at
 /// about 53 s). A change means the simulation, the triggers or the example changed.
-const SKIRMISH_HASH: &str = "66424923297bb357";
+///
+/// Moved on 2026-11-19 from 66424923297bb357: `face` became a held facing (part of the state
+/// hash), the playthrough aims with `face_entity` instead of computed yaws and pitches (the
+/// shots leave a few ticks apart from before), and the world changed (trees kept clear of the
+/// cover with `exclude`, one `enemy-down` message with `{target}` and `{var:enemies_left}`
+/// instead of three count triggers, objective conditions on the end triggers).
+const SKIRMISH_HASH: &str = "18006793b8e61716";
 
 #[test]
 fn skirmish_is_won_by_the_playthrough_and_replays_to_the_same_hash() {

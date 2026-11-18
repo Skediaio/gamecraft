@@ -327,3 +327,70 @@ fn an_area_outside_the_terrain_places_nothing() {
         json!({"placed": 0, "requested": 3, "first_id": null, "last_id": null})
     );
 }
+
+#[test]
+fn exclude_keeps_circles_clear() {
+    let mut s = example();
+    let clear = [([0.0, 0.0], 25.0), ([40.0, -30.0], 15.0)];
+    let r = scatter(
+        &mut s,
+        json!({"count": 80, "components": oak_template(), "name": "Oak", "seed": 3,
+               "exclude": [{"center": [0, 0], "radius_m": 25}, {"center": [40, -30], "radius_m": 15}]}),
+    );
+    let es = placed(&s, &r);
+    assert_eq!(es.len(), 80, "{r}");
+    for e in &es {
+        for ([cx, cz], radius) in clear {
+            let (dx, dz) = (e.position[0] - cx, e.position[2] - cz);
+            assert!(
+                (dx * dx + dz * dz).sqrt() >= radius,
+                "{} at {:?} is inside the clearing at [{cx}, {cz}]",
+                e.name,
+                e.position
+            );
+        }
+    }
+    // Numbered from 1 within the call, every name its own.
+    let names: std::collections::BTreeSet<&str> = es.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names.len(), 80);
+    assert!(names.contains("Oak 1") && names.contains("Oak 80"));
+    // Without `exclude` the same seed puts copies there.
+    let mut t = example();
+    let r = scatter(
+        &mut t,
+        json!({"count": 80, "components": oak_template(), "seed": 3}),
+    );
+    assert!(placed(&t, &r).iter().any(|e| {
+        let (dx, dz) = (e.position[0], e.position[2]);
+        (dx * dx + dz * dz).sqrt() < 25.0
+    }));
+}
+
+#[test]
+fn bad_exclusions_are_named() {
+    let mut s = example();
+    let c = oak_template();
+    for (exclude, needle) in [
+        (json!({"center": [0, 0], "radius_m": 5}), "`exclude`"),
+        (json!([{"center": [0, 0]}]), "`exclude[0].radius_m`"),
+        (
+            json!([{"center": [0, 0], "radius_m": -1}]),
+            "`exclude[0].radius_m`",
+        ),
+        (
+            json!([{"center": [0], "radius_m": 1}]),
+            "`exclude[0].center`",
+        ),
+        (
+            json!([{"center": [0, 0], "radius_m": 1, "size": 3}]),
+            "`size`",
+        ),
+    ] {
+        refuse(
+            &mut s,
+            "entity.scatter",
+            json!({"count": 3, "components": c, "exclude": exclude}),
+            &[needle],
+        );
+    }
+}

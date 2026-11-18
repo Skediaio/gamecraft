@@ -1,7 +1,7 @@
 //! Scenario data of a world: variables, objectives and triggers whose actions are commands.
 //!
 //! These are data, not code: a trigger names an event pattern ([`When`]), an optional
-//! [`Condition`] over the variables and a list of command [`Step`]s, exactly as an agent sends
+//! [`Condition`] over the variables and objectives and a list of command [`Step`]s, exactly as an agent sends
 //! them. The world checks their shape only; entity references and commands are resolved and
 //! checked by whoever runs them (the engine), when they run.
 
@@ -12,7 +12,7 @@ use crate::limits::{
     MAX_TRIGGER_STEPS, MAX_TRIGGERS, MAX_VARS, TRIGGER_TIME_MAX_S,
 };
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -398,12 +398,14 @@ impl CompareOp {
     }
 }
 
-/// A condition over the world's variables: `{var, op, value}`, `{all: [...]}` or
-/// `{any: [...]}`, nested at most [`MAX_CONDITION_DEPTH`] deep.
+/// A condition over the world's variables and objectives: `{var, op, value}`,
+/// `{objective, status}`, `{all: [...]}` or `{any: [...]}`, nested at most
+/// [`MAX_CONDITION_DEPTH`] deep.
 ///
 /// A comparison with a missing variable, or with a value of another type, is "not equal":
 /// `!=` holds, every other operator does not. `<`, `<=`, `>` and `>=` need two numbers. An
-/// empty `all` holds, an empty `any` does not.
+/// objective condition holds when the objective exists and has that status. An empty `all`
+/// holds, an empty `any` does not.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(try_from = "Value")]
 pub enum Condition {
@@ -416,30 +418,49 @@ pub enum Condition {
         /// What the variable is compared with.
         value: VarValue,
     },
+    /// `{objective, status}`: the objective with this id has this status.
+    Objective {
+        /// The objective's id.
+        objective: String,
+        /// The status it must have.
+        status: ObjectiveStatus,
+    },
     /// `{all: [...]}`: every one holds.
     All(Vec<Condition>),
     /// `{any: [...]}`: at least one holds.
     Any(Vec<Condition>),
 }
 
-const CONDITION_FORMS: &str =
-    "a condition is {\"var\", \"op\", \"value\"}, {\"all\": [...]} or {\"any\": [...]}";
+const CONDITION_FORMS: &str = "a condition is {\"var\", \"op\", \"value\"}, {\"objective\", \
+     \"status\"}, {\"all\": [...]} or {\"any\": [...]}";
 
 impl Condition {
-    /// Whether the condition holds for `vars`. A condition nested deeper than
+    /// Whether the condition holds for `vars` and `objectives`. A condition nested deeper than
     /// [`MAX_CONDITION_DEPTH`] does not hold.
-    pub fn holds(&self, vars: &BTreeMap<String, VarValue>) -> bool {
-        self.holds_at(vars, 1)
+    pub fn holds(&self, vars: &BTreeMap<String, VarValue>, objectives: &[Objective]) -> bool {
+        self.holds_at(vars, objectives, 1)
     }
 
-    fn holds_at(&self, vars: &BTreeMap<String, VarValue>, depth: usize) -> bool {
+    fn holds_at(
+        &self,
+        vars: &BTreeMap<String, VarValue>,
+        objectives: &[Objective],
+        depth: usize,
+    ) -> bool {
         if depth > MAX_CONDITION_DEPTH {
             return false;
         }
         match self {
             Condition::Compare { var, op, value } => compare(vars.get(var), *op, value),
-            Condition::All(items) => items.iter().all(|c| c.holds_at(vars, depth + 1)),
-            Condition::Any(items) => items.iter().any(|c| c.holds_at(vars, depth + 1)),
+            Condition::Objective { objective, status } => objectives
+                .iter()
+                .any(|o| o.id == *objective && o.status == *status),
+            Condition::All(items) => items
+                .iter()
+                .all(|c| c.holds_at(vars, objectives, depth + 1)),
+            Condition::Any(items) => items
+                .iter()
+                .any(|c| c.holds_at(vars, objectives, depth + 1)),
         }
     }
 
@@ -478,6 +499,9 @@ impl Condition {
                 });
             }
         }
+        if let Some(objective) = m.remove("objective") {
+            return Condition::parse_objective(objective, m);
+        }
         let (Some(var), Some(op), Some(value)) =
             (m.remove("var"), m.remove("op"), m.remove("value"))
         else {
@@ -506,6 +530,36 @@ impl Condition {
         Ok(Condition::Compare { var, op, value })
     }
 
+    /// `{objective, status}`, with `objective` already taken out of `m`.
+    fn parse_objective(objective: Value, mut m: Map<String, Value>) -> Result<Condition, String> {
+        let Value::String(objective) = objective else {
+            return Err("`objective` must be the id of an objective (a string)".into());
+        };
+        let Some(status) = m.remove("status") else {
+            return Err(format!(
+                "an objective condition needs `status`: one of {}",
+                ObjectiveStatus::NAMES.join(", ")
+            ));
+        };
+        if let Some(extra) = m.keys().next() {
+            return Err(format!(
+                "unknown field `{}` in an objective condition; {CONDITION_FORMS}",
+                excerpt(extra)
+            ));
+        }
+        let status = status
+            .as_str()
+            .and_then(ObjectiveStatus::from_name)
+            .ok_or_else(|| {
+                format!(
+                    "`status` is {}; it must be one of {}",
+                    excerpt(&status.to_string()),
+                    ObjectiveStatus::NAMES.join(", ")
+                )
+            })?;
+        Ok(Condition::Objective { objective, status })
+    }
+
     /// The nesting depth (a comparison is 1), counted up to one beyond the limit.
     fn depth(&self) -> usize {
         self.depth_at(1)
@@ -516,7 +570,7 @@ impl Condition {
             return depth;
         }
         match self {
-            Condition::Compare { .. } => depth,
+            Condition::Compare { .. } | Condition::Objective { .. } => depth,
             Condition::All(items) | Condition::Any(items) => items
                 .iter()
                 .map(|c| c.depth_at(depth + 1))
@@ -542,6 +596,9 @@ impl Condition {
             Condition::Compare { var, value, .. } => {
                 ctx.id(format!("{field}.var"), var)?;
                 value.validate(ctx, &format!("{field}.value"))
+            }
+            Condition::Objective { objective, .. } => {
+                ctx.id(format!("{field}.objective"), objective)
             }
             Condition::All(items) | Condition::Any(items) => {
                 let key = if matches!(self, Condition::All(_)) {
@@ -602,6 +659,12 @@ impl Serialize for Condition {
                 m.serialize_entry("value", value)?;
                 m.end()
             }
+            Condition::Objective { objective, status } => {
+                let mut m = s.serialize_map(Some(2))?;
+                m.serialize_entry("objective", objective)?;
+                m.serialize_entry("status", status.name())?;
+                m.end()
+            }
             Condition::All(items) => {
                 let mut m = s.serialize_map(Some(1))?;
                 m.serialize_entry("all", items)?;
@@ -640,7 +703,8 @@ pub struct Trigger {
     pub id: String,
     /// The event it waits for.
     pub when: When,
-    /// A condition over the variables that must hold when the event happens. Default none.
+    /// A condition over the variables and objectives that must hold when the event happens.
+    /// Default none.
     #[serde(rename = "if", default, skip_serializing_if = "Option::is_none")]
     pub condition: Option<Condition>,
     /// The commands it runs, in order, as one all-or-nothing transaction; at most 64.

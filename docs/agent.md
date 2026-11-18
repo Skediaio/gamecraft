@@ -69,11 +69,15 @@ true}` makes it the document, as one undo step.
 
 ## How to play
 
-- **Input is a record.** `sim.input {entity, forward?, right?, yaw_deg? | face?, run?, jump?,
-  interact?}`
+- **Input is a record.** `sim.input {entity, forward?, right?, yaw_deg? | face? | face_entity?,
+  run?, jump?, interact?}`
   stores what a character is asked to do: `forward` and `right` from -1 to 1 relative to its
-  facing, the facing as `yaw_deg` or as a ground point to `face`, `run`, and `jump` (held: it
-  jumps whenever it stands on the ground). The record holds until it is replaced; fields left out
+  facing, the facing as `yaw_deg`, as a ground point to `face` or as an entity to
+  `face_entity`, `run`, and `jump` (held: it jumps whenever it stands on the ground). `face`
+  and `face_entity` are held: the character keeps turning towards them every tick (so
+  `forward: 1` walks to the point, and a moving entity is followed), and `face_entity` also
+  aims a launcher's pitch at a character's chest; `yaw_deg` replaces them and `face: null`
+  clears them. The record holds until it is replaced; fields left out
   keep their last value. Any character can be driven; whoever writes the record does not matter.
 - **Steps.** `sim.step {ticks}` or `{seconds}` advances whole ticks of 1/60 s, at most 36 000
   ticks (10 minutes) per call. Nothing moves between calls: the simulation is not tied to a
@@ -105,10 +109,12 @@ built, saved and changed with commands like everything else.
 - **Variables, objectives, messages.** `var.set {name, value | add}` keeps numbers, booleans and
   strings; `objective.add {id, title}` and `objective.set {id, status}` (`open`, `done`,
   `failed`) keep what the players are to achieve; `message.show {text, to?, seconds?}` puts a
-  line in `sim.state` while playing.
+  line in `sim.state` while playing. In a trigger its `text` may hold `{var:name}`, `{who}` and
+  `{target}`: `"{var:enemies_left} left"`.
 - **Triggers.** `trigger.add {id, when, if?, do, once?, enabled?}`: when the event happens while
   playing (`enter`/`leave` a zone, `interact`, `time` at `at_s`, a `var` changed, `start`) and
-  the condition over the variables holds, the commands of `do` run on the running world, exactly
+  the condition holds (`{var, op, value}`, `{objective, status}`, `{all: [...]}`, `{any:
+  [...]}`), the commands of `do` run on the running world, exactly
   as you would send them, as one all-or-nothing transaction. In them `"$who"` and `"$target"`
   stand for the entity that caused the event and the zone or target, as the whole value of an
   entity parameter. A `who` filter takes an entity or `"tag:player"`. `once` (the default)
@@ -134,7 +140,10 @@ Fighting is three components and two commands; they name no weapon, a pack fills
   pitch_deg}`; `pitch_deg` aims up or down without turning the body), every `rate_s`, with a
   `magazine` and a `reload_s`; anything else fires with `sim.fire {entity, yaw_deg?,
   pitch_deg?}`. Spread (`dispersion_mrad`) is drawn from the world's seed, so the same world and
-  inputs give the same shots.
+  inputs give the same shots. `query.aim {from, to, launcher?}` gives the yaw and pitch that
+  hit a point or an entity in the current air and wind (`reachable`, `time_of_flight_s`,
+  `drop_m`, `drift_m`); `sim.input {face_entity}` keeps a character facing a target with the
+  pitch for the drop.
 - **Hits.** A projectile hits the terrain, any shape (solid or not) and characters (a capsule
   from feet to head): a `hit` event `{projectile, shooter, target, point, normal, speed_mps,
   energy_j}`; `target` is null for the terrain. `sim.step` and `sim.state` list the

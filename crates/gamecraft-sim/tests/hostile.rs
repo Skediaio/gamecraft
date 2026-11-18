@@ -12,7 +12,7 @@
 mod common;
 
 use common::{add_character, add_shape, flat_world, pos, walk};
-use gamecraft_sim::{FALL_FLOOR_M, Input, MAX_STEP_TICKS, Sim, SimError};
+use gamecraft_sim::{FALL_FLOOR_M, Face, Input, MAX_STEP_TICKS, Sim, SimError};
 use gamecraft_world::{EntityId, ShapeKind, World};
 
 #[test]
@@ -196,6 +196,7 @@ fn extreme_characters_stay_finite_and_valid() {
             interact: false,
             pitch_deg: 0.0,
             fire: false,
+            face: None,
         },
     )
     .unwrap();
@@ -237,9 +238,19 @@ fn input_round_trips_through_json_and_refuses_unknown_fields() {
         interact: true,
         pitch_deg: 0.0,
         fire: false,
+        face: Some(Face::Entity {
+            id: EntityId(3),
+            pitch: true,
+        }),
     };
     let text = serde_json::to_string(&input).unwrap();
     assert_eq!(serde_json::from_str::<Input>(&text).unwrap(), input);
+    let held = Input {
+        face: Some(Face::Point([1.5, -2.0])),
+        ..input
+    };
+    let text = serde_json::to_string(&held).unwrap();
+    assert_eq!(serde_json::from_str::<Input>(&text).unwrap(), held);
     assert_eq!(
         serde_json::from_str::<Input>("{\"forward\": 1}").unwrap(),
         Input {

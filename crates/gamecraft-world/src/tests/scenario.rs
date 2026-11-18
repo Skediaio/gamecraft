@@ -594,7 +594,7 @@ fn conditions_compare_numbers_strings_and_booleans() {
     use CompareOp::*;
     use VarValue::{Bool, Number as N, Text};
     let v = vars(&[("n", N(3.0)), ("s", Text("red".into())), ("b", Bool(true))]);
-    let holds = |c: Condition| c.holds(&v);
+    let holds = |c: Condition| c.holds(&v, &[]);
     assert!(holds(cmp("n", Eq, N(3.0))));
     assert!(holds(cmp("n", Ge, N(3.0))) && holds(cmp("n", Le, N(3.0))));
     assert!(holds(cmp("n", Gt, N(2.5))) && !holds(cmp("n", Gt, N(3.0))));
@@ -622,8 +622,69 @@ fn conditions_compare_numbers_strings_and_booleans() {
     ])));
     // A condition deeper than the limit never holds (and never overflows the stack).
     let lit = vars(&[("lit", N(1.0))]);
-    assert!(nested(crate::limits::MAX_CONDITION_DEPTH - 1).holds(&lit));
-    assert!(!nested(1000).holds(&lit));
+    assert!(nested(crate::limits::MAX_CONDITION_DEPTH - 1).holds(&lit, &[]));
+    assert!(!nested(1000).holds(&lit, &[]));
+}
+
+#[test]
+fn conditions_read_objectives_alone_and_inside_all_and_any() {
+    let objectives = vec![
+        Objective {
+            id: "clear".into(),
+            title: "Clear the village".into(),
+            status: ObjectiveStatus::Done,
+            hidden: false,
+        },
+        Objective {
+            id: "alive".into(),
+            title: "Stay alive".into(),
+            status: ObjectiveStatus::Open,
+            hidden: false,
+        },
+    ];
+    let v = vars(&[("n", VarValue::Number(0.0))]);
+    let parse = |text: &str| {
+        Condition::try_from(serde_json::from_str::<serde_json::Value>(text).unwrap()).unwrap()
+    };
+    let holds = |text: &str| parse(text).holds(&v, &objectives);
+    assert!(holds(r#"{"objective": "clear", "status": "done"}"#));
+    assert!(!holds(r#"{"objective": "clear", "status": "open"}"#));
+    assert!(holds(r#"{"objective": "alive", "status": "open"}"#));
+    // A missing objective has no status.
+    assert!(!holds(r#"{"objective": "gone", "status": "open"}"#));
+    assert!(holds(
+        r#"{"all": [{"objective": "alive", "status": "open"}, {"var": "n", "op": "==", "value": 0}]}"#
+    ));
+    assert!(holds(
+        r#"{"any": [{"objective": "alive", "status": "failed"}, {"objective": "clear", "status": "done"}]}"#
+    ));
+    // It round-trips through JSON, in a trigger of a valid world.
+    let c = parse(r#"{"objective": "clear", "status": "failed"}"#);
+    assert_eq!(
+        serde_json::to_value(&c).unwrap(),
+        serde_json::json!({"objective": "clear", "status": "failed"})
+    );
+    let mut w = scenario_world();
+    w.triggers[0].condition = Some(Condition::All(vec![c.clone()]));
+    w.validate().unwrap();
+    assert_eq!(World::from_json(&w.to_json().unwrap()).unwrap(), w);
+    // A wrong status or an extra field is refused with the allowed forms.
+    for (text, needle) in [
+        (
+            r#"{"objective": "clear", "status": "won"}"#,
+            "open, done, failed",
+        ),
+        (r#"{"objective": "clear"}"#, "status"),
+        (r#"{"objective": 3, "status": "done"}"#, "objective"),
+        (
+            r#"{"objective": "clear", "status": "done", "op": "=="}"#,
+            "op",
+        ),
+    ] {
+        let e = Condition::try_from(serde_json::from_str::<serde_json::Value>(text).unwrap())
+            .unwrap_err();
+        assert!(e.contains(needle), "{text}: {e}");
+    }
 }
 
 #[test]

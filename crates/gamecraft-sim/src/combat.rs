@@ -24,7 +24,7 @@
 
 use gamecraft_math::{Portable, Rng, deg_to_rad, yaw_forward};
 use gamecraft_world::limits::MAX_COORDINATE_M;
-use gamecraft_world::{Entity, EntityId, HeightField, Launcher, World};
+use gamecraft_world::{Entity, EntityId, Environment, HeightField, Launcher, World};
 use serde::Serialize;
 
 use crate::ballistics::{Flight, SUBSTEP_S, advance, air_at};
@@ -127,7 +127,7 @@ pub fn aim_direction(yaw_deg: f64, pitch_deg: f64) -> [f64; 3] {
 
 /// Where an entity's launcher fires from: a character's eyes, or `muzzle_height_m` above
 /// any other entity's position.
-pub(crate) fn muzzle(entity: &Entity, launcher: &Launcher) -> [f64; 3] {
+pub fn muzzle(entity: &Entity, launcher: &Launcher) -> [f64; 3] {
     let [x, y, z] = entity.position;
     let up = entity
         .character()
@@ -315,6 +315,21 @@ fn gone(heights: Option<&HeightField>, p: [f64; 3]) -> bool {
     }
 }
 
+/// One substep of flight through the air of `env` at the flight's position (with the terrain
+/// height under it from `heights`): the flight model of every projectile and of
+/// [`crate::aim::solve`].
+pub fn substep(
+    env: &Environment,
+    heights: Option<&HeightField>,
+    flight: Flight,
+    ballistic_coefficient: f64,
+) -> Flight {
+    let [x, _, z] = flight.position;
+    let ground = heights.and_then(|h| h.height_at(x, z));
+    let air = air_at(env, ground, flight.position);
+    advance(flight, ballistic_coefficient, &air)
+}
+
 /// Flies one projectile one tick. `Some(events)` (a `hit`, maybe a `down`) when it hit
 /// something, `Some(empty)` when its flight ended without a hit, `None` while it flies on.
 /// Damage is written into `world`.
@@ -324,15 +339,14 @@ pub(crate) fn fly(
     p: &mut Projectile,
 ) -> Option<Vec<EventKind>> {
     for _ in 0..PROJECTILE_SUBSTEPS {
-        let ground = heights.and_then(|h| h.height_at(p.position[0], p.position[2]));
-        let air = air_at(&world.environment, ground, p.position);
-        let next = advance(
+        let next = substep(
+            &world.environment,
+            heights,
             Flight {
                 position: p.position,
                 velocity: p.velocity,
             },
             p.ballistic_coefficient,
-            &air,
         );
         if !(next.position.iter().all(|c| c.is_finite())
             && next.velocity.iter().all(|c| c.is_finite()))

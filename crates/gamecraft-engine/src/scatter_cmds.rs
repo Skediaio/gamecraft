@@ -21,6 +21,8 @@ pub(crate) const SPECS: &[Registration] = &[Registration {
 const MAX_SCATTER_COUNT: u64 = 5000;
 /// Points drawn per requested copy before the command gives up on the rest.
 const TRIES_PER_COPY: u64 = 30;
+/// Most circles one `entity.scatter` keeps clear.
+const MAX_EXCLUDE: usize = 256;
 
 fn scatter_spec() -> CommandSpec {
     spec(
@@ -28,8 +30,9 @@ fn scatter_spec() -> CommandSpec {
         "Scatter Entities",
         "Places copies of a template entity on the ground of the terrain, at points drawn from \
          a seeded generator: inside a circle, or anywhere on the terrain. Points steeper than \
-         `max_slope_deg` or closer than `min_distance_m` to a copy placed by the same call are \
-         skipped, with a bounded number of tries (30 per copy), so `placed` can be lower than \
+         `max_slope_deg`, inside a circle of `exclude`, or closer than `min_distance_m` to a \
+         copy placed by the same call are skipped, with a bounded number of tries (30 per \
+         copy), so `placed` can be lower than \
          `requested`. The same parameters on the same world give the same entities in the same \
          order. One undo step; works on a running world. Needs a terrain.",
         vec![
@@ -66,6 +69,13 @@ fn scatter_spec() -> CommandSpec {
                 "Radius of the circle around `center`, above 0.",
             )
             .unit("m"),
+            param(
+                "exclude",
+                T::Array,
+                "Circles kept clear, [{\"center\": [x, z], \"radius_m\": r}, ...], at most 256: \
+                 no copy stands inside one (a path, a clearing, a camp).",
+            )
+            .default(json!([])),
             param(
                 "min_distance_m",
                 T::Number,
@@ -160,6 +170,70 @@ impl Area {
             Area::Square { half } => [rng.range(-half, *half), rng.range(-half, *half)],
         }
     }
+}
+
+/// A circle no copy stands in.
+struct Clearing {
+    center: [f64; 2],
+    radius: f64,
+}
+
+impl Clearing {
+    fn contains(&self, [x, z]: [f64; 2]) -> bool {
+        let (dx, dz) = (x - self.center[0], z - self.center[1]);
+        dx * dx + dz * dz < self.radius * self.radius
+    }
+}
+
+/// The circles of `exclude`.
+fn clearings(p: Params<'_>) -> Result<Vec<Clearing>, CommandError> {
+    let Some(v) = p.value("exclude") else {
+        return Ok(Vec::new());
+    };
+    let form = "[{\"center\": [x, z], \"radius_m\": r}, ...]";
+    let Some(list) = v.as_array() else {
+        return Err(bad(format!("`exclude` must be a list of circles, {form}")));
+    };
+    if list.len() > MAX_EXCLUDE {
+        return Err(bad(format!(
+            "`exclude` holds {} circles; at most {MAX_EXCLUDE}",
+            list.len()
+        )));
+    }
+    let mut out = Vec::with_capacity(list.len());
+    for (i, item) in list.iter().enumerate() {
+        let Some(map) = item.as_object() else {
+            return Err(bad(format!(
+                "`exclude[{i}]` must be a circle {{\"center\": [x, z], \"radius_m\": r}}"
+            )));
+        };
+        if let Some(extra) = map.keys().find(|k| *k != "center" && *k != "radius_m") {
+            return Err(bad(format!(
+                "`exclude[{i}]` has an unknown field `{}`; a circle has `center` and `radius_m`",
+                crate::spec::excerpt(extra)
+            )));
+        }
+        let center = map
+            .get("center")
+            .and_then(Value::as_array)
+            .and_then(|a| match a.as_slice() {
+                [x, z] => Some([x.as_f64()?, z.as_f64()?]),
+                _ => None,
+            });
+        let Some(center) = center.filter(|c| c.iter().all(|v| v.is_finite())) else {
+            return Err(bad(format!(
+                "`exclude[{i}].center` must be a point [x, z] in metres"
+            )));
+        };
+        let radius = map.get("radius_m").and_then(Value::as_f64);
+        let Some(radius) = radius.filter(|r| r.is_finite() && *r > 0.0) else {
+            return Err(bad(format!(
+                "`exclude[{i}].radius_m` must be a number of metres above 0"
+            )));
+        };
+        out.push(Clearing { center, radius });
+    }
+    Ok(out)
 }
 
 fn area(p: Params<'_>, terrain: &Terrain) -> Result<Area, CommandError> {
@@ -312,6 +386,7 @@ fn scatter(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
         ));
     };
     let area = area(p, &terrain)?;
+    let clear = clearings(p)?;
 
     // The template must be a valid entity on its own, even when nothing is placed.
     let probe = Entity {
@@ -336,6 +411,9 @@ fn scatter(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
         }
         let point = area.draw(&mut rng);
         let [x, z] = point;
+        if clear.iter().any(|c| c.contains(point)) {
+            continue;
+        }
         let Some(y) = edit.ground_or_none(x, z) else {
             continue;
         };

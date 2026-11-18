@@ -32,6 +32,14 @@ impl<'a> Params<'a> {
         self.value(name).is_some()
     }
 
+    /// Whether `name` is given as an explicit null (which clears what it sets, where a
+    /// command says so).
+    pub fn is_null(&self, name: &str) -> bool {
+        self.map
+            .and_then(|m| m.get(name))
+            .is_some_and(Value::is_null)
+    }
+
     /// A number.
     pub fn f64(&self, name: &str) -> Result<Option<f64>, CommandError> {
         self.value(name)
@@ -160,6 +168,19 @@ impl<'a> Params<'a> {
                 kind_of(other)
             ))),
         }
+    }
+
+    /// [`Params::entity`], with the parameter named in front of a not-found sentence
+    /// (`` `face_entity`: no entity named "Nobody" ``).
+    pub fn entity_named(
+        &self,
+        name: &str,
+        world: &World,
+    ) -> Result<Option<EntityId>, CommandError> {
+        self.entity(name, world).map_err(|e| match e {
+            CommandError::Failed(m) => failed(format!("`{name}`: {m}")),
+            other => other,
+        })
     }
 
     /// An entity that must be given.
