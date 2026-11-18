@@ -225,6 +225,81 @@ const CHARACTER_FIELDS: &[Field] = &[
     ),
 ];
 
+const ZONE_FIELDS: &[Field] = &[
+    field(
+        "shape",
+        "\"circle\"|\"box\"",
+        None,
+        "An upright cylinder, or a box turned with the entity.",
+    ),
+    field(
+        "radius_m",
+        "number",
+        Some("m"),
+        "Radius of a circle (a box ignores it), 0.001 to 10000, times the entity's scale.",
+    ),
+    field(
+        "size",
+        "[x, z]",
+        Some("m"),
+        "Extent of a box (a circle ignores it), 0.001 to 10000 each, times the entity's scale.",
+    ),
+    field(
+        "height_m",
+        "number",
+        Some("m"),
+        "Height above the entity's position, 0.001 to 10000, times the entity's scale. A \
+         character whose body overlaps it in height and whose position is in the footprint \
+         is inside.",
+    ),
+];
+
+const INTERACTABLE_FIELDS: &[Field] = &[
+    field(
+        "reach_m",
+        "number",
+        Some("m"),
+        "How far from a character's eye it can be reached, above 0 and at most 100; measured \
+         to the nearest point between its position and the top of its shape.",
+    ),
+    field(
+        "prompt",
+        "string",
+        None,
+        "What a player is told they can do, at most 2000 characters.",
+    ),
+];
+
+const LIGHT_FIELDS: &[Field] = &[
+    field(
+        "color",
+        "[r, g, b]",
+        None,
+        "Linear RGB, each channel 0 to 1.",
+    ),
+    field(
+        "intensity_cd",
+        "number",
+        Some("cd"),
+        "Luminous intensity, 0 to 1e7 candela.",
+    ),
+    field(
+        "range_m",
+        "number",
+        Some("m"),
+        "Distance beyond which it lights nothing, above 0 and at most 10000.",
+    ),
+    field("on", "boolean", None, "Whether it shines."),
+];
+
+const TAGS_FIELDS: &[Field] = &[field(
+    "tags",
+    "[string]",
+    None,
+    "Free labels (`beacon`, `team:red`), each once, at most 64; matched exactly by \
+     \"who\": \"tag:<tag>\" in triggers and by entity.find.",
+)];
+
 const KINDS: &[Kind] = &[
     Kind {
         kind: "shape",
@@ -251,6 +326,37 @@ const KINDS: &[Kind] = &[
             serde_json::to_value(Component::Character(Character::default())).unwrap_or(Value::Null)
         },
         example: || json!({"type": "character", "height_m": 1.7, "walk_speed_mps": 1.4}),
+    },
+    Kind {
+        kind: "zone",
+        summary: "A volume standing on the entity's position that produces `enter` and \
+                  `leave` events when characters come in and go out, for triggers.",
+        fields: ZONE_FIELDS,
+        minimal: || json!({"type": "zone"}),
+        example: || json!({"type": "zone", "shape": "circle", "radius_m": 4, "height_m": 3}),
+    },
+    Kind {
+        kind: "interactable",
+        summary: "Something a character can interact with (sim.input `interact`): the \
+                  nearest one within reach that the character faces gets an `interact` event.",
+        fields: INTERACTABLE_FIELDS,
+        minimal: || json!({"type": "interactable"}),
+        example: || json!({"type": "interactable", "reach_m": 2, "prompt": "Open the gate"}),
+    },
+    Kind {
+        kind: "light",
+        summary: "A point light at the entity's position (it moves with a character); a \
+                  trigger can turn it on and off. It does not change the simulation.",
+        fields: LIGHT_FIELDS,
+        minimal: || json!({"type": "light"}),
+        example: || json!({"type": "light", "color": [1.0, 0.6, 0.2], "intensity_cd": 400, "range_m": 20, "on": false}),
+    },
+    Kind {
+        kind: "tags",
+        summary: "Free labels that triggers and entity.find filter by.",
+        fields: TAGS_FIELDS,
+        minimal: || json!({"type": "tags"}),
+        example: || json!({"type": "tags", "tags": ["beacon", "team:red"]}),
     },
 ];
 

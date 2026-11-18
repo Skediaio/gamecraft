@@ -121,27 +121,57 @@ degrees, times seconds; an entity is its id or its name.
 | `entity.set` | `{id, name?, position?, at?, rotation_y_deg?, scale?}` | `{id, position}`; only the fields given change |
 | `entity.remove` | `{id}` | `null`; the id is never handed out again |
 | `entity.set_component` | `{id, component}` | `null`; adds a component or replaces the one of its type |
-| `entity.remove_component` | `{id, type}` | `null`; `type` is `shape`, `plant` or `character` |
+| `entity.remove_component` | `{id, type}` | `null`; `type` is a component type (`component.list`) |
 | `entity.snap_to_ground` | `{id?}` | `{moved, skipped}`; one entity, or all when `id` is left out |
 | `entity.scatter` | `{count, components, seed?, name? = "", center?, radius_m?, min_distance_m? = 0, max_slope_deg? = 90, scale_range? = [1, 1], random_rotation? = true, vary_seed? = true}` | `{placed, requested, first_id, last_id}`; up to `count` (1 to 5000) copies of the template `components` on the terrain's ground, in a circle (`center` `[x, z]` and `radius_m`) or over the whole terrain, skipping points steeper than `max_slope_deg` or closer than `min_distance_m`; names get a number; each plant its own seed with `vary_seed`; the same parameters give the same entities; one undo step |
 
 Components, as in the file format (fields left out take their defaults):
 `{"type": "shape", "kind": "box" | "sphere" | "cylinder", "size": [x, y, z], "color": [r, g, b], "solid": true}`,
 `{"type": "plant", "species", "seed", "growth"}` (a species of the plant library, growth 0 to 1),
-`{"type": "character", "height_m", "radius_m", "eye_height_m", "walk_speed_mps", "run_speed_mps", "jump_speed_mps", "max_slope_deg"}`.
+`{"type": "character", "height_m", "radius_m", "eye_height_m", "walk_speed_mps", "run_speed_mps", "jump_speed_mps", "max_slope_deg"}`,
+`{"type": "zone", "shape": "circle" | "box", "radius_m", "size": [x, z], "height_m"}`,
+`{"type": "interactable", "reach_m", "prompt"}`,
+`{"type": "light", "color": [r, g, b], "intensity_cd", "range_m", "on"}`,
+`{"type": "tags", "tags": ["..."]}`.
 
 ### Playing
 
 | Command | Params | Result |
 |---|---|---|
-| `sim.start` | `{}` | `{tick: 0, hash, characters: [ids]}`; plays a copy of the document |
-| `sim.input` | `{entity, forward?, right?, yaw_deg?, face?, run?, jump?}` | `{entity, forward, right, yaw_deg, run, jump}`: the stored input; it holds until replaced, fields left out keep their value; `yaw_deg` or `face` (`[x, z]`), not both |
-| `sim.step` | `{ticks? = 1, seconds?}` | `{tick, time_s, hash, characters: [{id, name, position, rotation_y_deg, velocity, grounded}]}`; whole ticks of 1/60 s, at most 36000 per call |
-| `sim.state` | `{}` | `{playing: false}` or `{playing: true, tick, time_s, hash, characters: [...], inputs: [{entity, forward, right, yaw_deg, run, jump}]}` |
+| `sim.start` | `{}` | `{tick: 0, hash, characters: [ids], events, fired}`; plays a copy of the document; the `start` triggers run |
+| `sim.input` | `{entity, forward?, right?, yaw_deg?, face?, run?, jump?, interact?}` | `{entity, forward, right, yaw_deg, run, jump, interact}`: the stored input; it holds until replaced, fields left out keep their value; `yaw_deg` or `face` (`[x, z]`), not both; `interact` held interacts once, when it turns true |
+| `sim.step` | `{ticks? = 1, seconds?}` | `{tick, time_s, hash, characters: [{id, name, position, rotation_y_deg, velocity, grounded}], events: [{tick, event, ...}], fired: [{trigger, tick, event, ok, error?}]}`; whole ticks of 1/60 s, at most 36000 per call; the triggers run after each tick; at most 1000 events and 1000 fired listed (`events_omitted`, `fired_omitted` count the rest) |
+| `sim.state` | `{}` | `{playing: false}` or `{playing: true, tick, time_s, hash, characters: [...], inputs: [{entity, forward, right, yaw_deg, run, jump, interact}], objectives, messages: [{text, to, shown_at_s, until_s}], trigger_errors: [{trigger, tick, error}]}`; the last 20 trigger errors |
 | `sim.stop` | `{keep? = false}` | `{tick, kept}`; throws the running world away, or with `keep` makes it the document as one undo step |
 
-While a simulation runs, the World and Entities commands change the running world (with the
-same checks) and leave the document alone; `hash` is the state hash, 16 hex digits.
+While a simulation runs, the World, Entities and Scenarios commands change the running world
+(with the same checks) and leave the document alone; `hash` is the state hash, 16 hex digits.
+
+### Scenarios
+
+| Command | Params | Result |
+|---|---|---|
+| `var.set` | `{name, value?, add?}` | `{name, value, previous}`; `value` a number, boolean or string, or `add` a number to a number variable (a missing one counts from 0); not both |
+| `var.remove` | `{name}` | `{name, previous}` |
+| `objective.add` | `{id, title, status? = "open", hidden? = false}` | `{id, title, status, hidden}`; `status` is `open`, `done` or `failed` |
+| `objective.set` | `{id, title?, status?, hidden?}` | `{id, title, status, hidden}`; only the fields given change |
+| `objective.remove` | `{id}` | `null` |
+| `trigger.add` | `{id, when, if?, do, once? = true, enabled? = true}` | the trigger; every command of `do` is checked against its spec now (world commands and `message.show` only; `$who` and `$target` only as the whole value of an entity parameter of an `enter`, `leave` or `interact` trigger) |
+| `trigger.set` | `{id, when?, if?, do?, once?, enabled?}` | the trigger; only the fields given change, then the whole trigger is checked again |
+| `trigger.remove` | `{id}` | `null` |
+| `message.show` | `{text, to?, seconds? = 5}` | `{text, to, shown_at_s, until_s}`; while playing only; listed in `sim.state` until it expires |
+| `scenario.inspect` | `{}` | `{playing, tick, vars, objectives, triggers: [{id, when, if?, do, once, enabled, fired}], messages, trigger_errors}` |
+| `objective.list` | `{}` | `{objectives: [{id, title, status, hidden}], open, done, failed}` |
+
+A trigger: `when` is `{"event": "enter" | "leave", "zone", "who"?}`, `{"event": "interact",
+"target"?, "who"?}`, `{"event": "time", "at_s"}`, `{"event": "var", "name"}` or `{"event":
+"start"}` (`zone`, `target` and `who` are entity ids or names, `who` also `"tag:<tag>"`); `if`
+is `{"var", "op": "==" | "!=" | "<" | "<=" | ">" | ">=", "value"}`, `{"all": [...]}` or
+`{"any": [...]}`; `do` is `[{"command", "params"?}]`. Events in a step's answer: `{tick, event:
+"enter" | "leave", who, zone}`, `{tick, event: "interact", who, target}`, `{tick, event: "time",
+at_s}`, `{tick, event: "var", name}`, `{tick, event: "start"}`. A trigger's commands run as one
+all-or-nothing transaction on the running world; a failure is reported (`fired` with `ok:
+false`, `trigger_errors`) and changes nothing. Triggers fired by triggers nest at most 32 deep.
 
 ### Queries
 
@@ -149,7 +179,7 @@ same checks) and leave the document alone; `hash` is the state hash, 16 hex digi
 |---|---|---|
 | `world.inspect` | `{entities? = true, limit? = 200, offset? = 0}` | below |
 | `entity.get` | `{id}` | `{id, name, position, rotation_y_deg, scale, components, ground_height_m, height_above_ground_m, body, input}`; `body` (`{velocity, grounded}`) and `input` while playing, for a character, else null |
-| `entity.find` | `{name?, component?, near?, radius_m?, limit? = 50}` | `{total, entities: [{id, name, position, components, distance_m?}]}`; part of the name in any case, a component type, a horizontal circle round `near` (`[x, z]`); by distance with `near`, else by id |
+| `entity.find` | `{name?, component?, tag?, near?, radius_m?, limit? = 50}` | `{total, entities: [{id, name, position, components, distance_m?}]}`; part of the name in any case, a component type, a tag (exactly), a horizontal circle round `near` (`[x, z]`); by distance with `near`, else by id |
 | `query.ground_height` | `{x, z}` | `{x, z, height_m, normal, slope_deg}`; the terrain only, null outside it |
 | `query.raycast` | `{origin, direction, max_m? = 1000}` | `{hit: false}` or `{hit: true, kind: "terrain" \| "entity", entity?, name?, point, normal, distance_m}`; the nearest of the terrain and every shape, solid or not; plants and characters are not hit yet; a ray that starts inside a shape hits at distance 0 |
 | `query.line_of_sight` | `{from, to}` | `{clear, distance_m, blocked_by?: {kind, entity?, name?, point, distance_m}}`; the same hits as `query.raycast`, between two points |
@@ -159,8 +189,8 @@ same checks) and leave the document alone; `hash` is the state hash, 16 hex digi
 `world.inspect` (MCP: `doc_inspect`, and the resource `gamecraft://world`) describes the current
 world, the running world while playing: `{name, seed, revision, playing, tick (null when not
 playing), terrain: null | {size_m, cell_m, source, cols, rows, min_height_m, max_height_m},
-environment, sun: {azimuth_deg, elevation_deg, direction, above_horizon}, entity_count,
-entities: [{id, name, position, rotation_y_deg, scale, components}], truncated, history:
+environment, sun: {azimuth_deg, elevation_deg, direction, above_horizon}, entity_count, vars,
+objectives, trigger_count, entities: [{id, name, position, rotation_y_deg, scale, components}], truncated, history:
 {can_undo, can_redo}}`. Entities are listed in id order, `limit` (1 to 1000) at a time from
 `offset`; `truncated` says whether more follow; `entities: false` leaves the list (and
 `truncated`) out. `source` is the terrain's recipe as in the file format; `components` are as

@@ -385,8 +385,8 @@ fn remove_component_removes_one_type() {
     refuse(
         &mut s,
         "entity.remove_component",
-        json!({"id": 1, "type": "light"}),
-        &["`type` must be one of \"shape\", \"plant\", \"character\""],
+        json!({"id": 1, "type": "lamp"}),
+        &["`type` must be one of \"shape\", \"plant\", \"character\", \"zone\""],
     );
 }
 

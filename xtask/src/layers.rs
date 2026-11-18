@@ -19,6 +19,7 @@ pub const LAYERS: &[(&str, u8)] = &[
     ("gamecraft-render", 4),
     ("gamecraft-automation", 4),
     ("gamecraft-cli", 5),
+    ("gamecraft", 5),
 ];
 
 /// Same-layer dependencies that are allowed, as (dependent, dependency). Empty today.

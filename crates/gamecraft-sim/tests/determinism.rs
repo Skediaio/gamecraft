@@ -56,6 +56,7 @@ fn script(rng: &mut Rng) -> Input {
         yaw_deg: rng.range(0.0, 360.0),
         run: rng.below(2) == 0,
         jump: rng.below(5) == 0,
+        interact: false,
     }
 }
 

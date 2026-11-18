@@ -132,7 +132,7 @@ fn input_merges_fields_and_starts_from_rest_and_the_current_rotation() {
         .unwrap();
     assert_eq!(
         r,
-        json!({"entity": 3, "forward": 1.0, "right": 0.0, "yaw_deg": 30.0, "run": false, "jump": false})
+        json!({"entity": 3, "forward": 1.0, "right": 0.0, "yaw_deg": 30.0, "run": false, "jump": false, "interact": false})
     );
     let r = s
         .run(
@@ -144,7 +144,7 @@ fn input_merges_fields_and_starts_from_rest_and_the_current_rotation() {
     let len = 1.25_f64.sqrt();
     assert_eq!(
         r,
-        json!({"entity": 3, "forward": 1.0 / len, "right": -0.5 / len, "yaw_deg": 30.0, "run": true, "jump": false})
+        json!({"entity": 3, "forward": 1.0 / len, "right": -0.5 / len, "yaw_deg": 30.0, "run": true, "jump": false, "interact": false})
     );
     let r = s
         .run(

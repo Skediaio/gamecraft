@@ -2,7 +2,7 @@
 
 use crate::error::Ctx;
 use crate::limits::{MAX_COORDINATE_M, SCALE_MAX, SCALE_MIN};
-use crate::{Character, Component, Plant, Shape, WorldError};
+use crate::{Character, Component, Interactable, Light, Plant, Shape, WorldError, Zone};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -112,6 +112,46 @@ impl Entity {
         })
     }
 
+    /// The zone component, if any.
+    pub fn zone(&self) -> Option<&Zone> {
+        self.components.iter().find_map(|c| match c {
+            Component::Zone(z) => Some(z),
+            _ => None,
+        })
+    }
+
+    /// The interactable component, if any.
+    pub fn interactable(&self) -> Option<&Interactable> {
+        self.components.iter().find_map(|c| match c {
+            Component::Interactable(i) => Some(i),
+            _ => None,
+        })
+    }
+
+    /// The light component, if any.
+    pub fn light(&self) -> Option<&Light> {
+        self.components.iter().find_map(|c| match c {
+            Component::Light(l) => Some(l),
+            _ => None,
+        })
+    }
+
+    /// The entity's tags, empty without a `tags` component.
+    pub fn tags(&self) -> &[String] {
+        self.components
+            .iter()
+            .find_map(|c| match c {
+                Component::Tags(t) => Some(t.tags.as_slice()),
+                _ => None,
+            })
+            .unwrap_or(&[])
+    }
+
+    /// Whether the entity carries the tag `tag` (matched exactly).
+    pub fn has_tag(&self, tag: &str) -> bool {
+        self.tags().iter().any(|t| t == tag)
+    }
+
     /// Adds `component`, replacing the existing component of the same type in place.
     pub fn set_component(&mut self, component: Component) {
         let kind = component.kind();
@@ -121,7 +161,7 @@ impl Entity {
         }
     }
 
-    /// Removes and returns the component of type `kind` (`shape`, `plant`, `character`).
+    /// Removes and returns the component of type `kind` (one of [`Component::KINDS`]).
     pub fn remove_component(&mut self, kind: &str) -> Option<Component> {
         let index = self.components.iter().position(|c| c.kind() == kind)?;
         Some(self.components.remove(index))

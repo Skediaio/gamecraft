@@ -229,6 +229,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "gamecraft"
+version = "0.0.0"
+
+[[package]]
 name = "gamecraft-automation"
 version = "0.0.0"
 dependencies = [

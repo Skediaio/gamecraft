@@ -84,7 +84,7 @@ fn find_spec() -> CommandSpec {
         "entity.find",
         "Find Entities",
         "Lists the entities of the current world that match every filter given: part of the \
-         name, a component type, and nearness to a point on the ground plane. Sorted by \
+         name, a component type, a tag, and nearness to a point on the ground plane. Sorted by \
          distance then id with `near`, by id otherwise; `total` counts all matches, also those \
          beyond `limit`.",
         vec![
@@ -99,6 +99,11 @@ fn find_spec() -> CommandSpec {
                 "Only entities with a component of this type.",
             )
             .allowed(&Component::KINDS),
+            param(
+                "tag",
+                T::String,
+                "Only entities whose `tags` component holds this tag, matched exactly.",
+            ),
             param(
                 "near",
                 T::Point2,
@@ -123,6 +128,7 @@ fn find_spec() -> CommandSpec {
 fn find(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
     let name = p.str("name")?.map(str::to_lowercase);
     let component = p.str("component")?;
+    let tag = p.str("tag")?;
     let near = p.point2("near")?;
     let radius = p.f64("radius_m")?;
     if radius.is_some() && near.is_none() {
@@ -156,6 +162,7 @@ fn find(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
                 .is_none_or(|n| e.name.to_lowercase().contains(n.as_str()))
         })
         .filter(|e| component.is_none_or(|k| e.components.iter().any(|c| c.kind() == k)))
+        .filter(|e| tag.is_none_or(|t| e.has_tag(t)))
         .map(|e| (distance(e), e))
         .filter(|(d, _)| match (d, radius) {
             (Some(d), Some(r)) => *d <= r,

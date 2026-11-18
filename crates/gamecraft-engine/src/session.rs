@@ -9,6 +9,7 @@
 use crate::error::{CommandError, failed};
 use crate::params::Params;
 use crate::spec::{CommandSpec, Scope, nearest};
+use crate::triggers::PlayLog;
 use gamecraft_sim::Sim;
 use gamecraft_world::{HeightField, Terrain, World};
 use serde_json::Value;
@@ -109,7 +110,26 @@ const MODULES: &[&[Registration]] = &[
     crate::geometry_cmds::SPECS,
     crate::catalog_cmds::SPECS,
     crate::scatter_cmds::SPECS,
+    crate::scenario_cmds::SPECS,
 ];
+
+/// The spec and scope of the built-in command `name`, without a session (for checking the
+/// commands inside a trigger's `do`).
+pub(crate) fn registered(name: &str) -> Option<(CommandSpec, Scope)> {
+    MODULES.iter().flat_map(|m| m.iter()).find_map(|r| {
+        let spec = (r.spec)();
+        (spec.name == name).then(|| (spec, r.handler.scope()))
+    })
+}
+
+/// The ids of every built-in command.
+pub(crate) fn registered_names() -> Vec<String> {
+    MODULES
+        .iter()
+        .flat_map(|m| m.iter())
+        .map(|r| (r.spec)().name)
+        .collect()
+}
 
 #[derive(Clone)]
 struct Command {
@@ -157,6 +177,9 @@ pub struct Session {
     /// `replace_document` ran inside the current transaction: the history is cleared when it
     /// succeeds.
     cleared_in_transaction: bool,
+    /// What the scenario keeps while playing: messages, trigger errors, variables changed
+    /// since the last step.
+    play: PlayLog,
 }
 
 impl Session {
@@ -188,6 +211,7 @@ impl Session {
             view_revision: 0,
             in_transaction: false,
             cleared_in_transaction: false,
+            play: PlayLog::default(),
         }
     }
 
@@ -287,8 +311,10 @@ impl Session {
         match &mut self.live {
             Some(sim) => {
                 if world != *sim.world() {
+                    let changed = crate::triggers::changed_vars(&sim.world().vars, &world.vars);
                     sim.replace_world(world).map_err(failed)?;
                     self.view_revision += 1;
+                    self.play.pending_vars.extend(changed);
                 }
             }
             None => {
@@ -339,19 +365,39 @@ impl Session {
         self.live.as_mut()
     }
 
-    /// Starts playing `sim`.
+    /// Starts playing `sim`, with an empty play log.
     pub(crate) fn start_live(&mut self, sim: Sim) {
         self.live = Some(sim);
+        self.play = PlayLog::default();
         self.view_revision += 1;
     }
 
-    /// Stops playing and hands back the simulation.
+    /// Stops playing and hands back the simulation; the play log is cleared.
     pub(crate) fn take_live(&mut self) -> Option<Sim> {
         let sim = self.live.take();
         if sim.is_some() {
             self.view_revision += 1;
         }
+        self.play = PlayLog::default();
         sim
+    }
+
+    /// Puts back a running simulation saved before (a trigger that failed). Nothing happens
+    /// when `sim` is `None`.
+    pub(crate) fn restore_live(&mut self, sim: Option<Sim>) {
+        if sim.is_some() {
+            self.live = sim;
+        }
+    }
+
+    /// The play log.
+    pub(crate) fn play(&self) -> &PlayLog {
+        &self.play
+    }
+
+    /// The play log, to change.
+    pub(crate) fn play_mut(&mut self) -> &mut PlayLog {
+        &mut self.play
     }
 
     /// What the running world shows changed (a step).
@@ -418,6 +464,7 @@ impl Session {
     /// document and clears the history (inside a transaction: when it succeeds).
     pub fn replace_document(&mut self, world: World) {
         self.live = None;
+        self.play = PlayLog::default();
         self.document = world;
         if self.in_transaction {
             self.cleared_in_transaction = true;
@@ -446,6 +493,7 @@ impl Session {
         let document = self.document.clone();
         let live = self.live.clone();
         let heights = self.heights.clone();
+        let play = self.play.clone();
         let (revision, view_revision) = (self.revision, self.view_revision);
         self.in_transaction = true;
         self.cleared_in_transaction = false;
@@ -467,6 +515,7 @@ impl Session {
                 self.document = document;
                 self.live = live;
                 self.heights = heights;
+                self.play = play;
                 self.revision = revision;
                 self.view_revision = view_revision;
                 Err(e)

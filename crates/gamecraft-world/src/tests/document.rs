@@ -135,8 +135,8 @@ fn unknown_fields_are_rejected_everywhere() {
             "speed",
         ),
         (
-            r#"{"gamecraft": 1, "entities": [{"id": 1, "components": [{"type": "light"}]}]}"#,
-            "light",
+            r#"{"gamecraft": 1, "entities": [{"id": 1, "components": [{"type": "lamp"}]}]}"#,
+            "lamp",
         ),
         (
             r#"{"gamecraft": 1, "terrain": {"size_m": 64, "cell_m": 2, "source": {"kind": "ridged"}}}"#,
@@ -291,7 +291,7 @@ fn components_are_set_replaced_and_removed() {
     assert_eq!(e.remove_component("plant").map(|c| c.kind()), Some("plant"));
     assert!(e.remove_component("plant").is_none());
     assert!(e.remove_component("nonsense").is_none());
-    assert_eq!(Component::KINDS, ["shape", "plant", "character"]);
+    assert_eq!(Component::KINDS[..3], ["shape", "plant", "character"]);
     assert!(w.validate().is_ok());
 }
 

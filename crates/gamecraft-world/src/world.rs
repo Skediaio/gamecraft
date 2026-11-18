@@ -2,7 +2,9 @@
 
 use crate::error::Ctx;
 use crate::limits::MAX_ENTITIES;
-use crate::{Entity, EntityDraft, EntityId, Environment, Terrain, WorldError};
+use crate::{
+    Entity, EntityDraft, EntityId, Environment, Objective, Terrain, Trigger, VarValue, WorldError,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -30,6 +32,13 @@ pub struct World {
     pub terrain: Option<Terrain>,
     /// Time, place and weather.
     pub environment: Environment,
+    /// The scenario's variables, by name: numbers, booleans or strings. Commands set them;
+    /// trigger conditions read them.
+    pub vars: BTreeMap<String, VarValue>,
+    /// The scenario's objectives, in the order given; ids unique.
+    pub objectives: Vec<Objective>,
+    /// The scenario's triggers, in the order given (the order they run in); ids unique.
+    pub triggers: Vec<Trigger>,
     entities: BTreeMap<EntityId, Entity>,
     next_entity_id: EntityId,
 }
@@ -52,6 +61,16 @@ struct WorldFile {
     next_entity_id: Option<EntityId>,
     #[serde(default)]
     entities: Vec<Entity>,
+    #[serde(
+        default,
+        deserialize_with = "crate::scenario::deserialize_vars",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    vars: BTreeMap<String, VarValue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    objectives: Vec<Objective>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    triggers: Vec<Trigger>,
 }
 
 /// Reads only the format version, ignoring everything else, so a document of another
@@ -70,6 +89,9 @@ impl World {
             seed,
             terrain: None,
             environment: Environment::default(),
+            vars: BTreeMap::new(),
+            objectives: Vec::new(),
+            triggers: Vec::new(),
             entities: BTreeMap::new(),
             next_entity_id: EntityId(1),
         }
@@ -181,8 +203,8 @@ impl World {
 
     /// Checks every invariant of the document and reports the first violation, naming the
     /// entity (if any), the field, the value and what is allowed: the world name, the
-    /// terrain, the environment, the entity count, `next_entity_id`, and every entity
-    /// (in id order) with its components.
+    /// terrain, the environment, the entity count, `next_entity_id`, every entity (in id
+    /// order) with its components, and the scenario: variables, objectives and triggers.
     pub fn validate(&self) -> Result<(), WorldError> {
         let ctx = Ctx::WORLD;
         ctx.name("name", &self.name)?;
@@ -223,7 +245,17 @@ impl World {
             }
             entity.validate()?;
         }
-        Ok(())
+        crate::scenario::validate(&self.vars, &self.objectives, &self.triggers)
+    }
+
+    /// The objective with this id.
+    pub fn objective(&self, id: &str) -> Option<&Objective> {
+        self.objectives.iter().find(|o| o.id == id)
+    }
+
+    /// The trigger with this id.
+    pub fn trigger(&self, id: &str) -> Option<&Trigger> {
+        self.triggers.iter().find(|t| t.id == id)
     }
 
     /// The document as pretty-printed JSON in the `.gamecraft` format: fields in a fixed
@@ -240,6 +272,9 @@ impl World {
             environment: self.environment.clone(),
             next_entity_id: Some(self.next_entity_id),
             entities: self.entities.values().cloned().collect(),
+            vars: self.vars.clone(),
+            objectives: self.objectives.clone(),
+            triggers: self.triggers.clone(),
         };
         serde_json::to_string_pretty(&file).map_err(|e| WorldError::Serialize {
             message: e.to_string(),
@@ -299,6 +334,9 @@ impl World {
             seed: file.seed,
             terrain: file.terrain,
             environment: file.environment,
+            vars: file.vars,
+            objectives: file.objectives,
+            triggers: file.triggers,
             entities,
             next_entity_id,
         };

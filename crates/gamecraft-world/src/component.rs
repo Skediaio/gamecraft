@@ -2,7 +2,11 @@
 
 use crate::WorldError;
 use crate::error::Ctx;
-use crate::limits::{MAX_SLOPE_MAX_DEG, MAX_SLOPE_MIN_DEG, SHAPE_SIZE_MAX_M, SHAPE_SIZE_MIN_M};
+use crate::limits::{
+    INTERACT_REACH_MAX_M, LIGHT_INTENSITY_MAX_CD, LIGHT_RANGE_MAX_M, MAX_NAME_CHARS,
+    MAX_SLOPE_MAX_DEG, MAX_SLOPE_MIN_DEG, MAX_TAGS, MAX_TEXT_CHARS, SHAPE_SIZE_MAX_M,
+    SHAPE_SIZE_MIN_M,
+};
 use serde::{Deserialize, Serialize};
 
 /// One component of an entity. An entity has at most one component of each type.
@@ -18,18 +22,39 @@ pub enum Component {
     Plant(Plant),
     /// A character that can walk, run and jump.
     Character(Character),
+    /// A volume that tells when characters enter and leave it.
+    Zone(Zone),
+    /// Something a character can interact with.
+    Interactable(Interactable),
+    /// A point light.
+    Light(Light),
+    /// Free labels that triggers and queries filter by.
+    Tags(Tags),
 }
 
 impl Component {
     /// Every component type name, in the order the engine lists them.
-    pub const KINDS: [&'static str; 3] = ["shape", "plant", "character"];
+    pub const KINDS: [&'static str; 7] = [
+        "shape",
+        "plant",
+        "character",
+        "zone",
+        "interactable",
+        "light",
+        "tags",
+    ];
 
-    /// The type name of this component (`shape`, `plant` or `character`), as in JSON.
+    /// The type name of this component (`shape`, `plant`, `character`, `zone`,
+    /// `interactable`, `light` or `tags`), as in JSON.
     pub fn kind(&self) -> &'static str {
         match self {
             Component::Shape(_) => "shape",
             Component::Plant(_) => "plant",
             Component::Character(_) => "character",
+            Component::Zone(_) => "zone",
+            Component::Interactable(_) => "interactable",
+            Component::Light(_) => "light",
+            Component::Tags(_) => "tags",
         }
     }
 
@@ -39,6 +64,10 @@ impl Component {
             Component::Shape(s) => s.validate(ctx),
             Component::Plant(p) => p.validate(ctx),
             Component::Character(c) => c.validate(ctx),
+            Component::Zone(z) => z.validate(ctx),
+            Component::Interactable(i) => i.validate(ctx),
+            Component::Light(l) => l.validate(ctx),
+            Component::Tags(t) => t.validate(ctx),
         }
     }
 }
@@ -262,6 +291,218 @@ impl Character {
                 self.eye_height_m,
                 format!("it must be at most character.height_m {}", self.height_m),
             ));
+        }
+        Ok(())
+    }
+}
+
+/// The footprint of a [`Zone`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ZoneShape {
+    /// An upright cylinder of radius `radius_m`.
+    #[default]
+    Circle,
+    /// A box of `size` `[x, z]`, turned by the entity's yaw.
+    Box,
+}
+
+impl ZoneShape {
+    /// The name as in JSON.
+    pub fn name(self) -> &'static str {
+        match self {
+            ZoneShape::Circle => "circle",
+            ZoneShape::Box => "box",
+        }
+    }
+}
+
+/// A volume standing on the entity's position: an upright cylinder, or a box turned by the
+/// entity's `rotation_y_deg`, `height_m` tall. Its sizes are multiplied by the entity's scale.
+/// A character whose body (feet to feet + height) overlaps it vertically and whose position
+/// lies in its footprint is inside; entering and leaving produce `enter` and `leave` events.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Zone {
+    /// `circle` or `box`. Default `circle`.
+    pub shape: ZoneShape,
+    /// Radius of a circle, metres (ignored by a box). Default 2.
+    pub radius_m: f64,
+    /// Extent `[x, z]` of a box, metres (ignored by a circle). Default `[4, 4]`.
+    pub size: [f64; 2],
+    /// Height above the entity's position, metres. Default 3.
+    pub height_m: f64,
+}
+
+impl Default for Zone {
+    fn default() -> Self {
+        Zone {
+            shape: ZoneShape::Circle,
+            radius_m: 2.0,
+            size: [4.0, 4.0],
+            height_m: 3.0,
+        }
+    }
+}
+
+impl Zone {
+    fn validate(&self, ctx: Ctx) -> Result<(), WorldError> {
+        ctx.range(
+            "zone.radius_m",
+            self.radius_m,
+            SHAPE_SIZE_MIN_M,
+            SHAPE_SIZE_MAX_M,
+            " metres",
+        )?;
+        for (axis, &v) in self.size.iter().enumerate() {
+            ctx.range(
+                format!("zone.size[{axis}]"),
+                v,
+                SHAPE_SIZE_MIN_M,
+                SHAPE_SIZE_MAX_M,
+                " metres",
+            )?;
+        }
+        ctx.range(
+            "zone.height_m",
+            self.height_m,
+            SHAPE_SIZE_MIN_M,
+            SHAPE_SIZE_MAX_M,
+            " metres",
+        )
+    }
+}
+
+/// Something a character can interact with: a character whose input asks to interact, whose
+/// eye is within `reach_m` of it and who faces it (within 45 degrees) produces an `interact`
+/// event for the nearest such entity.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Interactable {
+    /// How far from the character's eye it can be reached, metres, above 0 and at most 100.
+    /// Default 2.
+    pub reach_m: f64,
+    /// What a player is told they can do (`Light the beacon`). Default empty.
+    pub prompt: String,
+}
+
+impl Default for Interactable {
+    fn default() -> Self {
+        Interactable {
+            reach_m: 2.0,
+            prompt: String::new(),
+        }
+    }
+}
+
+impl Interactable {
+    fn validate(&self, ctx: Ctx) -> Result<(), WorldError> {
+        if !(self.reach_m.is_finite() && self.reach_m > 0.0 && self.reach_m <= INTERACT_REACH_MAX_M)
+        {
+            return Err(ctx.invalid(
+                "interactable.reach_m",
+                self.reach_m,
+                format!("it must be above 0 and at most {INTERACT_REACH_MAX_M} metres"),
+            ));
+        }
+        ctx.text("interactable.prompt", &self.prompt, MAX_TEXT_CHARS)
+    }
+}
+
+fn default_light_color() -> [f32; 3] {
+    [1.0, 0.85, 0.6]
+}
+
+/// A point light at the entity's position; on a character it moves with it. The renderer draws
+/// it; it does not change the simulation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Light {
+    /// Linear RGB, each channel 0 to 1. Default warm white `[1, 0.85, 0.6]`.
+    pub color: [f32; 3],
+    /// Luminous intensity, candela, 0 to 1e7. Default 100.
+    pub intensity_cd: f64,
+    /// Distance beyond which it lights nothing, metres, above 0 and at most 10000. Default 10.
+    pub range_m: f64,
+    /// Whether it shines. Default true.
+    pub on: bool,
+}
+
+impl Default for Light {
+    fn default() -> Self {
+        Light {
+            color: default_light_color(),
+            intensity_cd: 100.0,
+            range_m: 10.0,
+            on: true,
+        }
+    }
+}
+
+impl Light {
+    fn validate(&self, ctx: Ctx) -> Result<(), WorldError> {
+        for (channel, &c) in self.color.iter().enumerate() {
+            ctx.range(
+                format!("light.color[{channel}]"),
+                f64::from(c),
+                0.0,
+                1.0,
+                " (linear RGB)",
+            )?;
+        }
+        ctx.range(
+            "light.intensity_cd",
+            self.intensity_cd,
+            0.0,
+            LIGHT_INTENSITY_MAX_CD,
+            " candela",
+        )?;
+        if !(self.range_m.is_finite() && self.range_m > 0.0 && self.range_m <= LIGHT_RANGE_MAX_M) {
+            return Err(ctx.invalid(
+                "light.range_m",
+                self.range_m,
+                format!("it must be above 0 and at most {LIGHT_RANGE_MAX_M} metres"),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Free labels (`beacon`, `team:red`) that triggers (`"who": "tag:beacon"`) and queries
+/// (`entity.find`) filter by. Matched exactly, case included.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Tags {
+    /// The labels, each used once, at most 64, each at most 200 characters. Default none.
+    pub tags: Vec<String>,
+}
+
+impl Tags {
+    fn validate(&self, ctx: Ctx) -> Result<(), WorldError> {
+        if self.tags.len() > MAX_TAGS {
+            return Err(ctx.invalid(
+                "tags.tags",
+                format!("{} tags", self.tags.len()),
+                format!("an entity has at most {MAX_TAGS} tags"),
+            ));
+        }
+        for (i, tag) in self.tags.iter().enumerate() {
+            let field = format!("tags.tags[{i}]");
+            if tag.trim().is_empty() {
+                return Err(ctx.invalid(
+                    field,
+                    "empty",
+                    "a tag must hold at least one character other than a space",
+                ));
+            }
+            ctx.text(field.clone(), tag, MAX_NAME_CHARS)?;
+            if self.tags.iter().take(i).any(|t| t == tag) {
+                return Err(ctx.invalid(
+                    field,
+                    format!("{tag:?}"),
+                    "a tag is listed more than once; list each tag once",
+                ));
+            }
         }
         Ok(())
     }

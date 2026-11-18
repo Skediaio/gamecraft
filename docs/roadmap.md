@@ -50,6 +50,11 @@ They run alongside the milestones and pull work forward where they need it.
   shapes and characters, health as data of a pack, enemies moved by routes and simple
   behaviour. The rifle, its cartridge and the enemies are things of the pack.
 
+Status: the scenario mechanism of P1 (zones, interaction, variables, objectives, triggers whose
+actions are commands, messages; `docs/design/scenarios.md`) is done 2026-11-18, with a miniature
+of Lantern as its test (`crates/gamecraft-engine/tests/lantern.rs`). Open for P1: lights drawn by
+the renderer, the full game as an example, played through the CLI.
+
 **Done when:** an agent plays each from start to finish over MCP, a second run gives the same
 state hash, and a picture of each exists.
 

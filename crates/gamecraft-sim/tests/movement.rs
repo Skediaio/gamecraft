@@ -211,6 +211,7 @@ fn never_below_the_ground_with_random_inputs() {
                 yaw_deg: rng.range(-720.0, 720.0),
                 run: rng.below(2) == 1,
                 jump: rng.below(4) == 0,
+                interact: false,
             };
             sim.set_input(id, input).unwrap();
         }

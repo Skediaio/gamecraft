@@ -60,3 +60,29 @@ pub const WIND_SPEED_MAX_MPS: f64 = 100.0;
 pub const MAX_SLOPE_MIN_DEG: f64 = 1.0;
 /// Largest walkable slope limit of a character, degrees.
 pub const MAX_SLOPE_MAX_DEG: f64 = 89.0;
+
+/// Longest free text (an objective's title, a variable's string, a prompt), in characters.
+pub const MAX_TEXT_CHARS: usize = 2000;
+/// Most tags on one entity.
+pub const MAX_TAGS: usize = 64;
+/// Largest reach of an `interactable`, metres.
+pub const INTERACT_REACH_MAX_M: f64 = 100.0;
+/// Strongest light, candela.
+pub const LIGHT_INTENSITY_MAX_CD: f64 = 1e7;
+/// Largest range of a light, metres.
+pub const LIGHT_RANGE_MAX_M: f64 = 10_000.0;
+
+/// Most variables in one world.
+pub const MAX_VARS: usize = 10_000;
+/// Most objectives in one world.
+pub const MAX_OBJECTIVES: usize = 1000;
+/// Most triggers in one world.
+pub const MAX_TRIGGERS: usize = 1000;
+/// Most commands in one trigger's `do`.
+pub const MAX_TRIGGER_STEPS: usize = 64;
+/// Deepest nesting of `all` and `any` in a trigger's condition (a comparison alone is depth 1).
+pub const MAX_CONDITION_DEPTH: usize = 8;
+/// Most conditions inside one `all` or `any`.
+pub const MAX_CONDITION_ITEMS: usize = 64;
+/// Latest `at_s` of a `time` event, seconds of simulated time.
+pub const TRIGGER_TIME_MAX_S: f64 = 1e9;

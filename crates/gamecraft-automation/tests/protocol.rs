@@ -287,7 +287,8 @@ fn every_listed_example_runs() {
         }
         let (mut fresh, _) = host_with_pictures(host());
         // Play commands other than sim.start need a running simulation.
-        if id.starts_with("sim.") && id != "sim.start" && id != "sim.state" {
+        if (id.starts_with("sim.") && id != "sim.start" && id != "sim.state") || id == "message.show"
+        {
             ok(&mut fresh, "sim.start", json!({}));
         }
         ok(&mut fresh, id, c["example"].clone());

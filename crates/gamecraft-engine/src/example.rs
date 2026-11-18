@@ -1,8 +1,8 @@
 //! The example world every spec's `example` runs on.
 
 use gamecraft_world::{
-    Character, Component, EntityDraft, Plant, Shape, ShapeKind, Terrain, TerrainSource, World,
-    WorldError,
+    Character, CompareOp, Component, Condition, EntityDraft, Objective, ObjectiveStatus, Plant,
+    Shape, ShapeKind, Step, Terrain, TerrainSource, Trigger, VarValue, When, World, WorldError,
 };
 
 /// The plant library species of the example oak.
@@ -11,7 +11,9 @@ pub const EXAMPLE_SPECIES: &str = "quercus-robur";
 /// A small valley: noise terrain of 128 m at 2 m cells (seed 7, relief 12 m); entity 1 a solid
 /// box named `Crate` at `[-6, 0, 4]`, not on the ground (`entity.snap_to_ground` puts it there),
 /// entity 2 a plant `Oak` (`quercus-robur`) on the ground at x 8, z -10,
-/// entity 3 a character named `Scout` on the ground at (0, 0), facing north.
+/// entity 3 a character named `Scout` on the ground at (0, 0), facing north. Its scenario: a
+/// variable `score` = 0, an objective `find-oak` ("Find the oak") and a trigger `oak-found`
+/// that marks it done when `score` changes to 3 or more.
 pub fn example_world() -> World {
     build().unwrap_or_else(|_| World::new("Example valley", 7))
 }
@@ -59,6 +61,30 @@ fn build() -> Result<World, WorldError> {
         components: vec![Component::Character(Character::default())],
         ..EntityDraft::default()
     })?;
+    world.vars.insert("score".into(), VarValue::Number(0.0));
+    world.objectives.push(Objective {
+        id: "find-oak".into(),
+        title: "Find the oak".into(),
+        status: ObjectiveStatus::Open,
+        hidden: false,
+    });
+    world.triggers.push(Trigger {
+        id: "oak-found".into(),
+        when: When::Var {
+            name: "score".into(),
+        },
+        condition: Some(Condition::Compare {
+            var: "score".into(),
+            op: CompareOp::Ge,
+            value: VarValue::Number(3.0),
+        }),
+        actions: vec![Step {
+            command: "objective.set".into(),
+            params: serde_json::json!({"id": "find-oak", "status": "done"}),
+        }],
+        once: true,
+        enabled: true,
+    });
     world.validate()?;
     Ok(world)
 }

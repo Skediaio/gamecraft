@@ -8,6 +8,27 @@
 //! A running world can be changed between two ticks with [`Sim::replace_world`]: that is the
 //! game master's hand (AGENTS.md, rule 6).
 //!
+//! # Scenario events
+//!
+//! After the characters have moved, every tick detects [`Event`]s and keeps them until
+//! [`Sim::take_events`] hands them out:
+//!
+//! - **time**: the end of the tick (`tick * DT`) reached the `at_s` of an enabled `time`
+//!   trigger of the world, which the tick before had not (an `at_s` of 0 fires on the first
+//!   tick);
+//! - **enter** and **leave**: a character came inside, or is no longer inside, the zone of an
+//!   entity with a `zone` component (see [`gamecraft_world::Zone`]). Membership is kept from
+//!   tick to tick, starting empty, so a character inside a zone at the start enters on the
+//!   first tick. A removed zone or character drops its membership without an event;
+//! - **interact**: a character's input `interact` went from false to true (held, it fires
+//!   once) and an `interactable` is within reach of its eye and faced, within 45 degrees; the
+//!   event names the nearest one.
+//!
+//! The events of a tick are ordered by time first (by `at_s`), then by the acting character's
+//! id, then by the zone's or target's id (leave, enter, then interact for the same pair). The
+//! state hash covers zone membership and the held interaction, not the events waiting to be
+//! taken. Lights and tags do not affect the simulation.
+//!
 //! No GPU, no files, no clock, no threads.
 //!
 //! # The model (M0: characters on terrain among solid shapes)
@@ -52,15 +73,19 @@
 //! size or speed; spheres block but are not ground to stand on; plants are no obstacles;
 //! there are no rigid bodies, inertia or friction.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 use gamecraft_math::{StateHasher, wrap_deg};
 use gamecraft_world::{EntityId, HeightField, World};
 use serde::{Deserialize, Serialize};
 
+mod events;
 mod motion;
 mod solid;
+
+pub use events::{Event, EventKind};
 
 use motion::{State, Surroundings, clamp_to_disc};
 use solid::Solid;
@@ -79,6 +104,13 @@ pub const STEP_HEIGHT_M: f64 = 0.35;
 pub const MAX_PUSH_ITERATIONS: u32 = 4;
 /// Without any ground beneath, a character falls until here and is put to rest, metres.
 pub const FALL_FLOOR_M: f64 = -1000.0;
+/// Most events kept until [`Sim::take_events`]; later ones are dropped and counted.
+pub const MAX_PENDING_EVENTS: usize = 100_000;
+
+/// Marks the zone memberships in the state hash.
+const HASH_MARK_INSIDE: u64 = 0x5A0E_5A0E_5A0E_5A0E;
+/// Marks the held interactions in the state hash.
+const HASH_MARK_HELD: u64 = 0x1A7E_1A7E_1A7E_1A7E;
 
 /// What a character is asked to do, until the record is replaced.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -95,6 +127,8 @@ pub struct Input {
     pub run: bool,
     /// Held: a jump starts on every tick the character stands on the ground.
     pub jump: bool,
+    /// Held: an interaction happens once, on the tick it goes from false to true.
+    pub interact: bool,
 }
 
 /// The moving state of one character that is not in the document. A new body is at rest and
@@ -140,7 +174,7 @@ impl std::error::Error for SimError {}
 #[derive(Clone, Debug)]
 pub struct Sim {
     world: World,
-    heights: Option<HeightField>,
+    heights: Option<Arc<HeightField>>,
     tick: u64,
     bodies: BTreeMap<EntityId, Body>,
     inputs: BTreeMap<EntityId, Input>,
@@ -148,6 +182,17 @@ pub struct Sim {
     solids: Vec<Solid>,
     /// The hash of `world` without its characters' positions and rotations.
     static_hash: u64,
+    /// The zones, interactables and trigger times of `world`, derived by
+    /// [`Sim::replace_world`].
+    watch: events::Watch,
+    /// Which characters are inside which zones: (character, zone).
+    inside: BTreeSet<(EntityId, EntityId)>,
+    /// Characters whose input held `interact` at the end of the last tick.
+    held: BTreeSet<EntityId>,
+    /// Events waiting for [`Sim::take_events`].
+    events: Vec<Event>,
+    /// Events dropped because more than [`MAX_PENDING_EVENTS`] were waiting.
+    dropped_events: u64,
 }
 
 impl Sim {
@@ -162,6 +207,11 @@ impl Sim {
             inputs: BTreeMap::new(),
             solids: Vec::new(),
             static_hash: 0,
+            watch: events::Watch::default(),
+            inside: BTreeSet::new(),
+            held: BTreeSet::new(),
+            events: Vec::new(),
+            dropped_events: 0,
         };
         sim.replace_world(world)?;
         Ok(sim)
@@ -179,7 +229,22 @@ impl Sim {
 
     /// The height field of the running world's terrain, `None` without terrain.
     pub fn heights(&self) -> Option<&HeightField> {
-        self.heights.as_ref()
+        self.heights.as_deref()
+    }
+
+    /// Hands out the events detected since the last call, in order, and forgets them.
+    pub fn take_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.events)
+    }
+
+    /// Events dropped since the start because more than [`MAX_PENDING_EVENTS`] were waiting.
+    pub fn dropped_events(&self) -> u64 {
+        self.dropped_events
+    }
+
+    /// Which characters are inside which zones, as (character, zone), in id order.
+    pub fn inside(&self) -> impl Iterator<Item = (EntityId, EntityId)> + '_ {
+        self.inside.iter().copied()
     }
 
     /// Ticks stepped since the start.
@@ -250,7 +315,7 @@ impl Sim {
         let ids: Vec<EntityId> = self.bodies.keys().copied().collect();
         for _ in 0..ticks.min(MAX_STEP_TICKS) {
             let around = Surroundings {
-                heights: self.heights.as_ref(),
+                heights: self.heights.as_deref(),
                 solids: &self.solids,
             };
             for &id in &ids {
@@ -273,6 +338,65 @@ impl Sim {
                 self.bodies.insert(id, next.body);
             }
             self.tick = self.tick.saturating_add(1);
+            self.detect(&ids);
+        }
+    }
+
+    /// Detects the events of the tick that just ended (see the crate docs) and updates zone
+    /// membership and the held interactions.
+    fn detect(&mut self, characters: &[EntityId]) {
+        let mut found: Vec<EventKind> = self
+            .watch
+            .times_of(self.tick, DT)
+            .map(|at_s| EventKind::Time { at_s })
+            .collect();
+        let now = events::memberships(&self.world, characters, &self.watch.zones);
+        let mut held = BTreeSet::new();
+        for &id in characters {
+            let mut mine: Vec<(EntityId, u8, EventKind)> = Vec::new();
+            for &(who, zone) in self
+                .inside
+                .range((id, EntityId(0))..=(id, EntityId(u64::MAX)))
+            {
+                if !now.contains(&(who, zone)) {
+                    mine.push((zone, 0, EventKind::Leave { who, zone }));
+                }
+            }
+            for &(who, zone) in now.range((id, EntityId(0))..=(id, EntityId(u64::MAX))) {
+                if !self.inside.contains(&(who, zone)) {
+                    mine.push((zone, 1, EventKind::Enter { who, zone }));
+                }
+            }
+            let pressing = self.inputs.get(&id).is_some_and(|i| i.interact);
+            if pressing {
+                held.insert(id);
+                if !self.held.contains(&id)
+                    && let Some(who) = self.world.entity(id)
+                    && let Some(character) = who.character()
+                    && let Some(target) = events::reached(
+                        &self.world,
+                        who,
+                        character.eye_height_m,
+                        &self.watch.interactables,
+                    )
+                {
+                    mine.push((target, 2, EventKind::Interact { who: id, target }));
+                }
+            }
+            mine.sort_by_key(|(subject, order, _)| (*subject, *order));
+            found.extend(mine.into_iter().map(|(_, _, kind)| kind));
+        }
+        self.inside = now;
+        self.held = held;
+        for kind in found {
+            if self.events.len() < MAX_PENDING_EVENTS {
+                self.events.push(Event {
+                    tick: self.tick,
+                    kind,
+                });
+            } else {
+                self.dropped_events = self.dropped_events.saturating_add(1);
+            }
         }
     }
 
@@ -288,11 +412,11 @@ impl Sim {
         // `None`: keep the current height field (the terrain did not change).
         let rebuilt = match &world.terrain {
             Some(terrain) if self.world.terrain.as_ref() == Some(terrain) => None,
-            Some(terrain) => Some(Some(
+            Some(terrain) => Some(Some(Arc::new(
                 terrain
                     .build()
                     .map_err(|e| SimError::World(e.to_string()))?,
-            )),
+            ))),
             None => Some(None),
         };
         let mut bodies = BTreeMap::new();
@@ -307,6 +431,11 @@ impl Sim {
             }
         }
         self.solids = solid::solids_of(&world);
+        self.watch = events::Watch::of(&world);
+        let zone_ids: BTreeSet<EntityId> = self.watch.zones.iter().copied().collect();
+        self.inside
+            .retain(|(who, zone)| bodies.contains_key(who) && zone_ids.contains(zone));
+        self.held.retain(|who| bodies.contains_key(who));
         self.world = world;
         if let Some(heights) = rebuilt {
             self.heights = heights;
@@ -318,8 +447,9 @@ impl Sim {
     }
 
     /// A hash of everything that moves or decides what moves next: the tick, the running world,
-    /// and every character's body and input, in id order. Equal histories give equal hashes on
-    /// every platform.
+    /// every character's body and input, in id order, and (when there are any) which
+    /// characters are inside which zones and which hold `interact`. Events waiting to be taken
+    /// are not part of it. Equal histories give equal hashes on every platform.
     pub fn state_hash(&self) -> u64 {
         let mut hasher = StateHasher::new();
         hasher.write_u64(self.tick);
@@ -346,6 +476,30 @@ impl Sim {
                     hasher.write_bool(input.jump);
                 }
                 None => hasher.write_bool(false),
+            }
+        }
+        // Written only when present, so a world without scenario state hashes as before.
+        if !self.inside.is_empty() {
+            hasher.write_u64(HASH_MARK_INSIDE);
+            for (who, zone) in &self.inside {
+                hasher.write_u64(who.0);
+                hasher.write_u64(zone.0);
+            }
+        }
+        let pressing: Vec<EntityId> = self
+            .inputs
+            .iter()
+            .filter(|(_, i)| i.interact)
+            .map(|(id, _)| *id)
+            .collect();
+        if !pressing.is_empty() || !self.held.is_empty() {
+            hasher.write_u64(HASH_MARK_HELD);
+            for id in &pressing {
+                hasher.write_u64(id.0);
+            }
+            hasher.write_u64(u64::MAX);
+            for id in &self.held {
+                hasher.write_u64(id.0);
             }
         }
         hasher.finish()

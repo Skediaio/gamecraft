@@ -2,6 +2,7 @@
 
 mod document;
 mod fuzz;
+mod scenario;
 mod sun;
 mod terrain;
 mod validation;

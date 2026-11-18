@@ -193,6 +193,7 @@ fn extreme_characters_stay_finite_and_valid() {
             yaw_deg: 10.0,
             run: true,
             jump: true,
+            interact: false,
         },
     )
     .unwrap();
@@ -231,6 +232,7 @@ fn input_round_trips_through_json_and_refuses_unknown_fields() {
         yaw_deg: 90.0,
         run: true,
         jump: false,
+        interact: true,
     };
     let text = serde_json::to_string(&input).unwrap();
     assert_eq!(serde_json::from_str::<Input>(&text).unwrap(), input);

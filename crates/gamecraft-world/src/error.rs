@@ -275,6 +275,39 @@ impl Ctx {
         }
     }
 
+    /// `text` must have at most `max` characters.
+    pub(crate) fn text(
+        self,
+        field: impl Into<String>,
+        text: &str,
+        max: usize,
+    ) -> Result<(), WorldError> {
+        let chars = text.chars().count();
+        if chars <= max {
+            Ok(())
+        } else {
+            Err(self.invalid(
+                field,
+                format!("{chars} characters long"),
+                format!("it must be at most {max} characters long"),
+            ))
+        }
+    }
+
+    /// `id` must not be empty (or only spaces) and have at most
+    /// [`crate::limits::MAX_NAME_CHARS`] characters.
+    pub(crate) fn id(self, field: impl Into<String>, id: &str) -> Result<(), WorldError> {
+        let field = field.into();
+        if id.trim().is_empty() {
+            return Err(self.invalid(
+                field,
+                "empty",
+                "it must hold at least one character other than a space",
+            ));
+        }
+        self.name(field, id)
+    }
+
     /// `name` must have at most [`crate::limits::MAX_NAME_CHARS`] characters.
     pub(crate) fn name(self, field: impl Into<String>, name: &str) -> Result<(), WorldError> {
         let chars = name.chars().count();

@@ -69,7 +69,8 @@ true}` makes it the document, as one undo step.
 
 ## How to play
 
-- **Input is a record.** `sim.input {entity, forward?, right?, yaw_deg? | face?, run?, jump?}`
+- **Input is a record.** `sim.input {entity, forward?, right?, yaw_deg? | face?, run?, jump?,
+  interact?}`
   stores what a character is asked to do: `forward` and `right` from -1 to 1 relative to its
   facing, the facing as `yaw_deg` or as a ground point to `face`, `run`, and `jump` (held: it
   jumps whenever it stands on the ground). The record holds until it is replaced; fields left out
@@ -90,6 +91,35 @@ true}` makes it the document, as one undo step.
   without inertia; gravity pulls it down, it lands on the terrain and on the tops of low solid
   boxes and cylinders, it steps up at most 0.35 m, and it does not climb slopes steeper than its
   `max_slope_deg`. Solid shapes push it out; plants and other characters do not block it.
+
+## Scenarios
+
+A scenario turns a world into a game that can be steered; it is data in the world, so it is
+built, saved and changed with commands like everything else.
+
+- **Components** make entities take part: `zone` (a circle or box volume that gives `enter` and
+  `leave` events when characters come in and go out), `interactable` (a character whose input
+  `interact` turns true, within `reach_m` of its eye and facing it within 45 degrees, gives an
+  `interact` event for the nearest one), `light` (a point light a trigger can switch with
+  `entity.set_component`) and `tags` (labels such as `player` or `beacon`).
+- **Variables, objectives, messages.** `var.set {name, value | add}` keeps numbers, booleans and
+  strings; `objective.add {id, title}` and `objective.set {id, status}` (`open`, `done`,
+  `failed`) keep what the players are to achieve; `message.show {text, to?, seconds?}` puts a
+  line in `sim.state` while playing.
+- **Triggers.** `trigger.add {id, when, if?, do, once?, enabled?}`: when the event happens while
+  playing (`enter`/`leave` a zone, `interact`, `time` at `at_s`, a `var` changed, `start`) and
+  the condition over the variables holds, the commands of `do` run on the running world, exactly
+  as you would send them, as one all-or-nothing transaction. In them `"$who"` and `"$target"`
+  stand for the entity that caused the event and the zone or target, as the whole value of an
+  entity parameter. A `who` filter takes an entity or `"tag:player"`. `once` (the default)
+  disables a trigger after it ran.
+- **Seeing what happened.** Each `sim.step` answers with the `events` of its ticks and the
+  triggers that `fired` (`ok`, or the `error` that stopped one); `sim.state` lists the
+  objectives, the messages showing and the last trigger errors; `scenario.inspect` shows every
+  variable, objective and trigger. A trigger that fails changes nothing and the game goes on.
+- **Directing a game.** There is no separate game-master API: read `sim.state`, the events and
+  `objective.list`, decide, send world or scenario commands, step. A variable you change between
+  steps fires its `var` triggers at the start of the next step.
 
 ## Known limits of M0
 

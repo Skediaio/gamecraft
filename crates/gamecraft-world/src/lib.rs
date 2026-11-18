@@ -1,7 +1,8 @@
 //! The GameCraft world document (layer L1).
 //!
 //! A [`World`] is the source of truth of a game world: its terrain recipe, its environment
-//! (time, sun, weather) and its entities with their components. It is pure data with serde:
+//! (time, sun, weather), its entities with their components, and its scenario: variables,
+//! objectives and triggers whose actions are commands. It is pure data with serde:
 //! [`World::to_json`] and [`World::from_json`] read and write the `.gamecraft` file format,
 //! version [`FORMAT_VERSION`], with a stable field and entity order so documents diff and merge.
 //! [`World::validate`] checks every invariant and names the field, the value and the allowed
@@ -19,15 +20,22 @@ mod entity;
 mod environment;
 mod error;
 pub mod limits;
+mod scenario;
 mod terrain;
 mod world;
 
 #[cfg(test)]
 mod tests;
 
-pub use component::{Character, Component, Plant, Shape, ShapeKind};
+pub use component::{
+    Character, Component, Interactable, Light, Plant, Shape, ShapeKind, Tags, Zone, ZoneShape,
+};
 pub use entity::{Entity, EntityDraft, EntityId};
 pub use environment::{Environment, SunPosition};
 pub use error::WorldError;
+pub use scenario::{
+    CompareOp, Condition, EntityRef, Objective, ObjectiveStatus, Step, TAG_PREFIX, Trigger,
+    VarValue, When,
+};
 pub use terrain::{HeightField, Terrain, TerrainSource};
 pub use world::{FORMAT_VERSION, World};

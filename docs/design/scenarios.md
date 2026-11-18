@@ -1,7 +1,7 @@
 # Scenarios: zones, interactions, variables, objectives, triggers
 
-How a world becomes a game that can be steered. Status: designed 2026-11-18, being built for
-prototype P1 (`roadmap.md`).
+How a world becomes a game that can be steered. Status: built 2026-11-18 for prototype P1
+(`roadmap.md`); the journal and roles are open.
 
 ## Method
 

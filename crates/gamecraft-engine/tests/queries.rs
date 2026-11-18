@@ -712,7 +712,18 @@ fn component_list_describes_every_component_and_its_examples_parse() {
     let r = s.run("component.list", &json!({})).unwrap();
     let list = r["components"].as_array().unwrap();
     let types: Vec<&str> = list.iter().map(|c| c["type"].as_str().unwrap()).collect();
-    assert_eq!(types, ["shape", "plant", "character"]);
+    assert_eq!(
+        types,
+        [
+            "shape",
+            "plant",
+            "character",
+            "zone",
+            "interactable",
+            "light",
+            "tags"
+        ]
+    );
     for c in list {
         assert!(!c["summary"].as_str().unwrap().is_empty());
         for f in c["fields"].as_array().unwrap() {

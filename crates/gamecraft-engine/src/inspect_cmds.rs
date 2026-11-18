@@ -22,7 +22,8 @@ fn inspect_spec() -> CommandSpec {
         "world.inspect",
         "Inspect World",
         "Describes the current world (the running world while playing): name, seed, terrain, \
-         environment and sun, and its entities in id order, a page at a time.",
+         environment and sun, the scenario's variables, objectives and trigger count \
+         (scenario.inspect has the triggers), and its entities in id order, a page at a time.",
         vec![
             param(
                 "entities",
@@ -35,7 +36,8 @@ fn inspect_spec() -> CommandSpec {
         ],
         "{name, seed, revision, playing, tick (null when not playing), terrain: null | \
          {size_m, cell_m, source, cols, rows, min_height_m, max_height_m}, environment, sun: \
-         {azimuth_deg, elevation_deg, direction, above_horizon}, entity_count, entities: [{id, \
+         {azimuth_deg, elevation_deg, direction, above_horizon}, entity_count, vars: {name: \
+         value}, objectives: [{id, title, status, hidden}], trigger_count, entities: [{id, \
          name, position, rotation_y_deg, scale, components}], truncated, history: {can_undo, \
          can_redo}}",
         json!({"limit": 10}),
@@ -87,6 +89,9 @@ fn inspect(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
             "above_horizon": sun.elevation_deg > 0.0,
         },
         "entity_count": world.entity_count(),
+        "vars": serde_json::to_value(&world.vars).map_err(failed)?,
+        "objectives": serde_json::to_value(&world.objectives).map_err(failed)?,
+        "trigger_count": world.triggers.len(),
         "history": {"can_undo": session.can_undo(), "can_redo": session.can_redo()},
     });
     let Value::Object(mut out) = summary else {

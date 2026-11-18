@@ -4,9 +4,10 @@ use crate::error::{CommandError, bad, failed};
 use crate::params::Params;
 use crate::session::{Handler, Registration, Session};
 use crate::spec::{CommandSpec, ParamType as T, param, spec};
+use crate::triggers::{self, Happening};
 use gamecraft_math::{Portable, rad_to_deg, wrap_deg};
 use gamecraft_sim::{Input, MAX_STEP_TICKS, Sim, TICK_HZ};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 /// The commands of this module.
 pub(crate) const SPECS: &[Registration] = &[
@@ -74,9 +75,10 @@ fn start_spec() -> CommandSpec {
         "sim.start",
         "Play",
         "Starts a simulation on a copy of the document. World commands then change the running \
-         world, not the document, until sim.stop.",
+         world, not the document, until sim.stop. The triggers waiting for `start` run.",
         vec![],
-        "{tick: 0, hash, characters: [ids]}",
+        "{tick: 0, hash, characters: [ids], events: [{tick, event: \"start\"}], fired: \
+         [{trigger, tick, event, ok, error?}]}",
         json!({}),
     )
     .play()
@@ -90,9 +92,17 @@ fn start(session: &mut Session, _p: Params<'_>) -> Result<Value, CommandError> {
     }
     let sim = Sim::new(session.document().clone()).map_err(failed)?;
     let ids: Vec<u64> = sim.bodies().map(|(id, _)| id.0).collect();
-    let result = json!({"tick": sim.tick(), "hash": hash(&sim), "characters": ids});
     session.start_live(sim);
-    Ok(result)
+    triggers::begin_report(session);
+    triggers::happen(session, 0, Happening::Start);
+    let report = triggers::take_report(session);
+    let sim = running(session)?;
+    let mut result = Map::new();
+    result.insert("tick".into(), json!(sim.tick()));
+    result.insert("hash".into(), json!(hash(sim)));
+    result.insert("characters".into(), json!(ids));
+    report.into_answer(&mut result);
+    Ok(Value::Object(result))
 }
 
 fn stop_spec() -> CommandSpec {
@@ -134,12 +144,19 @@ fn step_spec() -> CommandSpec {
         "sim.step",
         "Step",
         "Advances the simulation by whole ticks of 1/60 s: `ticks`, or `seconds` rounded to \
-         whole ticks (not both); at most 36000 ticks (600 s) per call.",
+         whole ticks (not both); at most 36000 ticks (600 s) per call. After each tick the \
+         scenario's triggers run for the events of that tick; variables changed by commands \
+         since the last step fire their triggers first. The answer lists the events and the \
+         triggers that fired (at most 1000 of each; `events_omitted` and `fired_omitted` count \
+         the rest).",
         vec![
             param("ticks", T::Integer, "Ticks to advance, 0 to 36000.").default(json!(1)),
             param("seconds", T::Number, "Simulated time to advance, 0 to 600.").unit("s"),
         ],
-        &format!("{{tick, time_s, hash, characters: {CHARACTERS_DOC}}}"),
+        &format!(
+            "{{tick, time_s, hash, characters: {CHARACTERS_DOC}, events: [{{tick, event, who?, \
+             zone?, target?, at_s?, name?}}], fired: [{{trigger, tick, event, ok, error?}}]}}"
+        ),
         json!({"seconds": 0.5}),
     )
     .play()
@@ -173,19 +190,32 @@ fn step(session: &mut Session, p: Params<'_>) -> Result<Value, CommandError> {
         }
         (None, None) => 1,
     };
-    let sim = running(session)?;
     let ticks = u32::try_from(ticks).unwrap_or(MAX_STEP_TICKS);
-    sim.step(ticks);
-    let result = json!({
-        "tick": sim.tick(),
-        "time_s": sim.time_s(),
-        "hash": hash(sim),
-        "characters": characters(sim),
-    });
+    let start = running(session)?.tick();
+    triggers::begin_report(session);
+    triggers::run_pending(session, start);
+    for _ in 0..ticks {
+        let sim = running(session)?;
+        sim.step(1);
+        let tick = sim.tick();
+        for event in sim.take_events() {
+            triggers::happen(session, event.tick, Happening::Sim(event.kind));
+        }
+        triggers::run_pending(session, tick);
+        triggers::expire_messages(session, tick);
+    }
+    let report = triggers::take_report(session);
+    let sim = running(session)?;
+    let mut result = Map::new();
+    result.insert("tick".into(), json!(sim.tick()));
+    result.insert("time_s".into(), json!(sim.time_s()));
+    result.insert("hash".into(), json!(hash(sim)));
+    result.insert("characters".into(), json!(characters(sim)));
+    report.into_answer(&mut result);
     if ticks > 0 {
         session.bump_view();
     }
-    Ok(result)
+    Ok(Value::Object(result))
 }
 
 fn input_spec() -> CommandSpec {
@@ -225,8 +255,14 @@ fn input_spec() -> CommandSpec {
                 T::Boolean,
                 "Held: a jump starts whenever the character stands on the ground.",
             ),
+            param(
+                "interact",
+                T::Boolean,
+                "Held: interacts once, when it turns true, with the nearest interactable \
+                 within reach that the character faces.",
+            ),
         ],
-        "{entity, forward, right, yaw_deg, run, jump}: the stored input",
+        "{entity, forward, right, yaw_deg, run, jump, interact}: the stored input",
         json!({"entity": "Scout", "forward": 1, "face": [0, -60], "run": true}),
     )
     .play()
@@ -240,6 +276,7 @@ fn input_json(id: u64, i: &Input) -> Value {
         "yaw_deg": i.yaw_deg,
         "run": i.run,
         "jump": i.jump,
+        "interact": i.interact,
     })
 }
 
@@ -291,6 +328,9 @@ fn input(session: &mut Session, p: Params<'_>) -> Result<Value, CommandError> {
     if let Some(v) = p.bool("jump")? {
         record.jump = v;
     }
+    if let Some(v) = p.bool("interact")? {
+        record.interact = v;
+    }
     sim.set_input(id, record).map_err(failed)?;
     let stored = sim.input(id).copied().unwrap_or(record);
     Ok(input_json(id.0, &stored))
@@ -300,11 +340,14 @@ fn state_spec() -> CommandSpec {
     spec(
         "sim.state",
         "Play State",
-        "Whether a simulation runs and, if so, its tick, hash, characters and stored inputs.",
+        "Whether a simulation runs and, if so, its tick, hash, characters, stored inputs, \
+         objectives, the messages showing and the last 20 trigger errors.",
         vec![],
         &format!(
             "{{playing: false}} or {{playing: true, tick, time_s, hash, characters: \
-             {CHARACTERS_DOC}, inputs: [{{entity, forward, right, yaw_deg, run, jump}}]}}"
+             {CHARACTERS_DOC}, inputs: [{{entity, forward, right, yaw_deg, run, jump, \
+             interact}}], objectives: [{{id, title, status, hidden}}], messages: [{{text, to, \
+             shown_at_s, until_s}}], trigger_errors: [{{trigger, tick, error}}]}}"
         ),
         json!({}),
     )
@@ -326,5 +369,8 @@ fn state(session: &mut Session, _p: Params<'_>) -> Result<Value, CommandError> {
         "hash": hash(sim),
         "characters": characters(sim),
         "inputs": inputs,
+        "objectives": serde_json::to_value(&sim.world().objectives).map_err(failed)?,
+        "messages": crate::scenario_cmds::messages_json(session),
+        "trigger_errors": session.play().errors.iter().cloned().collect::<Vec<_>>(),
     }))
 }
