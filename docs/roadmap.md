@@ -22,9 +22,9 @@ drawn with VisionCraft's renderer.
 | Workspace, rules, layers, CI (`cargo xtask layers`, `wasm`, `ci`) | done 2026-11-18 |
 | `gamecraft-math`: portable maths, seeded randomness, noise, state hash | done 2026-11-18 |
 | `gamecraft-world`: the document, its JSON format, validation, the height field, the sun | done 2026-11-18 |
-| `gamecraft-sim`: fixed step, input, a character that walks, falls and is stopped by solids; taking over a changed world between ticks | in progress |
+| `gamecraft-sim`: fixed step, input, a character that walks, falls and is stopped by solids; taking over a changed world between ticks | done 2026-11-18 |
 | `gamecraft-engine`: session, command specs, world commands on the document and on a running world, queries, undo, play commands | in progress |
-| `gamecraft-render`: terrain, shapes, plants, sky and weather through VisionCraft; PNG out | in progress |
+| `gamecraft-render`: terrain, shapes, plants, sky and weather through VisionCraft; PNG out | done 2026-11-18 |
 | `gamecraft-automation`: JSON lines, MCP, host commands (`file.*`, `edit.*`, `view.render`) | open |
 | `gamecraft-cli`: `commands`, `run`, `batch`, `serve`, `mcp`, `render` | open |
 | `docs/agent.md` with a worked example that a test runs | open |

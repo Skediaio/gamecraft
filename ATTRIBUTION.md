@@ -12,6 +12,8 @@ change.
 | root `Cargo.toml` | `visioncraft-render` and `visioncraft-flora` as git dependencies, pinned to one rev | MIT |
 | `AGENTS.md`, `docs/` | The rules and the shape of the documents follow VisionCraft's `AGENTS.md` | MIT |
 | `crates/gamecraft-engine/src/spec.rs` | Ported from `crates/visioncraft-core/src/spec.rs` (command specs, parameter checks, nearest name) and the params notation of `crates/visioncraft-automation/src/docs.rs` | MIT |
+| `crates/gamecraft-render/src/light.rs` | `auto_ev`, `MIST_EV`, `NIGHT_SKY_LUX`, the natural look's grade and `haze_extinction` from `apps/visioncraft/src/studio.rs`; `daylight_lux` and `usno_atmos` (after USNO Circular 171) from `crates/visioncraft-core/src/sun.rs` | MIT |
+| `crates/gamecraft-render/src/renderer.rs` | `plant_material_desc` from `apps/visioncraft/src/scene.rs`; plant parts as meshes following `apps/visioncraft/src/plants.rs` | MIT |
 | `crates/gamecraft-engine/src/session.rs` | Modelled on `crates/visioncraft-core/src/session.rs` (registry, checks before the handler, snapshot undo, transactions) | MIT |
 
 ## From 3DCraft (MIT, <https://github.com/johancoppens/3dcraft>)

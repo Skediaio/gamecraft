@@ -1,0 +1,542 @@
+//! GPU-free tests: meshes, cameras, requests, PNG, the light and wind mappings.
+
+use crate::mesh::{self, MeshData};
+use crate::{Camera, PictureRequest, RenderError, encode_png, light, plants, wind_towards};
+use gamecraft_math::{Rng, yaw_forward};
+use gamecraft_world::{
+    Character, Component, EntityDraft, HeightField, Shape, ShapeKind, Terrain, TerrainSource, World,
+};
+use std::collections::BTreeMap;
+
+fn noise_terrain(size_m: f64, cell_m: f64) -> Terrain {
+    Terrain {
+        size_m,
+        cell_m,
+        source: TerrainSource::Noise {
+            seed: 7,
+            relief_m: 30.0,
+            feature_m: 40.0,
+            octaves: 4,
+            roughness: 0.5,
+        },
+    }
+}
+
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f64; 3] {
+    [0, 1, 2].map(|k| f64::from(a[k]) - f64::from(b[k]))
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// The height at (x, z) of the mesh triangle whose xz projection holds the point, if any.
+fn height_on_triangle(p: [[f32; 3]; 3], x: f64, z: f64) -> Option<f64> {
+    let [a, b, c] = p.map(|v| v.map(f64::from));
+    let det = (b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2]);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let u = ((x - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (z - a[2])) / det;
+    let v = ((b[0] - a[0]) * (z - a[2]) - (x - a[0]) * (b[2] - a[2])) / det;
+    let eps = 1e-9;
+    (u >= -eps && v >= -eps && u + v <= 1.0 + eps)
+        .then(|| a[1] + u * (b[1] - a[1]) + v * (c[1] - a[1]))
+}
+
+#[test]
+fn terrain_mesh_agrees_with_the_height_field() {
+    // 130 cells per side: chunks of 64, 64 and 2 cells, so there are borders and a thin edge.
+    let hf = noise_terrain(130.0, 1.0).build().unwrap();
+    let chunks = mesh::terrain_chunks(&hf);
+    assert_eq!(chunks.len(), 9);
+    let [x0, z0] = hf.min();
+    let [x1, z1] = hf.max();
+
+    // Indices in range, triangles facing up, weights summing to 255.
+    for chunk in &chunks {
+        let m = &chunk.mesh;
+        assert_eq!(m.positions.len(), m.normals.len());
+        assert_eq!(m.positions.len(), chunk.weights.len());
+        for w in &chunk.weights {
+            assert_eq!(w.iter().map(|&v| u32::from(v)).sum::<u32>(), 255);
+        }
+        for [a, b, c] in m.triangles() {
+            for i in [a, b, c] {
+                assert!((i as usize) < m.positions.len(), "index {i} out of range");
+            }
+            let (pa, pb, pc) = (
+                m.positions[a as usize],
+                m.positions[b as usize],
+                m.positions[c as usize],
+            );
+            let n = cross(sub(pb, pa), sub(pc, pa));
+            assert!(n[1] > 0.0, "a triangle faces down: {n:?}");
+        }
+        for n in &m.normals {
+            let len = n.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>().sqrt();
+            assert!((len - 1.0).abs() < 1e-5 && n[1] > 0.0);
+        }
+    }
+
+    // Every sample is a vertex, and every position shared by chunks has one normal and one
+    // set of weights there (the borders match).
+    let mut seen: BTreeMap<[u32; 3], ([u32; 3], [u8; 8])> = BTreeMap::new();
+    for chunk in &chunks {
+        for ((p, n), w) in chunk
+            .mesh
+            .positions
+            .iter()
+            .zip(&chunk.mesh.normals)
+            .zip(&chunk.weights)
+        {
+            let entry = (n.map(f32::to_bits), *w);
+            let previous = seen.insert(p.map(f32::to_bits), entry);
+            if let Some(previous) = previous {
+                assert_eq!(previous, entry, "chunks disagree at {p:?}");
+            }
+        }
+    }
+    assert_eq!(seen.len(), hf.cols() * hf.rows());
+    for row in 0..hf.rows() {
+        for col in 0..hf.cols() {
+            let p = [
+                (x0 + col as f64 * hf.cell_m()) as f32,
+                hf.sample(col, row).unwrap(),
+                (z0 + row as f64 * hf.cell_m()) as f32,
+            ];
+            assert!(
+                seen.contains_key(&p.map(f32::to_bits)),
+                "sample ({col}, {row}) is no vertex"
+            );
+        }
+    }
+    let total: usize = chunks.iter().map(|c| c.mesh.positions.len()).sum();
+    assert!(
+        total > seen.len(),
+        "neighbouring chunks share their borders"
+    );
+
+    // The mesh under 1000 random points has the height field's height.
+    let mut rng = Rng::new(42);
+    for _ in 0..1000 {
+        let (x, z) = (rng.range(x0, x1), rng.range(z0, z1));
+        let expected = hf.height_at(x, z).unwrap();
+        let mut found = None;
+        'chunks: for chunk in &chunks {
+            let (lo, hi) = chunk.mesh.bounds().unwrap();
+            if x < f64::from(lo[0]) - 1e-6
+                || x > f64::from(hi[0]) + 1e-6
+                || z < f64::from(lo[2]) - 1e-6
+                || z > f64::from(hi[2]) + 1e-6
+            {
+                continue;
+            }
+            for [a, b, c] in chunk.mesh.triangles() {
+                let m = &chunk.mesh.positions;
+                if let Some(h) =
+                    height_on_triangle([m[a as usize], m[b as usize], m[c as usize]], x, z)
+                {
+                    found = Some(h);
+                    break 'chunks;
+                }
+            }
+        }
+        let h = found.unwrap_or_else(|| panic!("no triangle under ({x}, {z})"));
+        assert!(
+            (h - expected).abs() < 1e-4,
+            "at ({x}, {z}) the mesh is at {h}, height_at says {expected}"
+        );
+    }
+}
+
+#[test]
+fn layer_weights_follow_the_slope() {
+    let flat = mesh::layer_weights(1.0);
+    assert_eq!(flat[mesh::LAYER_GRASS], 255);
+    let steep = mesh::layer_weights(60f64.to_radians().cos());
+    assert_eq!(steep[mesh::LAYER_ROCK], 255);
+    let middle = mesh::layer_weights(32f64.to_radians().cos());
+    assert!(middle[mesh::LAYER_EARTH] > 0);
+    for deg in 0..=90 {
+        let w = mesh::layer_weights(f64::from(deg).to_radians().cos());
+        assert_eq!(w.iter().map(|&v| u32::from(v)).sum::<u32>(), 255, "{deg}");
+    }
+}
+
+/// Every undirected edge (by position) is used by exactly two triangles, once each way.
+fn assert_closed(m: &MeshData, what: &str) {
+    let key = |i: u32| m.positions[i as usize].map(|v| (v * 1e5).round() as i64);
+    let mut directed: BTreeMap<([i64; 3], [i64; 3]), usize> = BTreeMap::new();
+    for [a, b, c] in m.triangles() {
+        for (p, q) in [(a, b), (b, c), (c, a)] {
+            *directed.entry((key(p), key(q))).or_default() += 1;
+        }
+    }
+    for ((p, q), n) in &directed {
+        assert_eq!(*n, 1, "{what}: edge {p:?}->{q:?} used {n} times one way");
+        assert_eq!(
+            directed.get(&(*q, *p)),
+            Some(&1),
+            "{what}: edge {p:?}-{q:?} is not shared by two triangles"
+        );
+    }
+}
+
+/// Unit normals pointing away from `centre`, triangles wound outward.
+fn assert_outward(m: &MeshData, centre: [f64; 3], what: &str) {
+    for (p, n) in m.positions.iter().zip(&m.normals) {
+        let len = n.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>().sqrt();
+        assert!((len - 1.0).abs() < 1e-5, "{what}: normal {n:?} not unit");
+        let out = [0, 1, 2].map(|k| f64::from(p[k]) - centre[k]);
+        let dot: f64 = (0..3).map(|k| out[k] * f64::from(n[k])).sum();
+        assert!(dot > 0.0, "{what}: normal {n:?} at {p:?} points inwards");
+    }
+    for [a, b, c] in m.triangles() {
+        let (pa, pb, pc) = (
+            m.positions[a as usize],
+            m.positions[b as usize],
+            m.positions[c as usize],
+        );
+        let n = cross(sub(pb, pa), sub(pc, pa));
+        let mid = [0, 1, 2]
+            .map(|k| (f64::from(pa[k]) + f64::from(pb[k]) + f64::from(pc[k])) / 3.0 - centre[k]);
+        let dot: f64 = (0..3).map(|k| n[k] * mid[k]).sum();
+        assert!(dot > 0.0, "{what}: a triangle is wound inwards");
+    }
+}
+
+fn assert_bounds(m: &MeshData, lo: [f32; 3], hi: [f32; 3], what: &str) {
+    let (l, h) = m.bounds().unwrap();
+    for k in 0..3 {
+        assert!(
+            (l[k] - lo[k]).abs() < 1e-5,
+            "{what}: min {l:?}, want {lo:?}"
+        );
+        assert!(
+            (h[k] - hi[k]).abs() < 1e-5,
+            "{what}: max {h:?}, want {hi:?}"
+        );
+    }
+}
+
+#[test]
+fn shape_meshes_are_closed_outward_and_unit_sized_on_the_ground() {
+    let centre = [0.0, 0.5, 0.0];
+    let (lo, hi) = ([-0.5, 0.0, -0.5], [0.5, 1.0, 0.5]);
+    for (what, m) in [
+        ("box", mesh::unit_box()),
+        ("cylinder", mesh::unit_cylinder()),
+        ("sphere", mesh::unit_sphere()),
+    ] {
+        assert_closed(&m, what);
+        assert_outward(&m, centre, what);
+        assert_bounds(&m, lo, hi, what);
+        assert_eq!(m.bounds().unwrap().0[1], 0.0, "{what}: base at y = 0");
+    }
+    assert_eq!(mesh::unit_box().triangle_count(), 12);
+}
+
+#[test]
+fn a_character_is_as_tall_as_its_component_and_faces_north() {
+    let c = Character::default();
+    let m = mesh::character(&c);
+    let (lo, hi) = m.body.bounds().unwrap();
+    assert!(lo[1].abs() < 1e-5 && (f64::from(hi[1]) - c.height_m).abs() < 1e-5);
+    assert!((f64::from(hi[0]) - c.radius_m).abs() < 1e-5);
+    let (vlo, vhi) = m.visor.bounds().unwrap();
+    let eye = c.eye_height_m as f32;
+    assert!(
+        vlo[1] < eye && vhi[1] > eye,
+        "the visor spans the eye height"
+    );
+    assert!(
+        vlo[2] < -(c.radius_m as f32) * 0.5,
+        "the visor is on the -Z side"
+    );
+    assert!(vhi[2] < 0.0);
+}
+
+fn valley() -> (World, HeightField) {
+    let mut world = World::new("valley", 3);
+    let terrain = Terrain {
+        size_m: 512.0,
+        cell_m: 4.0,
+        source: TerrainSource::Noise {
+            seed: 3,
+            relief_m: 60.0,
+            feature_m: 200.0,
+            octaves: 5,
+            roughness: 0.5,
+        },
+    };
+    let hf = terrain.build().unwrap();
+    world.terrain = Some(terrain);
+    (world, hf)
+}
+
+fn assert_frames(camera: &Camera, lo: [f64; 3], hi: [f64; 3]) {
+    for aspect in [16.0 / 9.0, 4.0 / 3.0, 1.0] {
+        for k in 0..8 {
+            let corner = [
+                if k & 1 == 0 { lo[0] } else { hi[0] },
+                if k & 2 == 0 { lo[1] } else { hi[1] },
+                if k & 4 == 0 { lo[2] } else { hi[2] },
+            ];
+            let [x, y] = camera
+                .project(corner, aspect)
+                .unwrap_or_else(|| panic!("corner {corner:?} behind the camera"));
+            assert!(
+                x.abs() <= 1.0 && y.abs() <= 1.0,
+                "corner {corner:?} at {x}, {y} is outside the frame (aspect {aspect})"
+            );
+        }
+    }
+}
+
+#[test]
+fn framing_sees_every_corner_of_the_terrain() {
+    let (world, hf) = valley();
+    let (y0, y1) = hf.height_range();
+    let [x0, z0] = hf.min();
+    let [x1, z1] = hf.max();
+    let camera = Camera::framing(&world, Some(&hf));
+    camera.validate().unwrap();
+    assert_frames(&camera, [x0, f64::from(y0), z0], [x1, f64::from(y1), z1]);
+    // From above, to the south-east of the centre.
+    let [cx, cy, cz] = camera.position;
+    assert!(
+        cx > 0.0 && cz > 0.0 && cy > f64::from(y1),
+        "{:?}",
+        camera.position
+    );
+    // Not absurdly far: the terrain fills a good share of the frame.
+    let distance = (cx * cx + cz * cz).sqrt();
+    assert!(distance < 1000.0, "{distance}");
+
+    // Without the height field the recipe's box is framed.
+    let camera = Camera::framing(&world, None);
+    assert_frames(&camera, [-256.0, -30.0, -256.0], [256.0, 30.0, 256.0]);
+
+    // An empty world frames the origin; a world of entities frames them.
+    let mut empty = World::new("empty", 0);
+    let camera = Camera::framing(&empty, None);
+    assert_frames(&camera, [-10.0, 0.0, -10.0], [10.0, 2.0, 10.0]);
+    empty
+        .add_entity(EntityDraft {
+            position: [100.0, 0.0, -40.0],
+            components: vec![Component::Shape(Shape {
+                kind: ShapeKind::Box,
+                size: [2.0, 6.0, 2.0],
+                color: [1.0, 0.0, 0.0],
+                solid: true,
+            })],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    let camera = Camera::framing(&empty, None);
+    assert_frames(&camera, [100.0, 0.0, -40.0], [100.0, 6.0, -40.0]);
+}
+
+#[test]
+fn first_person_sits_at_eye_height_and_looks_along_the_facing() {
+    let mut world = World::new("walk", 0);
+    for yaw in [0.0, 90.0, -135.0, 33.0] {
+        let id = world
+            .add_entity(EntityDraft {
+                position: [3.0, 2.0, -7.0],
+                rotation_y_deg: yaw,
+                components: vec![Component::Character(Character::default())],
+                ..EntityDraft::default()
+            })
+            .unwrap();
+        let e = world.entity(id).unwrap();
+        let cam = Camera::first_person(e).unwrap();
+        assert!((cam.position[1] - (2.0 + Character::default().eye_height_m)).abs() < 1e-12);
+        assert_eq!([cam.position[0], cam.position[2]], [3.0, -7.0]);
+        let d = [0, 1, 2].map(|k| cam.target[k] - cam.position[k]);
+        let len = d.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let f = yaw_forward(yaw);
+        assert!((d[0] / len - f.x).abs() < 1e-12 && d[1].abs() < 1e-12);
+        assert!((d[2] / len - f.z).abs() < 1e-12);
+
+        let third = Camera::third_person(e, 6.0);
+        third.validate().unwrap();
+        let back = [0, 1, 2].map(|k| third.position[k] - third.target[k]);
+        assert!(
+            back[0] * f.x + back[2] * f.z < 0.0,
+            "third person is behind"
+        );
+        assert!(back[1] > 0.0, "third person is above");
+        let len = back.iter().map(|v| v * v).sum::<f64>().sqrt();
+        assert!((len - 6.0).abs() < 1e-9);
+    }
+    let id = world.add_entity(EntityDraft::default()).unwrap();
+    assert_eq!(Camera::first_person(world.entity(id).unwrap()), None);
+}
+
+fn request() -> PictureRequest {
+    PictureRequest {
+        width: 640,
+        height: 360,
+        camera: Camera {
+            position: [0.0, 10.0, 20.0],
+            target: [0.0, 0.0, 0.0],
+            fov_y_deg: 60.0,
+        },
+        time_s: 0.0,
+    }
+}
+
+fn refused(r: PictureRequest, field: &str) {
+    match r.validate() {
+        Err(RenderError::BadRequest(m)) => {
+            assert!(m.contains(field), "{m:?} should name {field}");
+            assert!(RenderError::BadRequest(m).to_string().ends_with('.'));
+        }
+        other => panic!("{field}: expected a bad request, got {other:?}"),
+    }
+}
+
+#[test]
+fn bad_requests_are_refused_with_the_field_named() {
+    request().validate().unwrap();
+    let mut r = request();
+    r.width = 15;
+    refused(r, "request.width");
+    r.width = 3841;
+    refused(r, "request.width");
+    let mut r = request();
+    r.height = 2161;
+    refused(r, "request.height");
+    let mut r = request();
+    r.time_s = f64::NAN;
+    refused(r, "request.time_s");
+    let mut r = request();
+    r.camera.position[1] = f64::NAN;
+    refused(r, "camera.position[1]");
+    let mut r = request();
+    r.camera.target[2] = f64::INFINITY;
+    refused(r, "camera.target[2]");
+    for fov in [4.9, 150.1, f64::NAN] {
+        let mut r = request();
+        r.camera.fov_y_deg = fov;
+        refused(r, "camera.fov_y_deg");
+    }
+    let mut r = request();
+    r.camera.target = r.camera.position;
+    refused(r, "camera.position");
+    // The limits themselves are allowed.
+    let mut r = request();
+    (r.width, r.height, r.camera.fov_y_deg) = (16, 2160, 150.0);
+    r.validate().unwrap();
+    (r.width, r.height, r.camera.fov_y_deg) = (3840, 16, 5.0);
+    r.validate().unwrap();
+}
+
+#[test]
+fn encode_png_round_trips_and_refuses_a_wrong_length() {
+    let (w, h) = (7u32, 5u32);
+    let rgba: Vec<u8> = (0..w * h * 4).map(|i| (i * 37 % 256) as u8).collect();
+    let file = encode_png(&rgba, w, h).unwrap();
+    let decoder = png::Decoder::new(file.as_slice());
+    let mut reader = decoder.read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).unwrap();
+    assert_eq!((info.width, info.height), (w, h));
+    assert_eq!(info.color_type, png::ColorType::Rgba);
+    assert_eq!(&buf[..info.buffer_size()], rgba.as_slice());
+
+    for (len, w, h) in [(rgba.len() - 1, 7, 5), (rgba.len(), 5, 7 + 1), (0, 0, 0)] {
+        match encode_png(&rgba[..len], w, h) {
+            Err(RenderError::BadRequest(m)) => assert!(m.contains("bytes"), "{m}"),
+            other => panic!("expected a bad request, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn wind_from_the_north_blows_south_and_from_the_east_blows_west() {
+    let close = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-12);
+    assert!(
+        close(wind_towards(0.0), [0.0, 0.0, 1.0]),
+        "{:?}",
+        wind_towards(0.0)
+    );
+    assert!(
+        close(wind_towards(90.0), [-1.0, 0.0, 0.0]),
+        "{:?}",
+        wind_towards(90.0)
+    );
+    assert!(close(wind_towards(180.0), [0.0, 0.0, -1.0]));
+    assert!(close(wind_towards(270.0), [1.0, 0.0, 0.0]));
+}
+
+#[test]
+fn exposure_follows_the_light() {
+    assert_eq!(light::auto_ev(60.0), 15.0);
+    assert!((light::auto_ev(10.0) - 13.5).abs() < 1e-9);
+    // Continuous where the day curve meets the metered one, and falling into the night.
+    assert!(
+        (light::auto_ev(9.999) - 13.5).abs() < 0.2,
+        "{}",
+        light::auto_ev(9.999)
+    );
+    let mut previous = f64::INFINITY;
+    for e in (-30..=60).rev() {
+        let ev = light::auto_ev(f64::from(e));
+        assert!(ev <= previous + 1e-9, "EV rises as the sun sinks at {e}");
+        assert!(ev >= -2.5);
+        previous = ev;
+    }
+    assert!(light::auto_ev(-30.0) < 0.0);
+    assert!((light::daylight_lux(0.0) - 760.0).abs() < 60.0);
+
+    let mut env = gamecraft_world::Environment {
+        time_of_day_h: 12.0,
+        ..Default::default()
+    };
+    let noon = light::exposure_ev(&env);
+    env.time_of_day_h = 0.0;
+    let midnight = light::exposure_ev(&env);
+    assert!(
+        noon > 12.0 && midnight < 2.0,
+        "noon {noon}, midnight {midnight}"
+    );
+    env.time_of_day_h = 12.0;
+    env.mist = 1.0;
+    assert!(light::exposure_ev(&env) < noon);
+}
+
+#[test]
+fn an_unknown_species_has_a_nearest_known_id() {
+    assert!(plants::known("quercus-robur"));
+    assert!(!plants::known("quercus-robr"));
+    assert_eq!(
+        plants::nearest_species("quercus-robr"),
+        Some("quercus-robur")
+    );
+    assert_eq!(
+        plants::nearest_species("Betula Pendula"),
+        Some("betula-pendula")
+    );
+    assert_eq!(plants::edit_distance("kitten", "sitting"), 3);
+    assert_eq!(plants::edit_distance("", "abc"), 3);
+    assert!(plants::mature_height_m("quercus-robur").unwrap() > 5.0);
+}
+
+#[test]
+fn a_plant_generates_parts_with_wind_weights() {
+    let plant = plants::generate("betula-pendula", 1, 1.0).unwrap();
+    assert!(!plant.parts.is_empty());
+    for p in &plant.parts {
+        assert_eq!(p.positions.len(), p.wind.len());
+        assert_eq!(p.positions.len(), p.uvs.len());
+        assert!(p.indices.iter().all(|&i| (i as usize) < p.positions.len()));
+    }
+    assert!(plants::generate("no-such-plant", 1, 1.0).is_none());
+}
