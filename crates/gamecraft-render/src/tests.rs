@@ -1,10 +1,13 @@
 //! GPU-free tests: meshes, cameras, requests, PNG, the light and wind mappings.
 
 use crate::mesh::{self, MeshData};
-use crate::{Camera, PictureRequest, RenderError, encode_png, light, plants, wind_towards};
+use crate::{
+    Camera, PictureRequest, Quality, RenderError, encode_png, light, plants, wind_towards,
+};
 use gamecraft_math::{Rng, yaw_forward};
 use gamecraft_world::{
-    Character, Component, EntityDraft, HeightField, Shape, ShapeKind, Terrain, TerrainSource, World,
+    Character, Component, EntityDraft, HeightField, Light, Shape, ShapeKind, Terrain,
+    TerrainSource, World,
 };
 use std::collections::BTreeMap;
 
@@ -534,16 +537,16 @@ fn exposure_follows_the_light() {
         time_of_day_h: 12.0,
         ..Default::default()
     };
-    let noon = light::exposure_ev(&env);
+    let noon = light::exposure_ev(&env, false);
     env.time_of_day_h = 0.0;
-    let midnight = light::exposure_ev(&env);
+    let midnight = light::exposure_ev(&env, false);
     assert!(
         noon > 12.0 && midnight < 2.0,
         "noon {noon}, midnight {midnight}"
     );
     env.time_of_day_h = 12.0;
     env.mist = 1.0;
-    assert!(light::exposure_ev(&env) < noon);
+    assert!(light::exposure_ev(&env, false) < noon);
 }
 
 #[test]
@@ -639,4 +642,159 @@ fn the_apron_joins_the_terrain_and_ends_at_the_plane() {
     for w in outer {
         assert_eq!(w[mesh::LAYER_GRASS], 255);
     }
+}
+
+#[test]
+fn lamps_keep_the_blue_hour_and_the_night_darker() {
+    // VisionCraft's studio: with lamps the blue hour is exposed 2 EV darker, the night 0.8 EV,
+    // the day not at all.
+    for e in [20.0, 10.0] {
+        assert_eq!(light::lamp_ev(e), 0.0, "no lamp allowance by day at {e}");
+    }
+    assert!(
+        (light::lamp_ev(-2.0) - 2.0).abs() < 1e-9,
+        "{}",
+        light::lamp_ev(-2.0)
+    );
+    assert!(
+        (light::lamp_ev(-20.0) - 0.8).abs() < 1e-9,
+        "{}",
+        light::lamp_ev(-20.0)
+    );
+    for e in -30..2 {
+        assert!(
+            light::lamp_ev(f64::from(e)) > 0.0,
+            "a lamp allowance at {e}"
+        );
+    }
+    let env = gamecraft_world::Environment {
+        time_of_day_h: 0.0,
+        ..Default::default()
+    };
+    let without = light::exposure_ev(&env, false);
+    let with = light::exposure_ev(&env, true);
+    assert!(with > without && with - without < 1.0, "{without} {with}");
+}
+
+fn lit_world() -> World {
+    let mut world = World::new("lights", 1);
+    let mut add = |position: [f64; 3], yaw: f64, components: Vec<Component>| {
+        world
+            .add_entity(EntityDraft {
+                position,
+                rotation_y_deg: yaw,
+                components,
+                ..EntityDraft::default()
+            })
+            .unwrap()
+    };
+    let lantern = Light {
+        color: [1.0, 0.8, 0.5],
+        intensity_cd: 50.0,
+        range_m: 8.0,
+        on: true,
+    };
+    // 1: a character carrying a lantern, facing east (yaw -90).
+    add(
+        [10.0, 2.0, 0.0],
+        -90.0,
+        vec![
+            Component::Character(Character::default()),
+            Component::Light(lantern.clone()),
+        ],
+    );
+    // 2: a box of 1 x 3 x 1 standing at a height of 1, with a light on top.
+    add(
+        [0.0, 1.0, 5.0],
+        0.0,
+        vec![
+            Component::Shape(Shape {
+                kind: ShapeKind::Box,
+                size: [1.0, 3.0, 1.0],
+                color: [0.5; 3],
+                solid: true,
+            }),
+            Component::Light(Light::default()),
+        ],
+    );
+    // 3: a light that is off.
+    add(
+        [-5.0, 0.0, 0.0],
+        0.0,
+        vec![Component::Light(Light {
+            on: false,
+            ..Light::default()
+        })],
+    );
+    // 4: a light on its own.
+    add([-9.0, 0.5, 3.0], 0.0, vec![Component::Light(lantern)]);
+    // 5: a box without a light.
+    add(
+        [3.0, 0.0, 3.0],
+        0.0,
+        vec![Component::Shape(Shape {
+            kind: ShapeKind::Sphere,
+            size: [1.0; 3],
+            color: [0.5; 3],
+            solid: false,
+        })],
+    );
+    world
+}
+
+#[test]
+fn every_light_that_is_on_becomes_a_spot_at_a_sensible_height() {
+    let mut world = lit_world();
+    let spots = light::spots(&world);
+    assert_eq!(spots.len(), 3, "{spots:?}");
+    let [carried, beacon, alone] = [&spots[0], &spots[1], &spots[2]];
+
+    // A lantern at hand height, beside the body (outside its radius), on its right hand side:
+    // facing east, right is south (+Z).
+    let c = Character::default();
+    let [x, y, z] = carried.position;
+    assert!(
+        (y - (2.0 + c.height_m * light::HAND_HEIGHT_SHARE)).abs() < 1e-9,
+        "{y}"
+    );
+    let side = ((x - 10.0).powi(2) + z.powi(2)).sqrt();
+    assert!(side > c.radius_m, "the lantern is outside the body: {side}");
+    assert!(z > 0.0 && (x - 10.0).abs() < 1e-9, "{:?}", carried.position);
+    assert_eq!(carried.color, [1.0, 0.8, 0.5]);
+    assert!((carried.lumens - 50.0 * 4.0 * std::f64::consts::PI).abs() < 1e-9);
+    assert_eq!(carried.range_m, 8.0);
+
+    // On a box: over its top (base 1, 3 m tall).
+    assert_eq!(beacon.position[0], 0.0);
+    assert_eq!(beacon.position[2], 5.0);
+    let top = 1.0 + 3.0 * world.entities().nth(1).unwrap().scale;
+    assert!(
+        beacon.position[1] > top && beacon.position[1] < top + 0.5,
+        "{:?} over the top {top}",
+        beacon.position
+    );
+    // On its own: a little over its base.
+    assert!(alone.position[1] > 0.5 && alone.position[1] <= 0.5 + 1.5);
+
+    // The carried light moves with its character.
+    let id = world.entities().next().unwrap().id;
+    world.entity_mut(id).unwrap().position = [20.0, 2.0, 0.0];
+    let moved = light::spots(&world);
+    assert!((moved[0].position[0] - 20.0).abs() < 1e-9);
+}
+
+#[test]
+fn quality_names_parse_and_a_wrong_one_names_the_choices() {
+    assert_eq!(Quality::parse("low"), Ok(Quality::Low));
+    assert_eq!(Quality::parse("medium"), Ok(Quality::Medium));
+    assert_eq!(Quality::parse("high"), Ok(Quality::High));
+    assert_eq!(Quality::default(), Quality::Medium);
+    for q in [Quality::Low, Quality::Medium, Quality::High] {
+        assert_eq!(Quality::parse(q.name()), Ok(q));
+    }
+    let e = Quality::parse("ultra").unwrap_err();
+    assert!(
+        e.contains("ultra") && e.contains("low, medium, high"),
+        "{e}"
+    );
 }

@@ -286,6 +286,11 @@ mod tests {
                 &["gamecraft-render", "gamecraft-automation", "winit"],
                 &[],
             ),
+            package(
+                "gamecraft",
+                &["gamecraft-render", "gamecraft-automation", "winit"],
+                &[],
+            ),
             package("xtask", &["serde_json"], &[]),
         ]
     }

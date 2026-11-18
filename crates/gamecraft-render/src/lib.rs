@@ -28,6 +28,7 @@
 // so the platform's sines and powers are fine here.
 #![allow(clippy::disallowed_methods)]
 
+mod blit;
 mod camera;
 mod image;
 mod light;
@@ -53,6 +54,42 @@ pub const PICTURE_MIN_SIDE: u32 = 16;
 pub const PICTURE_MAX_WIDTH: u32 = 3840;
 /// Tallest picture, pixels.
 pub const PICTURE_MAX_HEIGHT: u32 = 2160;
+
+/// The effects of live frames ([`WorldRenderer::set_quality`]): the renderer's presets of
+/// shadows, ambient occlusion, anti-aliasing and render scale. Pictures are always drawn at the
+/// highest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Quality {
+    /// For slow or integrated GPUs: fewer effects, a lower render scale.
+    Low,
+    /// The default: ambient occlusion, bloom, three quarters of the size upscaled.
+    #[default]
+    Medium,
+    /// Full size, 4x MSAA, soft and contact shadows.
+    High,
+}
+
+impl Quality {
+    /// Every quality, lowest first.
+    pub const ALL: [Quality; 3] = [Quality::Low, Quality::Medium, Quality::High];
+
+    /// Its name: `low`, `medium` or `high`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Quality::Low => "low",
+            Quality::Medium => "medium",
+            Quality::High => "high",
+        }
+    }
+
+    /// The quality of a name; the error names the value and the choices.
+    pub fn parse(name: &str) -> Result<Quality, String> {
+        Quality::ALL
+            .into_iter()
+            .find(|q| q.name() == name)
+            .ok_or_else(|| format!("quality `{name}` is not known; use one of low, medium, high"))
+    }
+}
 
 /// What to draw: the size, the camera and the animation clock.
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -15,6 +15,10 @@ change.
 | `crates/gamecraft-automation/src/{lib,lines,fields,docs,rpc,mcp,host,commands}.rs`, `src/files.rs` | Ported from the files of the same names in `crates/visioncraft-automation/src/` (which come in part from 3DCraft's `craft3d-automation`, MIT); `files.rs` from `Access::resolve` in `host.rs`; the tests `protocol.rs`, `mcp.rs`, `docs.rs` likewise | MIT |
 | `docs/control-protocol.md`, `docs/agent.md` | The shape of VisionCraft's documents of the same names | MIT |
 | `crates/gamecraft-sim/src/perception.rs` | Mist and rain extinction (`mist_extinction`, `rain_extinction`) from `crates/visioncraft-render/src/atmosphere.rs`, so enemies see what the picture shows | MIT |
+| `crates/gamecraft-render/src/light.rs` (`lamp_ev`) | The lamp term of `auto_ev` in `apps/visioncraft/src/studio.rs` | MIT |
+| `crates/gamecraft-render/src/blit.rs`, `renderer.rs` (live path) | Follows `Renderer::render`, `resize`, `set_quality` of `crates/visioncraft-render/src/lib.rs`; the blit stands in for VisionCraft's hand-over of its output to egui | MIT |
+| `apps/gamecraft/index.html` | The WebGPU check, the error card and its help texts and the lost-device hook of `apps/visioncraft/index.html` | MIT |
+| `apps/gamecraft/browser-smoke/smoke.mjs` | Adapted from `apps/visioncraft/browser-smoke/smoke.mjs`, with its Chromium flags | MIT |
 | `crates/gamecraft-render/src/light.rs` | `auto_ev`, `MIST_EV`, `NIGHT_SKY_LUX`, the natural look's grade and `haze_extinction` from `apps/visioncraft/src/studio.rs`; `daylight_lux` and `usno_atmos` (after USNO Circular 171) from `crates/visioncraft-core/src/sun.rs` | MIT |
 | `crates/gamecraft-render/src/renderer.rs` | `plant_material_desc` from `apps/visioncraft/src/scene.rs`; plant parts as meshes following `apps/visioncraft/src/plants.rs` | MIT |
 | `crates/gamecraft-engine/src/session.rs` | Modelled on `crates/visioncraft-core/src/session.rs` (registry, checks before the handler, snapshot undo, transactions) | MIT |

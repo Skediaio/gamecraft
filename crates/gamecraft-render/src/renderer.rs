@@ -1,13 +1,17 @@
 //! The world renderer: the only module that touches VisionCraft's renderer
 //! (`visioncraft-render`). A VisionCraft API change lands here.
 
+use crate::blit::Blit;
 use crate::light;
 use crate::mesh::{self, MeshData};
 use crate::plants::{self, PartKind, PlantImage};
+use crate::{Camera, Quality, RenderError};
 #[cfg(not(target_arch = "wasm32"))]
-use crate::{Picture, PictureRequest, PictureStats, RenderError};
+use crate::{Picture, PictureRequest, PictureStats};
 use gamecraft_math::{DQuat, DVec3, deg_to_rad};
-use gamecraft_world::{Character, Entity, Environment, HeightField, ShapeKind, Terrain, World};
+use gamecraft_world::{
+    Character, Entity, EntityId, Environment, HeightField, Plant, Shape, ShapeKind, Terrain, World,
+};
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -15,9 +19,11 @@ use visioncraft_render as vc;
 
 /// The output format: sRGB-encoded RGBA8.
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
-/// The size of the renderer's live targets. Pictures are offscreen stills at their own size;
-/// the live view is never shown, so it stays tiny.
+/// The size of the renderer's live targets until [`WorldRenderer::resize`]. Pictures are
+/// offscreen stills at their own size; a renderer that only makes pictures keeps them tiny.
 const LIVE_SIZE: (u32, u32) = (64, 36);
+/// The largest side of the live targets, pixels.
+const LIVE_MAX_SIDE: u32 = 8192;
 /// Roughness of shapes and character bodies.
 const SHAPE_ROUGHNESS: f32 = 0.6;
 /// A character's body: safety orange, linear RGB, clear against grass, rock and sky.
@@ -34,11 +40,8 @@ const LAYER_COLORS: [[f32; 4]; mesh::TERRAIN_LAYERS] = [
 const GROUND_COLOR: [f32; 3] = [0.065, 0.11, 0.03];
 /// How far sun shadows reach: twice the distance to the point looked at, within these
 /// bounds (metres).
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const SHADOW_SHARE: f64 = 2.0;
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const SHADOW_MIN_M: f64 = 80.0;
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const SHADOW_MAX_M: f64 = 3000.0;
 /// The share of the sun's glow in the haze by day (VisionCraft's `studio.rs`).
 const SUN_GLOW: f64 = 0.5;
@@ -74,21 +77,87 @@ struct Built {
     meshes: Vec<vc::MeshId>,
     materials: Vec<vc::MaterialId>,
     textures: Vec<vc::TextureId>,
+    /// The character items, whose instances follow the characters without a rebuild.
+    characters: Vec<CharacterGroup>,
+}
+
+/// One character item: the characters it draws, in instance order, and where it drew them.
+struct CharacterGroup {
+    item: vc::ItemId,
+    ids: Vec<EntityId>,
+    instances: Vec<Mat4>,
+}
+
+/// What of an entity the scene's geometry is built from. A character's position and rotation
+/// are left out (unless it also has a shape or a plant): a character that walks moves its
+/// instance, it does not rebuild the scene.
+#[derive(PartialEq)]
+struct DrawnEntity {
+    id: EntityId,
+    pose: Option<([f64; 3], f64)>,
+    scale: f64,
+    shape: Option<Shape>,
+    plant: Option<Plant>,
+    character: Option<Character>,
+}
+
+impl DrawnEntity {
+    /// What of `e` is drawn; `None` when it draws nothing (a zone, a light, tags).
+    fn of(e: &Entity) -> Option<DrawnEntity> {
+        let (shape, plant, character) = (e.shape(), e.plant(), e.character());
+        if shape.is_none() && plant.is_none() && character.is_none() {
+            return None;
+        }
+        let walks = character.is_some() && shape.is_none() && plant.is_none();
+        Some(DrawnEntity {
+            id: e.id,
+            pose: (!walks).then_some((e.position, e.rotation_y_deg)),
+            scale: e.scale,
+            shape: shape.cloned(),
+            plant: plant.cloned(),
+            character: character.cloned(),
+        })
+    }
+
+    /// Whether `e` draws the same as this.
+    fn is(&self, e: &Entity) -> bool {
+        let walks = self.pose.is_none();
+        self.id == e.id
+            && self.scale == e.scale
+            && self.shape.as_ref() == e.shape()
+            && self.plant.as_ref() == e.plant()
+            && self.character.as_ref() == e.character()
+            && (walks || self.pose == Some((e.position, e.rotation_y_deg)))
+    }
 }
 
 /// What the scene's geometry was built from; a sync with the same skips the rebuild.
-#[derive(PartialEq)]
 struct GeometryKey {
     terrain: Option<Terrain>,
     heights: Option<HeightField>,
-    entities: Vec<Entity>,
+    entities: Vec<DrawnEntity>,
 }
 
 impl GeometryKey {
+    fn of(world: &World, heights: Option<&HeightField>) -> GeometryKey {
+        GeometryKey {
+            terrain: world.terrain.clone(),
+            heights: heights.cloned(),
+            entities: world.entities().filter_map(DrawnEntity::of).collect(),
+        }
+    }
+
     fn matches(&self, world: &World, heights: Option<&HeightField>) -> bool {
-        self.terrain == world.terrain
-            && self.heights.as_ref() == heights
-            && self.entities.iter().eq(world.entities())
+        if self.terrain != world.terrain || self.heights.as_ref() != heights {
+            return false;
+        }
+        let mut drawn = world
+            .entities()
+            .filter(|e| e.shape().is_some() || e.plant().is_some() || e.character().is_some());
+        self.entities
+            .iter()
+            .all(|k| drawn.next().is_some_and(|e| k.is(e)))
+            && drawn.next().is_none()
     }
 }
 
@@ -104,9 +173,25 @@ struct PlantTextures {
 /// Draws GameCraft worlds with VisionCraft's renderer on one wgpu device.
 ///
 /// [`WorldRenderer::sync`] makes the renderer's scene match a world; [`WorldRenderer::render`]
-/// draws it offscreen and reads the pixels back.
+/// draws it offscreen and reads the pixels back; [`WorldRenderer::draw`] records a live frame
+/// into a window's surface (after [`WorldRenderer::resize`] and
+/// [`WorldRenderer::set_quality`]).
 pub struct WorldRenderer {
     renderer: vc::Renderer,
+    device: wgpu::Device,
+    blit: Blit,
+    /// The live targets' size, pixels.
+    size: (u32, u32),
+    /// The environment and whether lamps shone at the last sync: unchanged, nothing is set.
+    environment: Option<(Environment, bool)>,
+    /// The lights handed to the renderer at the last sync.
+    spots: Vec<light::Spot>,
+    /// Lights the renderer had to leave out at the last change of the lights, as a sentence.
+    light_problem: Option<String>,
+    /// The character left out of the picture (a first-person view's own body).
+    hidden: Option<EntityId>,
+    /// How many times the scene's geometry was built.
+    rebuilds: u64,
     units: Option<UnitMeshes>,
     /// Terrain chunks are shaded by the layers; the renderer still wants a material per item.
     terrain_material: vc::MaterialId,
@@ -124,6 +209,7 @@ impl WorldRenderer {
     pub fn new(device: wgpu::Device, queue: wgpu::Queue) -> WorldRenderer {
         let mut renderer = vc::Renderer::new(&device, &queue, OUTPUT_FORMAT);
         renderer.resize(LIVE_SIZE.0, LIVE_SIZE.1);
+        let blit = Blit::new(&device);
         renderer.set_quality(vc::Quality::LOW);
         let mut setup_problems = Vec::new();
         if let Err(e) = renderer.set_sky(&vc::Sky::Physical) {
@@ -167,6 +253,14 @@ impl WorldRenderer {
         renderer.set_grade(power, saturation);
         let mut world_renderer = WorldRenderer {
             renderer,
+            device,
+            blit,
+            size: LIVE_SIZE,
+            environment: None,
+            spots: Vec::new(),
+            light_problem: None,
+            hidden: None,
+            rebuilds: 0,
             units,
             terrain_material,
             built: Built::default(),
@@ -174,7 +268,7 @@ impl WorldRenderer {
             problems: setup_problems.clone(),
             setup_problems,
         };
-        world_renderer.apply_environment(&Environment::default());
+        world_renderer.apply_environment(&Environment::default(), false);
         world_renderer
     }
 
@@ -183,24 +277,157 @@ impl WorldRenderer {
     /// they also come back with every picture until the next sync.
     ///
     /// `heights` is the world's height field when the caller has it; without it the terrain
-    /// recipe is built here. The environment is applied on every call; the geometry is rebuilt
-    /// only when the terrain or an entity changed, and everything the previous build added is
-    /// freed first.
+    /// recipe is built here. The environment and the lights (every `light` component that is
+    /// on) follow the world on every call. The geometry is rebuilt only when the terrain or
+    /// what an entity draws changed, and everything the previous build added is freed first;
+    /// a character that only walks or turns moves its instance, cheap enough for every frame.
     pub fn sync(&mut self, world: &World, heights: Option<&HeightField>) -> Vec<String> {
-        self.apply_environment(&world.environment);
+        let spots = light::spots(world);
+        if spots != self.spots {
+            let lights: Vec<vc::Light> = spots.iter().map(vc_light).collect();
+            let dropped = self.renderer.set_lights(&lights);
+            self.light_problem = (dropped > 0).then(|| {
+                format!(
+                    "{dropped} lights were left out where too many shine on one spot; spread \
+                     the lights out or turn some off."
+                )
+            });
+            self.spots = spots;
+        }
+        let lamps = !self.spots.is_empty();
+        let environment_changed = self
+            .environment
+            .as_ref()
+            .is_none_or(|(env, l)| *env != world.environment || *l != lamps);
+        if environment_changed {
+            self.apply_environment(&world.environment, lamps);
+        }
         let unchanged = self
             .synced
             .as_ref()
             .is_some_and(|key| key.matches(world, heights));
-        if !unchanged {
+        if unchanged {
+            self.move_characters(world);
+        } else {
             self.rebuild(world, heights);
-            self.synced = Some(GeometryKey {
-                terrain: world.terrain.clone(),
-                heights: heights.cloned(),
-                entities: world.entities().cloned().collect(),
-            });
+            self.rebuilds += 1;
+            self.synced = Some(GeometryKey::of(world, heights));
+            self.move_characters(world);
         }
-        self.problems.clone()
+        self.problems()
+    }
+
+    /// The problems of the last sync, the lights' included.
+    fn problems(&self) -> Vec<String> {
+        let mut problems = self.problems.clone();
+        problems.extend(self.light_problem.iter().cloned());
+        problems
+    }
+
+    /// Leaves character `id` out of the picture from the next [`WorldRenderer::sync`] on (a
+    /// first-person view's own body, which would fill the view from inside), or none. Its
+    /// light still shines. No rebuild.
+    pub fn set_hidden_character(&mut self, id: Option<EntityId>) {
+        self.hidden = id;
+    }
+
+    /// How many times [`WorldRenderer::sync`] built the scene's geometry: a count of work for
+    /// tests and measurements.
+    pub fn rebuild_count(&self) -> u64 {
+        self.rebuilds
+    }
+
+    /// Sets the live frames' size in pixels (each side 1 to 8192): call it when the window's
+    /// surface changes size. Pictures from [`WorldRenderer::render`] keep their own size.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        let size = (
+            width.clamp(1, LIVE_MAX_SIDE),
+            height.clamp(1, LIVE_MAX_SIDE),
+        );
+        if size != self.size {
+            self.size = size;
+            self.renderer.resize(size.0, size.1);
+        }
+    }
+
+    /// The live frames' size in pixels.
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    /// The effects of live frames ([`Quality`]); pictures are always drawn at the highest.
+    pub fn set_quality(&mut self, quality: Quality) {
+        let preset = match quality {
+            Quality::Low => vc::Quality::LOW,
+            Quality::Medium => vc::Quality::MEDIUM,
+            Quality::High => vc::Quality::HIGH,
+        };
+        // The presets' fast-shading shaders leave holes in surfaces on Intel's Mesa Vulkan
+        // driver (seen 2026-11-18 on Iris Xe, Mesa 26.2: the sky shows through a box), so live
+        // frames use the full shaders at every quality until VisionCraft fixes that.
+        self.renderer.set_quality(vc::Quality {
+            fast_shading: false,
+            ..preset
+        });
+    }
+
+    /// Records a live frame of the synced scene from `camera` into `target`, stretched to its
+    /// size, with the wind's sway at `time_s`; submit `encoder` before the next frame.
+    ///
+    /// The target is a colour texture view in its texture's own format (a window's surface,
+    /// or any single-sampled texture made with `RENDER_ATTACHMENT`); an sRGB format and a
+    /// plain one give the same picture. The frame is drawn at the size of
+    /// [`WorldRenderer::resize`]. Errors name what is wrong: a bad camera or clock, a target
+    /// that cannot be drawn into.
+    pub fn draw(
+        &mut self,
+        camera: &Camera,
+        time_s: f64,
+        target: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<(), RenderError> {
+        camera.validate()?;
+        if !time_s.is_finite() {
+            return Err(RenderError::BadRequest(format!(
+                "time_s {time_s} is not a finite number of seconds; use for example 0"
+            )));
+        }
+        let format = Blit::check_target(&self.device, target)?;
+        let aspect = f64::from(self.size.0) / f64::from(self.size.1);
+        let (view, proj, eye) = self.aim(camera, aspect, time_s);
+        self.renderer.set_camera(view, proj, eye);
+        let output = self.renderer.render(encoder);
+        self.blit
+            .record(&self.device, encoder, output, target, format);
+        Ok(())
+    }
+
+    /// Shadows and the clock for a view from `camera`; its matrices and eye.
+    fn aim(&mut self, camera: &Camera, aspect: f64, time_s: f64) -> (Mat4, Mat4, Vec3) {
+        let reach =
+            (DVec3::from_array(camera.target) - DVec3::from_array(camera.position)).length();
+        self.renderer
+            .set_shadow_distance((reach * SHADOW_SHARE).clamp(SHADOW_MIN_M, SHADOW_MAX_M) as f32);
+        self.renderer.set_time(time_s);
+        camera.matrices(aspect)
+    }
+
+    /// Moves every character item's instances to where its characters are now.
+    fn move_characters(&mut self, world: &World) {
+        let hidden = self.hidden;
+        for group in &mut self.built.characters {
+            let instances: Vec<Mat4> = group
+                .ids
+                .iter()
+                .filter(|&&id| Some(id) != hidden)
+                .filter_map(|&id| world.entity(id))
+                .map(|e| placement(e.position, e.rotation_y_deg, [1.0; 3]))
+                .collect();
+            if instances != group.instances {
+                self.renderer.set_instances(group.item, &instances);
+                group.instances = instances;
+            }
+        }
     }
 
     /// Draws the synced scene and waits for the pixels (native only).
@@ -209,13 +436,7 @@ impl WorldRenderer {
         request.validate()?;
         let (width, height) = (request.width, request.height);
         let aspect = f64::from(width) / f64::from(height);
-        let (view, proj, eye) = request.camera.matrices(aspect);
-        let reach = (DVec3::from_array(request.camera.target)
-            - DVec3::from_array(request.camera.position))
-        .length();
-        self.renderer
-            .set_shadow_distance((reach * SHADOW_SHARE).clamp(SHADOW_MIN_M, SHADOW_MAX_M) as f32);
-        self.renderer.set_time(request.time_s);
+        let (view, proj, eye) = self.aim(&request.camera, aspect, request.time_s);
         let rgba = self
             .renderer
             .render_still(width, height, view, proj, eye)
@@ -238,7 +459,7 @@ impl WorldRenderer {
                 draws: u64::from(stats.draw_calls),
                 instances: u64::from(stats.instances),
             },
-            problems: self.problems.clone(),
+            problems: self.problems(),
         })
     }
 
@@ -248,8 +469,10 @@ impl WorldRenderer {
         self.renderer.item_count()
     }
 
-    /// Sun, sky, clouds, mist, rain, wind, haze and exposure from the environment.
-    fn apply_environment(&mut self, env: &Environment) {
+    /// Sun, sky, clouds, mist, rain, wind, haze and exposure from the environment; `lamps`
+    /// when lights shine (the exposure keeps dusk and night darker so their pools read).
+    fn apply_environment(&mut self, env: &Environment, lamps: bool) {
+        self.environment = Some((env.clone(), lamps));
         let r = &mut self.renderer;
         let sun = env.sun();
         r.set_sun(&vc::Sun::from_angles(
@@ -278,7 +501,10 @@ impl WorldRenderer {
             sun_glow: (SUN_GLOW * (1.0 - night)) as f32,
             clear_m: 0.0,
         });
-        r.set_exposure(light::exposure_ev(env) as f32);
+        r.set_exposure(light::exposure_ev(env, lamps) as f32);
+        // A changed sky is met at once, not spread over the next frames (a live frame would
+        // otherwise show the old sky in its haze and reflections for a while).
+        r.finish_environment();
     }
 
     /// Frees the previous build and adds terrain, ground, shapes, characters and plants.
@@ -323,8 +549,22 @@ impl WorldRenderer {
     }
 }
 
+/// A light for the renderer.
+fn vc_light(s: &light::Spot) -> vc::Light {
+    let [x, y, z] = s.position;
+    let [r, g, b] = s.color;
+    vc::Light {
+        position: Vec3::new(x as f32, y as f32, z as f32),
+        kind: vc::LightKind::Point,
+        color: Vec3::new(r, g, b),
+        intensity: s.lumens as f32,
+        range_m: s.range_m as f32,
+    }
+}
+
 /// Removes everything a build added.
 fn free(r: &mut vc::Renderer, built: &mut Built) {
+    built.characters.clear();
     for id in built.items.drain(..) {
         r.remove_item(id);
     }
@@ -416,13 +656,18 @@ impl Scene<'_> {
         id
     }
 
-    fn add_item(&mut self, parts: &[(vc::MeshId, vc::MaterialId)], instances: &[Mat4]) {
+    fn add_item(
+        &mut self,
+        parts: &[(vc::MeshId, vc::MaterialId)],
+        instances: &[Mat4],
+    ) -> vc::ItemId {
         let lods: Vec<(vc::MeshId, vc::MaterialId, f32)> = parts
             .iter()
             .map(|&(mesh, material)| (mesh, material, f32::INFINITY))
             .collect();
         let id = self.r.add_lod_item(&lods, instances);
         self.built.items.push(id);
+        id
     }
 
     /// The material of a plain linear colour, made once per build.
@@ -497,30 +742,37 @@ impl Scene<'_> {
 
     /// Characters: one body and visor mesh per distinct size, an instance per character.
     fn characters(&mut self, world: &World) {
-        let mut groups: BTreeMap<[u64; 3], (Character, Vec<Mat4>)> = BTreeMap::new();
+        // Per size: the body, the characters and their instances.
+        type Group = (Character, Vec<EntityId>, Vec<Mat4>);
+        let mut groups: BTreeMap<[u64; 3], Group> = BTreeMap::new();
         for e in world.entities() {
             let Some(c) = e.character() else { continue };
             let key = [c.height_m, c.radius_m, c.eye_height_m].map(f64::to_bits);
-            groups
+            let (_, ids, instances) = groups
                 .entry(key)
-                .or_insert_with(|| (c.clone(), Vec::new()))
-                .1
-                .push(placement(e.position, e.rotation_y_deg, [1.0; 3]));
+                .or_insert_with(|| (c.clone(), Vec::new(), Vec::new()));
+            ids.push(e.id);
+            instances.push(placement(e.position, e.rotation_y_deg, [1.0; 3]));
         }
         if groups.is_empty() {
             return;
         }
         let body_material = self.color(CHARACTER_COLOR);
         let visor_material = self.color(VISOR_COLOR);
-        for (character, instances) in groups.into_values() {
+        for (character, ids, instances) in groups.into_values() {
             let meshes = mesh::character(&character);
             let body = self.add_mesh(&meshes.body, "a character's body");
             let visor = self.add_mesh(&meshes.visor, "a character's visor");
             if let (Some(body), Some(visor)) = (body, visor) {
-                self.add_item(
+                let item = self.add_item(
                     &[(body, body_material), (visor, visor_material)],
                     &instances,
                 );
+                self.built.characters.push(CharacterGroup {
+                    item,
+                    ids,
+                    instances,
+                });
             }
         }
     }

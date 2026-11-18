@@ -3,10 +3,12 @@
 //! The exposure follows VisionCraft's studio (`apps/visioncraft/src/studio.rs`: `auto_ev`,
 //! `look_grade`, `haze_extinction`, `MIST_EV`), and the daylight illuminance its sun module
 //! (`crates/visioncraft-core/src/sun.rs`: `daylight_lux`, `usno_atmos`, after USNO Circular
-//! 171), ported to the inputs GameCraft has (no moon, no lamps, the "natural" look).
+//! 171), ported to the inputs GameCraft has (no moon, the "natural" look). The world's
+//! `light` components become point lights here ([`spots`]), and lamps change the exposure as
+//! VisionCraft's studio does it ([`lamp_ev`]).
 
-use gamecraft_math::yaw_forward;
-use gamecraft_world::Environment;
+use gamecraft_math::{DVec3, yaw_forward};
+use gamecraft_world::{Entity, Environment, World};
 
 /// Cloud cover above which the layer is a closed grey overcast.
 pub(crate) const OVERCAST_COVER: f64 = 0.85;
@@ -99,11 +101,87 @@ fn natural_lift(elevation_deg: f64) -> f64 {
 /// The natural look's contrast power and saturation (`studio.rs`, `look_grade`).
 pub(crate) const NATURAL_GRADE: (f32, f32) = (1.1, 1.2);
 
+/// The stops a photographer keeps the picture darker when lamps shine: 2 in the blue hour (the
+/// sky keeps a deep blue and the lamps glow), 0.8 in full night (the lamps' pools carry the
+/// picture), none by day. Ported from VisionCraft's `apps/visioncraft/src/studio.rs`
+/// (`auto_ev` with `lamps`).
+pub(crate) fn lamp_ev(elevation_deg: f64) -> f64 {
+    let e = elevation_deg;
+    if !e.is_finite() {
+        return 0.0;
+    }
+    let dusk = ((2.0 - e) / 4.0).clamp(0.0, 1.0);
+    let night = ((-e - 9.0) / 3.0).clamp(0.0, 1.0);
+    dusk * (2.0 - 1.2 * night)
+}
+
 /// The exposure (EV100) for an environment: the automatic exposure for the sun's elevation,
-/// the natural look's lift by day, opened up in mist.
-pub(crate) fn exposure_ev(env: &Environment) -> f64 {
+/// the natural look's lift by day, opened up in mist, and kept darker at dusk and night when
+/// `lamps` shine ([`lamp_ev`]).
+pub(crate) fn exposure_ev(env: &Environment, lamps: bool) -> f64 {
     let elevation = env.sun().elevation_deg;
-    auto_ev(elevation) - natural_lift(elevation) - MIST_EV * env.mist.clamp(0.0, 1.0)
+    let lamp = if lamps { lamp_ev(elevation) } else { 0.0 };
+    auto_ev(elevation) - natural_lift(elevation) - MIST_EV * env.mist.clamp(0.0, 1.0) + lamp
+}
+
+/// A lantern carried by a character hangs at this share of its height (about a hand's height).
+pub(crate) const HAND_HEIGHT_SHARE: f64 = 0.55;
+/// How far beyond the body's radius a carried lantern hangs, at the right hand, metres: outside
+/// the body, so it lights the body and the ground instead of shining from inside it.
+const HAND_REACH_M: f64 = 0.15;
+/// How far over the top of an entity's shape its light sits, metres: clear of the top face, so
+/// the shape's top is lit and the light is not inside it.
+const OVER_TOP_M: f64 = 0.25;
+/// The height over its base of a light on an entity without a shape or a body, metres.
+const BARE_LIGHT_HEIGHT_M: f64 = 1.0;
+
+/// A point light ready for the renderer, in plain numbers.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Spot {
+    /// Where it shines from, metres.
+    pub position: [f64; 3],
+    /// Linear RGB.
+    pub color: [f32; 3],
+    /// Luminous flux, lumens: the component's candela over the full sphere (4 pi).
+    pub lumens: f64,
+    /// Where it has faded to nothing, metres.
+    pub range_m: f64,
+}
+
+/// Every `light` component of `world` that is on, in entity order, as a point light: a lantern
+/// at hand height beside a character (it moves with it), over the top of a shape, else a metre
+/// over the entity's base. Lights with a non-finite position are left out.
+pub(crate) fn spots(world: &World) -> Vec<Spot> {
+    world
+        .entities()
+        .filter_map(|e| {
+            let light = e.light()?;
+            if !light.on {
+                return None;
+            }
+            let position = light_position(e);
+            position.is_finite().then(|| Spot {
+                position: position.to_array(),
+                color: light.color,
+                lumens: light.intensity_cd.max(0.0) * 4.0 * std::f64::consts::PI,
+                range_m: light.range_m,
+            })
+        })
+        .collect()
+}
+
+/// Where an entity's light shines from (see [`spots`]).
+fn light_position(e: &Entity) -> DVec3 {
+    let base = DVec3::from_array(e.position);
+    if let Some(c) = e.character() {
+        // Right of the facing: the facing turned a quarter clockwise seen from above.
+        let right = yaw_forward(e.rotation_y_deg - 90.0);
+        base + DVec3::Y * (c.height_m * HAND_HEIGHT_SHARE) + right * (c.radius_m + HAND_REACH_M)
+    } else if let Some(s) = e.shape() {
+        base + DVec3::Y * (s.size[1] * e.scale + OVER_TOP_M)
+    } else {
+        base + DVec3::Y * BARE_LIGHT_HEIGHT_M
+    }
 }
 
 /// How far below the horizon the sun is, as 0 (day, above 1 degree) to 1 (6 degrees under):

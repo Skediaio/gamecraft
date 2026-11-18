@@ -2,7 +2,8 @@
 //! adapter, and fail instead when `GAMECRAFT_REQUIRE_GPU=1`.
 //!
 //! `pictures_of_a_valley_and_a_walker` writes `out/render-valley.png` and
-//! `out/render-walker.png` at the workspace root for a person (or agent) to look at.
+//! `out/render-walker.png`, `a_night_valley_is_lit_where_the_lights_are_on` writes
+//! `out/render-night.png`, at the workspace root for a person (or agent) to look at.
 
 // Integration tests are compiled as their own crates, outside `cfg(test)`, so clippy.toml's
 // test allowances do not reach their helper functions. Picture statistics are not part of the
@@ -16,9 +17,11 @@
 )]
 
 use gamecraft_math::Rng;
-use gamecraft_render::{Camera, Picture, PictureRequest, WorldRenderer, encode_png, headless_gpu};
+use gamecraft_render::{
+    Camera, Picture, PictureRequest, Quality, WorldRenderer, encode_png, headless_gpu,
+};
 use gamecraft_world::{
-    Character, Component, EntityDraft, HeightField, Plant, Shape, ShapeKind, Terrain,
+    Character, Component, EntityDraft, HeightField, Light, Plant, Shape, ShapeKind, Terrain,
     TerrainSource, World,
 };
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -421,4 +424,309 @@ fn pictures_of_a_valley_and_a_walker() {
     let p = r.render(&request(1280, 720, third)).unwrap();
     println!("walker: {:?}", p.stats);
     save("render-walker.png", &p);
+}
+
+/// Mean luminance (0 to 255) of the `half`-pixel square round the pixel where `point` appears.
+fn luminance_at(p: &Picture, camera: &Camera, point: [f64; 3], half: i64) -> f64 {
+    let aspect = f64::from(p.width) / f64::from(p.height);
+    let [x, y] = camera.project(point, aspect).expect("the point is in view");
+    let px = ((x * 0.5 + 0.5) * f64::from(p.width)) as i64;
+    let py = ((0.5 - y * 0.5) * f64::from(p.height)) as i64;
+    let mut sum = 0.0;
+    let mut n = 0.0;
+    for yy in py - half..=py + half {
+        for xx in px - half..=px + half {
+            assert!(
+                (0..i64::from(p.width)).contains(&xx) && (0..i64::from(p.height)).contains(&yy),
+                "{point:?} is inside the picture"
+            );
+            let i = (yy as usize * p.width as usize + xx as usize) * 4;
+            sum += luminance([p.rgba[i], p.rgba[i + 1], p.rgba[i + 2]].map(f64::from));
+            n += 1.0;
+        }
+    }
+    sum / n
+}
+
+#[test]
+fn a_night_valley_is_lit_where_the_lights_are_on() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let mut world = World::new("night valley", 3);
+    let terrain = Terrain {
+        size_m: 160.0,
+        cell_m: 2.0,
+        source: TerrainSource::Noise {
+            seed: 3,
+            relief_m: 8.0,
+            feature_m: 120.0,
+            octaves: 4,
+            roughness: 0.5,
+        },
+    };
+    let hf = terrain.build().unwrap();
+    world.terrain = Some(terrain);
+    world.environment.time_of_day_h = 0.0;
+    let ground = |x: f64, z: f64| [x, hf.height_at(x, z).unwrap(), z];
+    // Three lantern posts: west and east on, the middle one off.
+    let posts = [(-20.0, true), (0.0, false), (20.0, true)];
+    for (x, on) in posts {
+        world
+            .add_entity(EntityDraft {
+                position: ground(x, 0.0),
+                components: vec![
+                    shape(ShapeKind::Cylinder, [0.3, 2.5, 0.3], [0.3, 0.3, 0.3]),
+                    Component::Light(Light {
+                        color: [1.0, 0.8, 0.55],
+                        intensity_cd: 150.0,
+                        range_m: 9.0,
+                        on,
+                    }),
+                ],
+                ..EntityDraft::default()
+            })
+            .unwrap();
+    }
+    let problems = r.sync(&world, Some(&hf));
+    assert!(problems.is_empty(), "{problems:?}");
+    let camera = Camera {
+        position: [0.0, ground(0.0, 30.0)[1] + 22.0, 30.0],
+        target: ground(0.0, 0.0),
+        fov_y_deg: 70.0,
+    };
+    let p = r.render(&request(960, 540, camera)).unwrap();
+    save("render-night.png", &p);
+    let spot = |x: f64| luminance_at(&p, &camera, ground(x, 2.0), 4);
+    let (west, middle, east) = (spot(-20.0), spot(0.0), spot(20.0));
+    let dark = luminance_at(&p, &camera, ground(0.0, -12.0), 4);
+    println!("west {west:.1}, middle {middle:.1}, east {east:.1}, dark {dark:.1}");
+    for (name, lit) in [("west", west), ("east", east)] {
+        assert!(
+            lit > 3.0 * dark + 10.0,
+            "the {name} light's spot ({lit:.1}) is much brighter than the dark ground ({dark:.1})"
+        );
+    }
+    assert!(
+        middle < 1.5 * dark + 6.0,
+        "the switched-off light leaves its spot dark: {middle:.1} against {dark:.1}"
+    );
+}
+
+/// Draws `frames` live frames into a new texture of `format` and reads it back as RGBA.
+fn draw_into(
+    r: &mut WorldRenderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    camera: &Camera,
+    (width, height): (u32, u32),
+    frames: u32,
+) -> Vec<u8> {
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("test target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+    for frame in 0..frames {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        r.draw(camera, f64::from(frame) / 60.0, &view, &mut encoder)
+            .unwrap();
+        queue.submit([encoder.finish()]);
+    }
+    let row = width * 4;
+    assert_eq!(row % wgpu::COPY_BYTES_PER_ROW_ALIGNMENT, 0);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("test readback"),
+        size: u64::from(row * height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        target.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: None,
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| ());
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let mut rgba = buffer.slice(..).get_mapped_range().unwrap().to_vec();
+    if matches!(
+        format,
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+    ) {
+        for px in rgba.as_chunks_mut::<4>().0 {
+            px.swap(0, 2);
+        }
+    }
+    rgba
+}
+
+#[test]
+fn live_frames_look_the_same_in_an_srgb_and_a_plain_target() {
+    let Some((guard, device, queue)) = gpu() else {
+        return;
+    };
+    let mut r = WorldRenderer::new(device.clone(), queue.clone());
+    r.set_quality(Quality::Low);
+    let (mut world, hf) = flat(64.0);
+    add(
+        &mut world,
+        [0.0, 0.0, 0.0],
+        20.0,
+        shape(ShapeKind::Box, [4.0, 4.0, 4.0], [1.0, 0.0, 0.0]),
+    );
+    assert!(r.sync(&world, Some(&hf)).is_empty());
+    let camera = Camera {
+        position: [0.0, 3.0, 12.0],
+        target: [0.0, 2.0, 0.0],
+        fov_y_deg: 50.0,
+    };
+    let size = (320, 192);
+    r.resize(size.0, size.1);
+    let mut pictures = Vec::new();
+    for format in [
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Bgra8Unorm,
+    ] {
+        let rgba = draw_into(&mut r, &device, &queue, format, &camera, size, 8);
+        pictures.push(Picture {
+            width: size.0,
+            height: size.1,
+            rgba,
+            stats: Default::default(),
+            problems: Vec::new(),
+        });
+    }
+    save("render-live.png", &pictures[0]);
+    let means: Vec<f64> = pictures
+        .iter()
+        .map(|p| luminance(mean_rgb(p, 0..p.height)))
+        .collect();
+    println!("means {means:?}");
+    assert!(means[0] > 20.0, "the live frame is not black: {means:?}");
+    assert!(
+        (means[0] - means[1]).abs() < 4.0,
+        "an sRGB and a plain target get the same picture: {means:?}"
+    );
+    let p = &pictures[1];
+    let mut centre = [0.0; 3];
+    for y in 90..102 {
+        for x in 150..170 {
+            let i = (y * p.width as usize + x) * 4;
+            for k in 0..3 {
+                centre[k] += f64::from(p.rgba[i + k]);
+            }
+        }
+    }
+    assert!(
+        centre[0] > 1.5 * centre[1] && centre[0] > 1.5 * centre[2],
+        "the box is red: {centre:?}"
+    );
+    // A size the renderer refuses to draw is an error, not a panic.
+    let bad = Camera {
+        fov_y_deg: f64::NAN,
+        ..camera
+    };
+    let view = device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 16,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&Default::default());
+    let mut encoder = device.create_command_encoder(&Default::default());
+    assert!(r.draw(&bad, 0.0, &view, &mut encoder).is_err());
+    drop(guard);
+}
+
+#[test]
+fn a_walking_character_moves_without_a_rebuild() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let (mut world, hf) = flat(64.0);
+    add(
+        &mut world,
+        [0.0, 0.0, 0.0],
+        0.0,
+        Component::Character(Character::default()),
+    );
+    add(
+        &mut world,
+        [5.0, 0.0, 0.0],
+        0.0,
+        shape(ShapeKind::Box, [1.0; 3], [0.5; 3]),
+    );
+    r.sync(&world, Some(&hf));
+    let rebuilds = r.rebuild_count();
+    let items = r.item_count();
+    let walker = world.entities().next().unwrap().id;
+    for step in 1..=10 {
+        let e = world.entity_mut(walker).unwrap();
+        e.position = [0.0, 0.0, -0.1 * f64::from(step)];
+        e.rotation_y_deg = f64::from(step);
+        e.set_component(Component::Light(Light::default()));
+        r.sync(&world, Some(&hf));
+    }
+    assert_eq!(
+        r.rebuild_count(),
+        rebuilds,
+        "moving and lighting is no rebuild"
+    );
+    assert_eq!(r.item_count(), items);
+    // A first-person view leaves its own body out, and back in, without a rebuild either.
+    let camera = Camera {
+        position: [0.0, 1.0, 6.0],
+        target: [0.0, 1.0, -1.0],
+        fov_y_deg: 50.0,
+    };
+    let seen = r.render(&request(160, 90, camera)).unwrap();
+    r.set_hidden_character(Some(walker));
+    r.sync(&world, Some(&hf));
+    let hidden = r.render(&request(160, 90, camera)).unwrap();
+    assert!(
+        difference(&seen, &hidden, 24).is_some(),
+        "the hidden character is gone from the picture"
+    );
+    r.set_hidden_character(None);
+    r.sync(&world, Some(&hf));
+    let back = r.render(&request(160, 90, camera)).unwrap();
+    assert!(difference(&seen, &back, 24).is_none(), "and back");
+    assert_eq!(r.rebuild_count(), rebuilds);
+    let block = world.entities().nth(1).unwrap().id;
+    world.entity_mut(block).unwrap().position = [6.0, 0.0, 0.0];
+    r.sync(&world, Some(&hf));
+    assert_eq!(r.rebuild_count(), rebuilds + 1, "a moved box is rebuilt");
 }

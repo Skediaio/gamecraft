@@ -1,0 +1,315 @@
+//! The game without a window: the session, the fixed step, the player's controls, the
+//! interpolated poses, the cameras and what the scenario tells. The window feeds it keys,
+//! mouse movements, control lines and frame times, and draws what it shows.
+//!
+//! The session is the source of truth (AGENTS.md rule 1): the game starts the simulation with
+//! `sim.start`, stores the player's input with `sim.input` whenever it changes and advances it
+//! with `sim.step`, one tick per call so the picture can be interpolated between the last two.
+
+use crate::clock::FixedStep;
+use crate::input::{Action, Controls, InputRecord, Key};
+use crate::notices::Notices;
+use crate::pose::{Pose, Poses};
+use crate::rig::{self, ViewMode};
+use gamecraft_automation::{Access, Host, rpc};
+use gamecraft_engine::Session;
+use gamecraft_render::Camera;
+use gamecraft_sim::DT;
+use gamecraft_world::{EntityId, HeightField, World};
+use serde_json::{Value, json};
+
+/// A world being played in a window.
+pub struct Game {
+    host: Host,
+    controls: Controls,
+    step: FixedStep,
+    poses: Poses,
+    view: ViewMode,
+    paused: bool,
+    /// The input record last stored for the player: a record is sent only when it changes.
+    sent: Option<(EntityId, InputRecord)>,
+    notices: Notices,
+    /// Whether the notices were read at least once since the start.
+    noticed: bool,
+    /// Lines for the console, taken by [`Game::take_notices`].
+    told: Vec<String>,
+    /// The last error told, so a failing command each frame is told once.
+    last_error: Option<String>,
+}
+
+impl Game {
+    /// A game of `world`: the simulation is started at once (`sim.start`), and the first
+    /// character in id order is the player. Automation may not read or write files
+    /// (`Access::default()`).
+    pub fn new(world: World) -> Game {
+        let mut game = Game {
+            host: Host::new(world, Access::default()),
+            controls: Controls::default(),
+            step: FixedStep::new(DT),
+            poses: Poses::default(),
+            view: ViewMode::default(),
+            paused: false,
+            sent: None,
+            notices: Notices::default(),
+            noticed: false,
+            told: Vec::new(),
+            last_error: None,
+        };
+        game.start();
+        game
+    }
+
+    /// The session (read only).
+    pub fn session(&self) -> &Session {
+        self.host.session()
+    }
+
+    /// The session, to run commands on.
+    pub fn session_mut(&mut self) -> &mut Session {
+        self.host.session_mut()
+    }
+
+    /// The player: the first character in id order of the world shown.
+    pub fn player(&self) -> Option<EntityId> {
+        self.session()
+            .current_world()
+            .entities()
+            .find(|e| e.character().is_some())
+            .map(|e| e.id)
+    }
+
+    /// The camera that follows the player.
+    pub fn view(&self) -> ViewMode {
+        self.view
+    }
+
+    /// Whether the simulation is paused (P).
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// A key went down or up. Window keys act here (F1, F5, P); the action is returned so the
+    /// window can do its part (Esc releases the pointer).
+    pub fn key(&mut self, key: Key, pressed: bool) -> Option<Action> {
+        let action = self.controls.key(key, pressed);
+        match action {
+            Some(Action::ToggleView) => self.view = self.view.toggled(),
+            Some(Action::Restart) => self.restart(),
+            Some(Action::Pause) => {
+                self.paused = !self.paused;
+                self.step.reset();
+                self.told
+                    .push(if self.paused { "Paused" } else { "Resumed" }.to_string());
+            }
+            Some(Action::Release) | None => {}
+        }
+        action
+    }
+
+    /// The mouse moved by `dx`, `dy` pixels while the pointer is locked.
+    pub fn look(&mut self, dx: f64, dy: f64) {
+        self.controls.look(dx, dy);
+    }
+
+    /// The window lost the keyboard: every key is let go.
+    pub fn release_keys(&mut self) {
+        self.controls.release_all();
+    }
+
+    /// A frame of `frame_s` seconds passed: stores a changed input, runs the ticks that are
+    /// due (none while paused or stopped) and reads what the scenario tells. Returns the ticks
+    /// run.
+    pub fn frame(&mut self, frame_s: f64) -> u32 {
+        if !self.session().is_playing() || self.paused {
+            self.step.reset();
+            let world = self.host.session().current_world();
+            self.poses.observe(world);
+            return 0;
+        }
+        self.send_input();
+        let ticks = self.step.advance(frame_s);
+        let mut ran = 0;
+        for _ in 0..ticks {
+            if let Err(e) = self.session_mut().run("sim.step", &json!({"ticks": 1})) {
+                self.error(e.to_string());
+                break;
+            }
+            ran += 1;
+            let world = self.host.session().current_world();
+            self.poses.ticked(world);
+            self.controls.ticked();
+            self.send_input();
+        }
+        if ran == 0 {
+            let world = self.host.session().current_world();
+            self.poses.observe(world);
+        }
+        if ran > 0 || !self.noticed {
+            self.read_notices();
+        }
+        ran
+    }
+
+    /// Runs one line of the control protocol (`gamecraft-cli serve`'s JSON lines) on the
+    /// session and returns the reply line; `None` for a blank line. Never panics.
+    pub fn control(&mut self, line: &str) -> Option<String> {
+        rpc::handle_line(&mut self.host, line)
+    }
+
+    /// Stops the simulation if it runs and starts it again from the document (F5).
+    pub fn restart(&mut self) {
+        if self.session().is_playing()
+            && let Err(e) = self.session_mut().run("sim.stop", &json!({}))
+        {
+            self.error(e.to_string());
+        }
+        self.start();
+        self.told.push("Restarted".to_string());
+    }
+
+    /// The camera of the view, for a picture of width / height `aspect`: the player's eyes or
+    /// boom at its interpolated pose; without a player, a view of the whole world.
+    pub fn camera(&self, aspect: f64) -> Camera {
+        let session = self.session();
+        let world = session.current_world();
+        let heights = session.current_heights();
+        let alpha = self.step.alpha();
+        let player = self
+            .player()
+            .and_then(|id| world.entity(id).map(|e| (id, e)))
+            .and_then(|(id, e)| e.character().map(|c| (id, e, c)));
+        let Some((id, entity, character)) = player else {
+            return Camera::framing(world, heights, aspect);
+        };
+        let pose = self.poses.at(id, alpha).unwrap_or(Pose {
+            position: entity.position,
+            yaw_deg: entity.rotation_y_deg,
+        });
+        let (yaw, pitch) = (self.controls.yaw_deg(), self.controls.pitch_deg());
+        let camera = match self.view {
+            ViewMode::FirstPerson => rig::first_person(&pose, character.eye_height_m, yaw, pitch),
+            ViewMode::ThirdPerson => {
+                rig::third_person(&pose, character.eye_height_m, yaw, pitch, heights)
+            }
+        };
+        if camera.validate().is_ok() {
+            camera
+        } else {
+            Camera::framing(world, heights, aspect)
+        }
+    }
+
+    /// The world as shown: the running world (or the document) with every character between
+    /// its last two ticks, the player turned as the mouse points. For display only.
+    pub fn display_world(&self) -> World {
+        let mut world = self.session().current_world().clone();
+        self.poses.apply(&mut world, self.step.alpha());
+        if self.session().is_playing()
+            && let Some(e) = self.player().and_then(|id| world.entity_mut(id))
+        {
+            e.rotation_y_deg = self.controls.yaw_deg();
+        }
+        world
+    }
+
+    /// The character not to draw: the player in first person (the camera is inside it).
+    pub fn hidden_character(&self) -> Option<EntityId> {
+        match self.view {
+            ViewMode::FirstPerson => self.player(),
+            ViewMode::ThirdPerson => None,
+        }
+    }
+
+    /// The height field of the world shown.
+    pub fn heights(&self) -> Option<&HeightField> {
+        self.session().current_heights()
+    }
+
+    /// The animation clock for the picture: the simulation's time between its last two ticks,
+    /// 0 when stopped.
+    pub fn time_s(&self) -> f64 {
+        self.session()
+            .live()
+            .map_or(0.0, |sim| sim.time_s() + self.step.alpha() * DT)
+    }
+
+    /// The window's title: the world's name, the state and the newest message.
+    pub fn title(&self) -> String {
+        let mut title = format!("GameCraft: {}", self.session().current_world().name);
+        if !self.session().is_playing() {
+            title.push_str(" (stopped; F5 starts)");
+        } else if self.paused {
+            title.push_str(" (paused)");
+        }
+        if let Some(message) = self.notices.message() {
+            title.push_str(" | ");
+            title.push_str(message);
+        }
+        title
+    }
+
+    /// The lines to print since the last call: messages, objective changes, errors.
+    pub fn take_notices(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.told)
+    }
+
+    /// Starts the simulation and puts the controls, the step and the poses at its start.
+    fn start(&mut self) {
+        if let Err(e) = self.session_mut().run("sim.start", &json!({})) {
+            self.error(e.to_string());
+        }
+        let yaw = self
+            .player()
+            .and_then(|id| self.session().current_world().entity(id))
+            .map_or(0.0, |e| e.rotation_y_deg);
+        self.controls.release_all();
+        self.controls.face(yaw);
+        self.step.reset();
+        self.poses = Poses::new(self.host.session().current_world());
+        self.paused = false;
+        self.notices.clear();
+        self.noticed = false;
+        // A character's first input starts from standing still facing its rotation: that is
+        // what the controls ask for now, so nothing is sent until they change (and an agent's
+        // input is not overwritten meanwhile).
+        self.sent = self.player().map(|id| (id, self.controls.record()));
+    }
+
+    /// Stores the controls' record for the player when it differs from the last one sent.
+    fn send_input(&mut self) {
+        let Some(player) = self.player() else {
+            return;
+        };
+        let record = self.controls.record();
+        if self.sent == Some((player, record)) {
+            return;
+        }
+        match record.send(self.host.session_mut(), player) {
+            Ok(_) => self.sent = Some((player, record)),
+            Err(e) => self.error(e),
+        }
+    }
+
+    /// Reads `sim.state` and the objectives for new things to tell.
+    fn read_notices(&mut self) {
+        let state = match self.session_mut().run("sim.state", &json!({})) {
+            Ok(state) => state,
+            Err(e) => {
+                self.error(e.to_string());
+                Value::Null
+            }
+        };
+        let objectives = self.session().current_world().objectives.clone();
+        let lines = self.notices.update(&state, &objectives);
+        self.told.extend(lines);
+        self.noticed = true;
+    }
+
+    /// Tells an error once (until another one comes).
+    fn error(&mut self, e: String) {
+        if self.last_error.as_ref() != Some(&e) {
+            self.told.push(format!("Error: {e}"));
+            self.last_error = Some(e);
+        }
+    }
+}

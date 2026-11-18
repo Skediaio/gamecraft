@@ -74,7 +74,7 @@ crates/
   gamecraft-automation   L4  JSON-lines protocol and MCP server over one host (session, files, pictures)
 apps/
   gamecraft-cli          L5  headless CLI: commands, run, batch, serve, mcp, render
-  gamecraft              L5  the window, native and in the browser (planned, M1)
+  gamecraft              L5  the window, native and in the browser: walk, look, play (winit on wgpu)
 xtask/                       cargo xtask layers | wasm | ci
 ```
 

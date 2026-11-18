@@ -10,4 +10,37 @@ publish.workspace = true
 [lints]
 workspace = true
 
+# One crate, one `main` for both targets: the native binary, and the binary Trunk builds for
+# wasm32 (`index.html`). `src/lib.rs` holds the window, so the offscreen test can drive it.
 [dependencies]
+gamecraft-math = { workspace = true }
+gamecraft-world = { workspace = true }
+gamecraft-sim = { workspace = true }
+gamecraft-engine = { workspace = true }
+gamecraft-automation = { workspace = true }
+gamecraft-render = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }
+serde_json = { workspace = true }
+web-time = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+js-sys = { workspace = true }
+web-sys = { workspace = true, features = [
+    "console",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "Location",
+    "Request",
+    "RequestInit",
+    "Response",
+    "UrlSearchParams",
+    "Window",
+] }
+console_error_panic_hook = { workspace = true }

@@ -41,17 +41,12 @@ const DEFAULT_FOCUS_HEIGHT_M: f64 = 1.0;
 /// Above this share of a full turn up or down, the view's up vector is north instead of +Y.
 const STRAIGHT_UP_DOWN: f64 = 0.999;
 /// The nearest the near plane comes, and the farthest it goes, metres.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const NEAR_MIN_M: f64 = 0.05;
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const NEAR_MAX_M: f64 = 2.0;
 /// The near plane as a share of the distance to the target.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const NEAR_SHARE: f64 = 0.002;
 /// The far plane: at least this far, metres, and this many times the distance to the target.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const FAR_MIN_M: f64 = 20_000.0;
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const FAR_SHARE: f64 = 50.0;
 
 /// A perspective camera in world coordinates (metres, Y up).
@@ -232,7 +227,6 @@ impl Camera {
 
     /// The view and projection matrices (depth 0 to 1) and the eye, for a picture of width /
     /// height `aspect`. The camera must be valid.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn matrices(&self, aspect: f64) -> (glam::Mat4, glam::Mat4, glam::Vec3) {
         let eye = DVec3::from_array(self.position);
         let target = DVec3::from_array(self.target);
