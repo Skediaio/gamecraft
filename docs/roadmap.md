@@ -23,11 +23,11 @@ drawn with VisionCraft's renderer.
 | `gamecraft-math`: portable maths, seeded randomness, noise, state hash | done 2026-11-18 |
 | `gamecraft-world`: the document, its JSON format, validation, the height field, the sun | done 2026-11-18 |
 | `gamecraft-sim`: fixed step, input, a character that walks, falls and is stopped by solids; taking over a changed world between ticks | done 2026-11-18 |
-| `gamecraft-engine`: session, command specs, world commands on the document and on a running world, queries, undo, play commands | in progress |
+| `gamecraft-engine`: session, command specs, world commands on the document and on a running world, queries, undo, play commands | done 2026-11-18 |
 | `gamecraft-render`: terrain, shapes, plants, sky and weather through VisionCraft; PNG out | done 2026-11-18 |
-| `gamecraft-automation`: JSON lines, MCP, host commands (`file.*`, `edit.*`, `view.render`) | open |
+| `gamecraft-automation`: JSON lines, MCP, host commands (`file.*`, `edit.*`, `view.render`) | done 2026-11-18 |
 | `gamecraft-cli`: `commands`, `run`, `batch`, `serve`, `mcp`, `render` | open |
-| `docs/agent.md` with a worked example that a test runs | open |
+| `docs/agent.md` with a worked example that a test runs | done 2026-11-18 |
 
 **Done when:** an agent with only the MCP server builds a small valley with trees and a
 character, walks the character across it by input, drops a wall in its way while it walks, reads

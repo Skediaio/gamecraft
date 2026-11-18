@@ -13,5 +13,8 @@ workspace = true
 [dependencies]
 gamecraft-world = { workspace = true }
 gamecraft-engine = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+# Seeded randomness for the fuzz test.
+gamecraft-math = { workspace = true }

@@ -233,6 +233,7 @@ name = "gamecraft-automation"
 version = "0.0.0"
 dependencies = [
  "gamecraft-engine",
+ "gamecraft-math",
  "gamecraft-world",
  "serde",
  "serde_json",

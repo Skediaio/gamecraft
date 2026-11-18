@@ -8,6 +8,15 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-18: The command line is the main door, MCP the second
+
+An agent with a shell drives GameCraft through `gamecraft-cli`, as with 3DCraft's
+`craft3d-cli`: `run` with `--cmd` and `--params` or a script of steps, one line of JSON per
+result, `info`, `render`, `play`, exit codes 0, 1 and 2. MCP stays for tools that have no shell.
+Both run the same commands through the same host, so nothing can be done in one that cannot be
+done in the other. Reason: the developer asked for it; a command line is scriptable, testable
+and visible in a terminal log, and needs no client configuration.
+
 ### 2026-11-18: Engine, packs, games: mechanisms in the engine, things in packs
 
 Two games as far apart as a military sandbox and a falling-block puzzle must both be buildable,
