@@ -8,6 +8,22 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-18: Text files are the source; a database only as a cache or on a server
+
+The source of a project stays text files plus binary tiles and assets, not a database: they go
+into git (history, diff, review, branches, pull requests), two people or agents can merge their
+work, a mod is a directory layered over another (a database cannot be layered that simply), an
+agent reads and writes them with any tool, and they need nothing compiled in C, which keeps the
+browser build simple. A database has two places:
+
+- **An index, derived and thrown away at will** (rule 2): when a project is large, the engine
+  builds an embedded store (pure Rust, chosen when needed) next to it for what scanning files
+  would make slow: finding entities by name, tag or area across all layers, which prefab is used
+  where, which asset is referenced by what. Deleting it loses nothing.
+- **Persistent servers** (M9): a world that runs for weeks with many players keeps its live state
+  and the players' progress in a server database, and writes snapshots and journals. That is
+  operational data, not the game's source.
+
 ### 2026-11-18: One JSON file is M0's format, not the game's
 
 A single `.gamecraft` JSON file is fine for a test valley and wrong for a large game: one change
