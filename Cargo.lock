@@ -1007,6 +1007,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gamecraft-wasmcheck"
+version = "0.0.0"
+dependencies = [
+ "gamecraft-engine",
+ "gamecraft-math",
+ "gamecraft-sim",
+ "gamecraft-world",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "gamecraft-world"
 version = "0.0.0"
 dependencies = [

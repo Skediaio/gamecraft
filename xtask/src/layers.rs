@@ -20,6 +20,9 @@ pub const LAYERS: &[(&str, u8)] = &[
     ("gamecraft-render", 4),
     ("gamecraft-automation", 4),
     ("gamecraft-index", 4),
+    // The determinism check across targets (`cargo xtask wasm-hash`): a test harness that
+    // plays the engine, so it sits above it, and it must build for wasm.
+    ("gamecraft-wasmcheck", 4),
     ("gamecraft-cli", 5),
     ("gamecraft", 5),
 ];
@@ -285,6 +288,11 @@ mod tests {
             package("gamecraft-project", &["gamecraft-world"], &[]),
             package("gamecraft-automation", &["gamecraft-engine"], &[]),
             package("gamecraft-index", &["gamecraft-project"], &[]),
+            package(
+                "gamecraft-wasmcheck",
+                &["gamecraft-engine", "wasm-bindgen"],
+                &[],
+            ),
             package(
                 "gamecraft-cli",
                 &["gamecraft-render", "gamecraft-automation", "winit"],

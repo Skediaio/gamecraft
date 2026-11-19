@@ -74,10 +74,11 @@ crates/
   gamecraft-render       L4  draws a world with VisionCraft's renderer and plants; offscreen pictures. No UI
   gamecraft-automation   L4  JSON-lines protocol and MCP server over one host (session, files, pictures)
   gamecraft-index        L4  the derived SQL index of a project (Turso), native only
+  gamecraft-wasmcheck    L4  deterministic scenarios run natively and as wasm in Node; their hashes must match
 apps/
   gamecraft-cli          L5  headless CLI: commands, run, batch, serve, mcp, render
   gamecraft              L5  the window, native and in the browser: walk, look, play (winit on wgpu)
-xtask/                       cargo xtask layers | wasm | ci
+xtask/                       cargo xtask layers | wasm | ci | wasm-hash
 ```
 
 **Layering is enforced** by `cargo xtask layers`. A crate may depend only on lower layers;

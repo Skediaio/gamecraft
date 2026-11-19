@@ -1,14 +1,17 @@
-//! `cargo xtask layers | wasm | ci`: the workspace's own checks.
+//! `cargo xtask layers | wasm | wasm-hash | ci`: the workspace's own checks.
 
 mod layers;
+mod wasm_hash;
 
 use std::collections::BTreeMap;
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo xtask <layers|wasm|ci>
-  layers  check the layer table, forbidden dependencies and workspace lints
-  wasm    cargo check --target wasm32-unknown-unknown for layers L0 to L4
-  ci      fmt, clippy, tests, layers and wasm, stopping at the first failure";
+const USAGE: &str = "usage: cargo xtask <layers|wasm|wasm-hash|ci>
+  layers     check the layer table, forbidden dependencies and workspace lints
+  wasm       cargo check --target wasm32-unknown-unknown for layers L0 to L4
+  wasm-hash  the determinism scenarios natively and as wasm in Node, every hash compared
+             (needs Node and the wasm-bindgen CLI 0.2.129, on PATH or in GAMECRAFT_WASM_BINDGEN)
+  ci         fmt, clippy, tests, layers and wasm, stopping at the first failure";
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -20,6 +23,7 @@ fn main() -> ExitCode {
     let result = match command.as_deref() {
         Some("layers") => run_layers(),
         Some("wasm") => run_wasm(),
+        Some("wasm-hash") => wasm_hash::run(&cargo()),
         Some("ci") => run_ci(),
         _ => {
             eprintln!("{USAGE}");

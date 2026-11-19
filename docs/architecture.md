@@ -117,7 +117,17 @@ The simulation's promise (rule 3) rests on five habits:
   zones, projectiles, health and behaviours when there is any. Tests pin golden hashes; a replay compares
   them.
 
-Not yet proven: the same hash in a wasm build (the test runner for it is a roadmap item of M1).
+Proven across targets: `cargo xtask wasm-hash` (and CI) runs the scenarios of
+`gamecraft-wasmcheck` natively and compiled to `wasm32-unknown-unknown` in Node, and every hash
+is bit-identical: the example world played for 600 ticks with every kind of input (hashed every
+60 ticks), the Lantern and Skirmish prototypes played through to the end (every 60 ticks; their
+final hashes are the golden hashes of the CLI tests), `query.aim` solutions in still air and in
+wind, a 4 km noise terrain with layers, paint rules and sculpting (heights in bands of 128 rows,
+layer weights, interpolated heights and normals) and two `entity.scatter` calls with the
+document they leave. A difference fails with the scenario and its first differing tick or band.
+Not covered yet: rendering (pictures may differ between GPUs; they are not part of the state),
+threads (the simulation has none), and browsers other than Node's V8 (wasm floating point is
+specified exactly, apart from NaN bit patterns, which the simulation never stores).
 
 ## The VisionCraft boundary
 

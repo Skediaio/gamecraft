@@ -84,9 +84,9 @@ Done 2026-11-18: `apps/gamecraft`, the window on winit and wgpu, native and in t
 (Trunk), with a fixed-step loop and interpolated display, keyboard and mouse to input records,
 first- and third-person cameras, lights drawn, and `--stdin` so an agent drives the window a
 person watches; a headless Chromium smoke test walks in the browser. Gamepads since 2026-11-19 (in the browser always; natively behind the feature `native-gamepad`,
-which needs the system's libudev development files). Open: the socket
-control channel and `--bridge`, the hash proven equal in wasm, a real native window tried by a
-person.
+which needs the system's libudev development files). The hash is proven equal natively and in wasm (`cargo xtask wasm-hash`, 6 scenarios, in CI)
+since 2026-11-19. Open: the socket control channel and `--bridge`, a real native window tried by
+a person.
 
 
 A person and an agent are in the same world, in a window and in the browser.

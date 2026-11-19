@@ -1,0 +1,26 @@
+[package]
+name = "gamecraft-wasmcheck"
+description = "The determinism check across targets: deterministic scenarios whose hashes `cargo xtask wasm-hash` compares natively and as WebAssembly in Node."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# `cdylib`: the WebAssembly module wasm-bindgen wraps for Node; `rlib`: the native binary and
+# the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+gamecraft-math = { workspace = true }
+gamecraft-world = { workspace = true }
+gamecraft-sim = { workspace = true }
+gamecraft-engine = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
