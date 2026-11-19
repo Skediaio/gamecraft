@@ -10,7 +10,7 @@ Everything here was made with engine commands only, nothing else.
 
 | File | What it is |
 |---|---|
-| `build.json` | The `gamecraft-cli run` script that builds the whole world from nothing: terrain, environment, trees, rocks, the player, the beacons, objectives, variables and triggers |
+| `build.json` | The `gamecraft-cli run` script that builds the whole world from nothing: terrain, environment, trees, rocks, the player, the beacons, objectives, variables and triggers. The five beacons are placed from one prefab, `beacon`, whose child `Beacon ring` (a 3 m zone tagged `beacon-ring`) comes with each; lighting a beacon replaces its `light` with one that is on, an override of that instance |
 | `world.gamecraft` | The result of that script (a test checks that building it again gives the same world) |
 | `playthrough.json` | A `gamecraft-cli play` script: a player that runs to each beacon with a held `face` and `forward` and lights it with `interact`. It wins at 86.8 s |
 
@@ -32,6 +32,8 @@ gamecraft-cli play examples/lantern/world.gamecraft --seconds 305
 ```
 
 The hash of the first run is the same on every run and every machine (the test pins it).
+`--journal FILE` also writes the journal of the run, and `gamecraft-cli replay FILE --check`
+runs it again and compares the hash after every command.
 
 ## Open it in the window
 
@@ -47,7 +49,9 @@ send `sim.start`, then step and steer with the same commands that built the worl
 - Bring the mist early: `environment.set {"mist": 0.9}` (the player still has until 300 s;
   add `"wind_speed_mps": 8` for a wind with it).
 - Move a beacon: `entity.set {"id": "Beacon Hill", "at": [60, 40]}` puts the hill beacon
-  somewhere easier (or harder) to reach.
+  somewhere easier (or harder) to reach; its ring moves with it.
+- Add a sixth beacon: `prefab.spawn {"prefab": "beacon", "name": "Beacon Six", "at": [-80,
+  -60]}` (it needs a trigger of its own to count, as the others have).
 - Hand out a shortcut or a goal: `var.set {"name": "lit", "add": 1}` counts one more beacon as
   lit without anybody walking there, and `objective.add {"id": "bonus", "title": "Reach the
   pines by 60 s"}` gives the player a new goal.

@@ -101,7 +101,15 @@ A person and an agent are in the same world, in a window and in the browser.
 **Done when:** the M0 valley is walked with the keyboard in Chromium, and an agent changes the
 world over MCP while the developer walks in it.
 
-## M2: Direct
+## M2: Direct (in progress)
+
+Done 2026-11-19: the journal (every command and input of a session with its tick and hash;
+`journal.get`, `journal.save`, `gamecraft-cli play --journal` and `replay --check` that names the
+tick where a run diverges) and prefabs (describe once, place many, with overrides and children;
+`prefab.spawn` works on a running world). Done earlier for P1 and P2: zones, objectives,
+triggers, characters that patrol and engage. Open: the game master's view (who is where, take
+over and release, speak to players), an MCP prompt and guide for an agent as game master.
+
 
 Scenarios, and the game master who steers them.
 

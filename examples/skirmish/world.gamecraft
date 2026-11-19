@@ -24,6 +24,84 @@
     "mist": 0.2,
     "rain": 0.0
   },
+  "prefabs": [
+    {
+      "id": "house",
+      "name": "House",
+      "components": [
+        {
+          "type": "shape",
+          "kind": "box",
+          "size": [
+            8.0,
+            3.6,
+            6.0
+          ],
+          "color": [
+            0.62,
+            0.55,
+            0.45
+          ],
+          "solid": true
+        }
+      ]
+    },
+    {
+      "id": "enemy-soldier",
+      "name": "Enemy soldier",
+      "components": [
+        {
+          "type": "character",
+          "height_m": 1.8,
+          "radius_m": 0.3,
+          "eye_height_m": 1.65,
+          "walk_speed_mps": 1.6,
+          "run_speed_mps": 5.0,
+          "jump_speed_mps": 4.5,
+          "max_slope_deg": 45.0
+        },
+        {
+          "type": "health",
+          "max": 100.0,
+          "current": 100.0,
+          "armor": 0.0
+        },
+        {
+          "type": "launcher",
+          "muzzle_velocity_mps": 715.0,
+          "mass_kg": 0.004,
+          "ballistic_coefficient": 100.0,
+          "dispersion_mrad": 2.0,
+          "rate_s": 1.2,
+          "magazine": 10,
+          "reload_s": 4.0,
+          "damage_per_joule": 0.01,
+          "muzzle_height_m": 1.5,
+          "max_flight_s": 10.0,
+          "sound_range_m": 600.0
+        },
+        {
+          "type": "behaviour",
+          "mode": "guard",
+          "route": [],
+          "team": "red",
+          "view_range_m": 120.0,
+          "fov_deg": 120.0,
+          "engage_range_m": 100.0,
+          "aim_error_mrad": 8.0,
+          "reaction_s": 1.0,
+          "search_s": 10.0
+        },
+        {
+          "type": "tags",
+          "tags": [
+            "enemy",
+            "team:red"
+          ]
+        }
+      ]
+    }
+  ],
   "next_entity_id": 56,
   "entities": [
     {
@@ -992,23 +1070,7 @@
       ],
       "rotation_y_deg": 0.0,
       "scale": 1.0,
-      "components": [
-        {
-          "type": "shape",
-          "kind": "box",
-          "size": [
-            8.0,
-            3.6,
-            6.0
-          ],
-          "color": [
-            0.62,
-            0.55,
-            0.45
-          ],
-          "solid": true
-        }
-      ]
+      "prefab": "house"
     },
     {
       "id": 49,
@@ -1020,7 +1082,8 @@
       ],
       "rotation_y_deg": 0.0,
       "scale": 1.0,
-      "components": [
+      "prefab": "house",
+      "overrides": [
         {
           "type": "shape",
           "kind": "box",
@@ -1126,37 +1189,8 @@
       ],
       "rotation_y_deg": 90.0,
       "scale": 1.0,
-      "components": [
-        {
-          "type": "character",
-          "height_m": 1.8,
-          "radius_m": 0.3,
-          "eye_height_m": 1.65,
-          "walk_speed_mps": 1.6,
-          "run_speed_mps": 5.0,
-          "jump_speed_mps": 4.5,
-          "max_slope_deg": 45.0
-        },
-        {
-          "type": "health",
-          "max": 100.0,
-          "current": 100.0,
-          "armor": 0.0
-        },
-        {
-          "type": "launcher",
-          "muzzle_velocity_mps": 715.0,
-          "mass_kg": 0.004,
-          "ballistic_coefficient": 100.0,
-          "dispersion_mrad": 2.0,
-          "rate_s": 1.2,
-          "magazine": 10,
-          "reload_s": 4.0,
-          "damage_per_joule": 0.01,
-          "muzzle_height_m": 1.5,
-          "max_flight_s": 10.0,
-          "sound_range_m": 600.0
-        },
+      "prefab": "enemy-soldier",
+      "overrides": [
         {
           "type": "behaviour",
           "mode": "patrol",
@@ -1177,13 +1211,6 @@
           "aim_error_mrad": 8.0,
           "reaction_s": 1.0,
           "search_s": 10.0
-        },
-        {
-          "type": "tags",
-          "tags": [
-            "enemy",
-            "team:red"
-          ]
         }
       ]
     },
@@ -1197,37 +1224,8 @@
       ],
       "rotation_y_deg": 180.0,
       "scale": 1.0,
-      "components": [
-        {
-          "type": "character",
-          "height_m": 1.8,
-          "radius_m": 0.3,
-          "eye_height_m": 1.65,
-          "walk_speed_mps": 1.6,
-          "run_speed_mps": 5.0,
-          "jump_speed_mps": 4.5,
-          "max_slope_deg": 45.0
-        },
-        {
-          "type": "health",
-          "max": 100.0,
-          "current": 100.0,
-          "armor": 0.0
-        },
-        {
-          "type": "launcher",
-          "muzzle_velocity_mps": 715.0,
-          "mass_kg": 0.004,
-          "ballistic_coefficient": 100.0,
-          "dispersion_mrad": 2.0,
-          "rate_s": 1.2,
-          "magazine": 10,
-          "reload_s": 4.0,
-          "damage_per_joule": 0.01,
-          "muzzle_height_m": 1.5,
-          "max_flight_s": 10.0,
-          "sound_range_m": 600.0
-        },
+      "prefab": "enemy-soldier",
+      "overrides": [
         {
           "type": "behaviour",
           "mode": "patrol",
@@ -1248,13 +1246,6 @@
           "aim_error_mrad": 8.0,
           "reaction_s": 1.0,
           "search_s": 10.0
-        },
-        {
-          "type": "tags",
-          "tags": [
-            "enemy",
-            "team:red"
-          ]
         }
       ]
     },
@@ -1268,57 +1259,7 @@
       ],
       "rotation_y_deg": 0.0,
       "scale": 1.0,
-      "components": [
-        {
-          "type": "character",
-          "height_m": 1.8,
-          "radius_m": 0.3,
-          "eye_height_m": 1.65,
-          "walk_speed_mps": 1.6,
-          "run_speed_mps": 5.0,
-          "jump_speed_mps": 4.5,
-          "max_slope_deg": 45.0
-        },
-        {
-          "type": "health",
-          "max": 100.0,
-          "current": 100.0,
-          "armor": 0.0
-        },
-        {
-          "type": "launcher",
-          "muzzle_velocity_mps": 715.0,
-          "mass_kg": 0.004,
-          "ballistic_coefficient": 100.0,
-          "dispersion_mrad": 2.0,
-          "rate_s": 1.2,
-          "magazine": 10,
-          "reload_s": 4.0,
-          "damage_per_joule": 0.01,
-          "muzzle_height_m": 1.5,
-          "max_flight_s": 10.0,
-          "sound_range_m": 600.0
-        },
-        {
-          "type": "behaviour",
-          "mode": "guard",
-          "route": [],
-          "team": "red",
-          "view_range_m": 120.0,
-          "fov_deg": 120.0,
-          "engage_range_m": 100.0,
-          "aim_error_mrad": 8.0,
-          "reaction_s": 1.0,
-          "search_s": 10.0
-        },
-        {
-          "type": "tags",
-          "tags": [
-            "enemy",
-            "team:red"
-          ]
-        }
-      ]
+      "prefab": "enemy-soldier"
     },
     {
       "id": 55,
@@ -1330,57 +1271,7 @@
       ],
       "rotation_y_deg": 0.0,
       "scale": 1.0,
-      "components": [
-        {
-          "type": "character",
-          "height_m": 1.8,
-          "radius_m": 0.3,
-          "eye_height_m": 1.65,
-          "walk_speed_mps": 1.6,
-          "run_speed_mps": 5.0,
-          "jump_speed_mps": 4.5,
-          "max_slope_deg": 45.0
-        },
-        {
-          "type": "health",
-          "max": 100.0,
-          "current": 100.0,
-          "armor": 0.0
-        },
-        {
-          "type": "launcher",
-          "muzzle_velocity_mps": 715.0,
-          "mass_kg": 0.004,
-          "ballistic_coefficient": 100.0,
-          "dispersion_mrad": 2.0,
-          "rate_s": 1.2,
-          "magazine": 10,
-          "reload_s": 4.0,
-          "damage_per_joule": 0.01,
-          "muzzle_height_m": 1.5,
-          "max_flight_s": 10.0,
-          "sound_range_m": 600.0
-        },
-        {
-          "type": "behaviour",
-          "mode": "guard",
-          "route": [],
-          "team": "red",
-          "view_range_m": 120.0,
-          "fov_deg": 120.0,
-          "engage_range_m": 100.0,
-          "aim_error_mrad": 8.0,
-          "reaction_s": 1.0,
-          "search_s": 10.0
-        },
-        {
-          "type": "tags",
-          "tags": [
-            "enemy",
-            "team:red"
-          ]
-        }
-      ]
+      "prefab": "enemy-soldier"
     }
   ],
   "vars": {

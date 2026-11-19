@@ -345,7 +345,7 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "command_run",
-            "description": "Runs one command by id and returns its JSON result (its wall-clock milliseconds in the tool result's _meta.ms). A failed command returns isError with a message that starts with the command's id and names the parameter. World: world.set, terrain.set, environment.set, entity.*; play: sim.start, sim.input, sim.step, sim.state, sim.stop; look: world.inspect, view.render (an image block); files: file.new, file.open, file.save; history: edit.undo, edit.redo.",
+            "description": "Runs one command by id and returns its JSON result (its wall-clock milliseconds in the tool result's _meta.ms). A failed command returns isError with a message that starts with the command's id and names the parameter. World: world.set, terrain.set, environment.set, entity.*, prefab.*; play: sim.start, sim.input, sim.step, sim.state, sim.stop, journal.get; look: world.inspect, view.render (an image block); files: file.new, file.open, file.save, journal.save; history: edit.undo, edit.redo.",
             "inputSchema": {"type": "object", "properties": {
                 "id": {"type": "string", "description": "A command id from command_list, e.g. \"entity.add\"."},
                 "command": {"type": "string", "description": "The same as id (the name the JSON-lines protocol uses); give one of the two."},

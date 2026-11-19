@@ -142,6 +142,18 @@ pub struct Shape {
     pub solid: bool,
 }
 
+impl Default for Shape {
+    /// A solid light grey box of 1 m.
+    fn default() -> Self {
+        Shape {
+            kind: ShapeKind::Box,
+            size: default_shape_size(),
+            color: default_shape_color(),
+            solid: true,
+        }
+    }
+}
+
 impl Shape {
     fn validate(&self, ctx: Ctx) -> Result<(), WorldError> {
         for (axis, &v) in self.size.iter().enumerate() {

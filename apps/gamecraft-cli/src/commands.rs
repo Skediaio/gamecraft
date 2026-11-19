@@ -5,6 +5,7 @@ use crate::gpu::GpuPictures;
 use crate::script::{Step, collect_steps};
 use crate::{CliError, Res, help};
 use gamecraft_automation::{Access, Host, mcp, rpc};
+use gamecraft_engine::journal::Journal;
 use gamecraft_world::World;
 use serde_json::{Value, json};
 use std::io::Write;
@@ -18,6 +19,8 @@ const TICKS_PER_SECOND: f64 = 60.0;
 const MAX_PLAY_SECONDS: f64 = 86_400.0;
 /// Entities `info` lists.
 const INFO_ENTITY_LIMIT: u64 = 1000;
+/// Largest journal `replay` reads, bytes.
+const MAX_JOURNAL_BYTES: u64 = 512 * 1024 * 1024;
 /// Picture size of `render` when `--size` is left out.
 const DEFAULT_SIZE: (u32, u32) = (960, 540);
 
@@ -368,12 +371,14 @@ pub fn play(raw: &[String]) -> Res {
             "--ticks",
             "--out-state",
             "--picture",
+            "--journal",
         ],
         &[],
     )?;
     if a.help() {
         return print(help::PLAY);
     }
+    let journal_out = a.value("--journal")?.map(absolute).transpose()?;
     let file = a.required_file("the world FILE to play")?;
     let target_ticks = match (a.value("--seconds")?, a.value("--ticks")?) {
         (Some(_), Some(_)) => {
@@ -428,6 +433,20 @@ pub fn play(raw: &[String]) -> Res {
         std::fs::write(path, format!("{text}\n"))
             .map_err(|e| CliError::Failed(format!("cannot write the state to `{path}`: {e}")))?;
     }
+    if let Some(path) = &journal_out {
+        let text = host
+            .session()
+            .journal()
+            .ok_or_else(|| CliError::Failed("the run kept no journal (a bug)".into()))?
+            .to_json()
+            .map_err(CliError::Failed)?;
+        std::fs::write(path, text).map_err(|e| {
+            CliError::Failed(format!(
+                "cannot write the journal to `{}`: {e}",
+                path.display()
+            ))
+        })?;
+    }
     if let (Some(path), Some(map)) = (picture, state.as_object_mut()) {
         let drawn = exec(
             &mut host,
@@ -437,6 +456,94 @@ pub fn play(raw: &[String]) -> Res {
         map.insert("picture".into(), drawn?);
     }
     print_json(&state)
+}
+
+/// Reads and checks a journal file.
+fn read_journal(given: &str) -> Result<Journal, CliError> {
+    let failed = |why: String| CliError::Failed(format!("`{given}`: {why}"));
+    let meta = std::fs::metadata(given).map_err(|e| failed(format!("cannot read it: {e}")))?;
+    if meta.len() > MAX_JOURNAL_BYTES {
+        return Err(failed(format!(
+            "it is {} MB; a journal may be at most {} MB",
+            meta.len().div_ceil(1024 * 1024),
+            MAX_JOURNAL_BYTES / (1024 * 1024)
+        )));
+    }
+    let text =
+        std::fs::read_to_string(given).map_err(|e| failed(format!("cannot read it: {e}")))?;
+    Journal::from_json(&text).map_err(failed)
+}
+
+/// `replay`: runs a journal again and compares its hashes.
+pub fn replay(raw: &[String]) -> Res {
+    let a = Args::parse(raw, &["--to-tick"], &["--check"])?;
+    if a.help() {
+        return print(help::REPLAY);
+    }
+    let file = a.required_file("the JOURNAL to replay")?;
+    let to_tick = match a.value("--to-tick")? {
+        None => None,
+        Some(text) => Some(text.parse::<u64>().map_err(|_| {
+            CliError::Usage(format!(
+                "`--to-tick {text}` must be a whole number of ticks (60 per second)"
+            ))
+        })?),
+    };
+    let journal = read_journal(file)?;
+    let replay = journal
+        .replay(to_tick)
+        .map_err(|e| CliError::Failed(format!("the journal cannot start: {e}")))?;
+    let divergence = replay
+        .divergence
+        .as_ref()
+        .map(|d| json!({"entry": d.entry, "tick": d.tick, "message": d.message}));
+    let summary = json!({
+        "tick": replay.tick,
+        "hash": replay.hash,
+        "entries": journal.entries.len(),
+        "entries_run": replay.entries_run,
+        "hashes_checked": replay.hashes_checked,
+        "final": journal.end.as_ref().map(|e| json!({"tick": e.tick, "hash": e.hash})),
+        "matches": replay.divergence.is_none(),
+        "divergence": divergence.clone(),
+    });
+    let out = match to_tick {
+        None => summary,
+        Some(_) => {
+            let mut session = replay.session;
+            let mut state = session
+                .run("sim.state", &json!({}))
+                .map_err(|e| CliError::Failed(e.to_string()))?;
+            if let Some(map) = state.as_object_mut() {
+                map.insert(
+                    "replay".into(),
+                    json!({
+                        "tick": replay.tick,
+                        "entries_run": replay.entries_run,
+                        "hashes_checked": replay.hashes_checked,
+                        "divergence": divergence,
+                    }),
+                );
+            }
+            state
+        }
+    };
+    print_json(&out)?;
+    if a.has("--check")
+        && let Some(d) = &replay.divergence
+    {
+        return Err(CliError::Failed(format!(
+            "the replay of `{file}` diverges: {}",
+            d.message
+        )));
+    }
+    if a.has("--check") && journal.truncated && to_tick.is_none() {
+        return Err(CliError::Failed(format!(
+            "`{file}` is truncated (it was full), so it cannot be checked to its end; check \
+             up to a tick with --to-tick"
+        )));
+    }
+    Ok(())
 }
 
 /// `serve` and `mcp`: the protocol servers over stdin and stdout.

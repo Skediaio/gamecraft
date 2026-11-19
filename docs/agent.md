@@ -126,6 +126,36 @@ built, saved and changed with commands like everything else.
 - **Directing a game.** There is no separate game-master API: read `sim.state`, the events and
   `objective.list`, decide, send world or scenario commands, step. A variable you change between
   steps fires its `var` triggers at the start of the next step.
+- **The journal.** Everything you send to a running world that changes it (world commands,
+  `sim.input`, `sim.fire`, `sim.release`, `message.show`, `sim.step`) is recorded with the tick
+  it took effect at and the state hash after it; queries and the commands of triggers are not.
+  `journal.get {from_tick?, to_tick?, limit?}` reads it, `journal.save {path}` writes it with the
+  world the simulation started from, and `gamecraft-cli replay FILE --check` runs it again and
+  names the first tick where the hash differs (`--to-tick N` stops there to bisect). The journal
+  of the last simulation stays readable after `sim.stop`, until the next `sim.start`.
+
+## Prefabs
+
+Describe an entity once and place it many times. `prefab.add {id, name?, components,
+children?}` keeps a prefab in the world; `prefab.spawn {prefab, at | position,
+rotation_y_deg?, name?, overrides?}` places one and answers `{id, children}`. The instance's
+components are the prefab's, with each component of `overrides` replacing the prefab's of the
+same type (or adding a type it lacks): `"overrides": [{"type": "health", "max": 250, "current":
+250}]` makes a tougher soldier of the same prefab. `children` (`[{name?, offset: [x, y, z],
+rotation_y_deg?, components}]`) are entities of their own placed relative to the instance
+(`offset` in its frame: -Z is its forward, +X its right) with the instance as their `parent`:
+a house with its door, a beacon with its ring. `entity.set` on the instance moves and turns its
+children with it, `entity.remove` removes them too.
+
+- `entity.get` shows an instance's `prefab`, its `overrides`, its `parent` and `children`, and
+  its effective `components`; `world.inspect` and `prefab.list` list the prefabs with their
+  instances.
+- `prefab.set {id, components?, children?, name?}` changes a prefab and every instance with it:
+  each keeps its overrides and takes the rest from the new prefab. An instance cannot lose a
+  component type of its prefab (override it instead). `prefab.remove` is refused while the
+  prefab is placed, and the error names the entities.
+- `prefab.spawn` works on a running world: the game master's "drop a squad here". What is
+  spawned takes part from the next tick.
 
 ## Projectiles and behaviour
 
@@ -173,11 +203,12 @@ Fighting is three components and two commands; they name no weapon, a pack fills
 
 ## Known limits of M0
 
-- Shapes are boxes, spheres and cylinders; there are no meshes, prefabs, scripts or packs yet.
+- Shapes are boxes, spheres and cylinders; there are no meshes, scripts or packs yet. A prefab's
+  children follow `entity.set`, not the simulation: a character that walks leaves its children
+  where they were.
 - Characters do not collide with each other; spheres block but cannot be stood on; plants are no
   obstacles; there are no rigid bodies.
-- A running world has no history and its game-master commands are not yet recorded in a journal,
-  so a directed session is replayed by sending the same commands at the same ticks.
+- A running world has no history; its journal is how a directed session is kept and replayed.
 - `intent` is accepted and checked on commands and batches, but not recorded yet.
 - There is no control channel to a running window yet (M1).
 - Pictures need a GPU: without one, `view.render` and `doc_render_preview` say a renderer is

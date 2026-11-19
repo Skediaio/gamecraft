@@ -9,7 +9,7 @@ Everything here was made with engine commands only, nothing else.
 
 | File | What it is |
 |---|---|
-| `build.json` | The `gamecraft-cli run` script that builds the whole world: terrain, environment, trees, cover, player, enemies with their behaviour, objectives, variables and triggers |
+| `build.json` | The `gamecraft-cli run` script that builds the whole world: terrain, environment, trees, cover, player, enemies with their behaviour, objectives, variables and triggers. The enemies are placed from one prefab, `enemy-soldier` (the patrols override its `behaviour`), and the houses from a prefab `house` (House 2 overrides its `shape`) |
 | `world.gamecraft` | The result of that script (a test checks that building it again gives the same world) |
 | `playthrough.json` | A `gamecraft-cli play` script: a scripted player that moves from cover to cover, keeps each enemy in its sights with `face_entity`, and wins at 53.3 s with 43 health left |
 
@@ -62,6 +62,17 @@ left"`), and the end triggers read the objectives: the village is only cleared w
 is open, and the player is only lost while `clear` is open. The trees keep the wall line, the
 village, the barn and the start clear (`exclude` of `entity.scatter`).
 
+## Record and replay a session
+
+```sh
+# Writes the journal of the run: every command with its tick and the state hash after it.
+gamecraft-cli play examples/skirmish/world.gamecraft \
+    --script examples/skirmish/playthrough.json --seconds 60 --journal skirmish.journal.json
+# Runs it again from the world it embeds and compares every hash; exit 1 names the first tick
+# that differs. --to-tick N stops there and prints sim.state, to bisect.
+gamecraft-cli replay skirmish.journal.json --check
+```
+
 ## Open it in the window
 
 ```sh
@@ -75,8 +86,9 @@ send `sim.start`, then step and steer:
 
 - Turn the weather against the shooter: `environment.set {"wind_speed_mps": 18, "rain": 0.6,
   "mist": 0.8}` bends the shots and cuts how far the enemies (and you) see.
-- Send reinforcements: `entity.add` a copy of an enemy (a `character`, `health`, `launcher`,
-  `behaviour` with `"team": "red"` and the tag `enemy`) with `"at": [60, -40]`, then
+- Send reinforcements: `prefab.spawn {"prefab": "enemy-soldier", "at": [60, -40], "name":
+  "Reinforcement", "overrides": [{"type": "behaviour", "mode": "patrol", "route": [[60, -40],
+  [20, -40]], "team": "red"}]}` drops a soldier who patrols from the next tick, then
   `var.set {"name": "enemies_left", "add": 1}` so the count stays right.
 - Take an enemy over and play it: `sim.input {"entity": "Hill Sentry", "face": [0, 48],
   "fire": true}` makes it fire where you say, and `sim.release {"entity": "Hill Sentry"}` gives

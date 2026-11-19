@@ -395,6 +395,8 @@ fn scatter(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
         position: [0.0; 3],
         rotation_y_deg: 0.0,
         scale: 1.0,
+        prefab: None,
+        parent: None,
         components: template.clone(),
     };
     probe

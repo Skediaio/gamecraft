@@ -118,11 +118,15 @@ degrees, times seconds; an entity is its id or its name.
 | Command | Params | Result |
 |---|---|---|
 | `entity.add` | `{name? = "", position?, at?, rotation_y_deg? = 0, scale? = 1, components? = []}` | `{id, position}`; give `position` (`[x, y, z]`) or `at` (`[x, z]`, the base on the ground) |
-| `entity.set` | `{id, name?, position?, at?, rotation_y_deg?, scale?}` | `{id, position}`; only the fields given change |
-| `entity.remove` | `{id}` | `null`; the id is never handed out again |
+| `entity.set` | `{id, name?, position?, at?, rotation_y_deg?, scale?}` | `{id, position}`; only the fields given change; the entities that belong to it (a prefab's children) move and turn with it |
+| `entity.remove` | `{id}` | `null`; removes the entities that belong to it too (a prefab's children); the ids are never handed out again |
 | `entity.set_component` | `{id, component}` | `null`; adds a component or replaces the one of its type |
 | `entity.remove_component` | `{id, type}` | `null`; `type` is a component type (`component.list`) |
 | `entity.snap_to_ground` | `{id?}` | `{moved, skipped}`; one entity, or all when `id` is left out |
+| `prefab.add` | `{id, name? = "", components? = [], children? = []}` | `{id}`; an entity described once to place many times; `children` (at most 64) are `[{name? = "", offset? = [0, 0, 0], rotation_y_deg? = 0, components? = []}]`, placed relative to each instance (`offset` in metres in its frame: -Z its forward, +X its right); the id must be new |
+| `prefab.set` | `{id, name?, components?, children?}` | `{id, instances: [ids]}`; only the fields given change, each as a whole; every instance keeps its overrides and takes the rest from the new prefab; children already placed stay |
+| `prefab.remove` | `{id}` | `null`; refused while entities are placed from it, naming them |
+| `prefab.spawn` | `{prefab, position?, at?, rotation_y_deg? = 0, name?, overrides? = []}` | `{id, children: [ids], position}`; an entity with `prefab` set, whose components are the prefab's with `overrides` replacing those of the same type (or adding a type the prefab lacks), and one entity per child with the instance as `parent`; `name` defaults to the prefab's; works on a running world too |
 | `entity.scatter` | `{count, components, seed?, name? = "", center?, radius_m?, exclude? = [], min_distance_m? = 0, max_slope_deg? = 90, scale_range? = [1, 1], random_rotation? = true, vary_seed? = true}` | `{placed, requested, first_id, last_id}`; up to `count` (1 to 5000) copies of the template `components` on the terrain's ground, in a circle (`center` `[x, z]` and `radius_m`) or over the whole terrain, skipping points steeper than `max_slope_deg`, inside a circle of `exclude` (`[{center: [x, z], radius_m}]`, at most 256) or closer than `min_distance_m`; names get a number from 1 (`Oak 1`, `Oak 2`, ...); each plant its own seed with `vary_seed`; the same parameters give the same entities; one undo step |
 
 Components, as in the file format (fields left out take their defaults):
@@ -147,7 +151,8 @@ Components, as in the file format (fields left out take their defaults):
 | `sim.release` | `{entity}` | `{entity, released, behaviour}`; hands a character an agent took over back to its behaviour |
 | `sim.step` | `{ticks? = 1, seconds?}` | `{tick, time_s, hash, characters: [{id, name, position, rotation_y_deg, velocity, grounded, health, behaviour, magazine}], projectiles: [{id, shooter, position, velocity, speed_mps, age_s}], events: [{tick, event, ...}], fired: [{trigger, tick, event, ok, error?}]}`; whole ticks of 1/60 s, at most 36000 per call; the triggers run after each tick; at most 1000 events and 1000 fired listed (`events_omitted`, `fired_omitted` count the rest); `health` is `{max, current, armor, down}`, `behaviour` `{state, target?, wait_s?, point?, left_s?, waypoint, taken_over}` and `magazine` `{left, shots, ready_in_s, reloading}`, each null without the component |
 | `sim.state` | `{}` | `{playing: false}` or `{playing: true, tick, time_s, hash, characters: [...], projectiles: [...], inputs: [{entity, forward, right, yaw_deg, pitch_deg, run, jump, interact, fire, face, face_entity, face_pitch}], objectives, messages: [{text, to, shown_at_s, until_s}], trigger_errors: [{trigger, tick, error}]}`; the last 20 trigger errors |
-| `sim.stop` | `{keep? = false}` | `{tick, kept}`; throws the running world away, or with `keep` makes it the document as one undo step |
+| `sim.stop` | `{keep? = false}` | `{tick, kept}`; throws the running world away, or with `keep` makes it the document as one undo step; the journal stays readable until the next `sim.start` |
+| `journal.get` | `{from_tick?, to_tick?, limit? = 1000}` | `{recording, world, entry_count, matched, entries: [{index, tick, command, params, end_tick?, hash}], final: {tick, hash} \| null, truncated}`; the journal of the running (or last) simulation: every world command, `sim.input`, `sim.fire`, `sim.release`, `message.show` and `sim.step` sent from outside, with the tick it took effect at and the state hash after it (`end_tick` for a step); queries and the commands of triggers are not recorded; entries whose tick is in `from_tick..=to_tick`, at most `limit` (1 to 10000); before the first `sim.start` `recording: false` and no entries |
 
 While a simulation runs, the World, Entities and Scenarios commands change the running world
 (with the same checks) and leave the document alone; `hash` is the state hash, 16 hex digits.
@@ -187,7 +192,8 @@ false`, `trigger_errors`) and changes nothing. Triggers fired by triggers nest a
 | Command | Params | Result |
 |---|---|---|
 | `world.inspect` | `{entities? = true, limit? = 200, offset? = 0}` | below |
-| `entity.get` | `{id}` | `{id, name, position, rotation_y_deg, scale, components, ground_height_m, height_above_ground_m, body, input, health, behaviour, magazine}`; `body` (`{velocity, grounded}`) and `input` while playing, for a character, else null; `health` (`{max, current, armor, down}`) with a `health` component; `behaviour` (its state) and `magazine` (its launcher's) while playing |
+| `prefab.list` | `{}` | `{prefabs: [{id, name, components, children, instances: [ids], instance_count}]}`; in the order given |
+| `entity.get` | `{id}` | `{id, name, position, rotation_y_deg, scale, prefab, overrides, parent, children, components, ground_height_m, height_above_ground_m, body, input, health, behaviour, magazine}`; `prefab` (the prefab's id or null), `overrides` (its components that differ from its prefab's), `parent` (an id or null) and `children` (ids); `components` are the effective ones; `body` (`{velocity, grounded}`) and `input` while playing, for a character, else null; `health` (`{max, current, armor, down}`) with a `health` component; `behaviour` (its state) and `magazine` (its launcher's) while playing |
 | `entity.find` | `{name?, component?, tag?, near?, radius_m?, limit? = 50}` | `{total, entities: [{id, name, position, components, distance_m?}]}`; part of the name in any case, a component type, a tag (exactly), a horizontal circle round `near` (`[x, z]`); by distance with `near`, else by id |
 | `query.ground_height` | `{x, z}` | `{x, z, height_m, normal, slope_deg}`; the terrain only, null outside it |
 | `query.raycast` | `{origin, direction, max_m? = 1000}` | `{hit: false}` or `{hit: true, kind: "terrain" \| "entity", entity?, name?, point, normal, distance_m}`; the nearest of the terrain and every shape, solid or not; plants and characters are not hit yet; a ray that starts inside a shape hits at distance 0 |
@@ -200,8 +206,11 @@ false`, `trigger_errors`) and changes nothing. Triggers fired by triggers nest a
 world, the running world while playing: `{name, seed, revision, playing, tick (null when not
 playing), terrain: null | {size_m, cell_m, source, cols, rows, min_height_m, max_height_m},
 environment, sun: {azimuth_deg, elevation_deg, direction, above_horizon}, entity_count, vars,
-objectives, trigger_count, entities: [{id, name, position, rotation_y_deg, scale, components}], truncated, history:
-{can_undo, can_redo}}`. Entities are listed in id order, `limit` (1 to 1000) at a time from
+objectives, trigger_count, prefabs: [{id, name, components, children, instances,
+instance_count}], entities: [{id, name, position, rotation_y_deg, scale, prefab?, parent?,
+components}], truncated, history: {can_undo, can_redo}}`. An entity placed from a prefab shows
+`prefab` and its effective components (the prefab's with its overrides); a prefab's child shows
+its `parent`. Entities are listed in id order, `limit` (1 to 1000) at a time from
 `offset`; `truncated` says whether more follow; `entities: false` leaves the list (and
 `truncated`) out. `source` is the terrain's recipe as in the file format; `components` are as
 in the file format.
@@ -214,6 +223,7 @@ in the file format.
 | `file.open` | `{path}` | `{path, name, entities, terrain}` (`terrain`: whether the world has one); a `.gamecraft` file inside the read root, at most 64 MB; a new history, any simulation stopped |
 | `file.save` | `{path?, overwrite? = false}` | `{path, bytes}`; writes the document (never the running world) as `.gamecraft` inside the write root; without `path` the open file; an existing other file needs `overwrite` |
 | `edit.undo`, `edit.redo` | `{}` | `{can_undo, can_redo}`; refused while a simulation runs and when there is nothing to undo or redo |
+| `journal.save` | `{path, overwrite? = false}` | `{path, bytes, entries, final: {tick, hash}}`; writes the journal of the running (or last) simulation as a `.json` file inside the write root: `{gamecraft_journal: 1, world, entries, final}` (`docs/design/journal.md`); an existing file needs `overwrite`; `gamecraft-cli replay FILE --check` runs it again |
 | `view.render` | `{path?, width? = 960, height? = 540, camera?, follow?, time_s?}` | `{mime: "image/png", base64, width, height, ...info}`, or with `path` `{path, bytes, width, height, ...info}` |
 
 - **Files.** A relative path is inside the root, an absolute path must lie inside it. Refused,
@@ -221,7 +231,7 @@ in the file format.
   `--automation-read-root DIR` or `--automation-write-root DIR`), `..` anywhere in the path, a
   path or a link that leads out of the root (the existing parent folder is resolved with its
   links), a folder that does not exist, an extension other than `.gamecraft` (`.png` for
-  pictures). A save writes a temporary file beside the target and renames it, so a failed save
+  pictures, `.json` for journals). A save writes a temporary file beside the target and renames it, so a failed save
   never leaves half a file. A file that cannot be read, is too large, is not UTF-8 or is not a
   valid world is an error, and the session stays exactly as it was.
 - **Pictures.** `view.render` draws `current_world` (the running world while playing) with its

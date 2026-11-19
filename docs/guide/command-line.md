@@ -15,6 +15,7 @@ lists the subcommands, `gamecraft-cli <subcommand> --help` explains one.
 | `info` | Prints a world file's state as JSON |
 | `render` | Draws a world file to a PNG (GPU) |
 | `play` | Plays a world file for a while and prints the state hash |
+| `replay` | Runs a journal of a play session again and compares its state hashes |
 | `new` | Writes an empty world file |
 | `serve` | The JSON-lines protocol on stdin and stdout |
 | `mcp` | The MCP server on stdin and stdout |
@@ -113,8 +114,27 @@ Starts the simulation of the file, runs the script (steps as for `run`, typicall
 `sim.step`), steps on until `--seconds` (or `--ticks`) of simulated time in total have passed, and
 prints `sim.state` as one line of JSON: the tick, the **state hash** and where the characters are.
 Two runs of the same arguments print the same hash, on every machine. `--out-state` also writes the
-state to a file; `--picture` draws the last state (the state line gets a `picture` key). The file
-is never changed.
+state to a file; `--picture` draws the last state (the state line gets a `picture` key);
+`--journal FILE` writes the journal of the run (below). The file is never changed.
+
+## Replaying a session: `replay`
+
+```sh
+gamecraft-cli play valley.gamecraft --script walk.json --seconds 6 --journal walk.journal.json
+gamecraft-cli replay walk.journal.json --check
+gamecraft-cli replay walk.journal.json --to-tick 180
+```
+
+A journal holds the world a simulation started from and every command that changed it while it
+ran (world commands, `sim.input`, `sim.fire`, `sim.release`, `message.show`, `sim.step`), each
+with the tick it took effect at and the state hash after it (`docs/design/journal.md`). `play
+--journal` writes one, and so does the command `journal.save` over the protocol or MCP.
+`replay` starts the embedded world, sends every command again at its tick and compares the
+hashes. It prints `{tick, hash, entries, entries_run, hashes_checked, final, matches,
+divergence}`; `divergence` names the entry and the first tick where the hash differs. With
+`--check` a difference exits 1 with that sentence on stderr. `--to-tick N` stops when the
+simulation reaches tick N, before the commands recorded at it, and prints `sim.state` there
+(with a `replay` key): halve N until the tick where things go wrong is found.
 
 ## Making a world file: `new`
 

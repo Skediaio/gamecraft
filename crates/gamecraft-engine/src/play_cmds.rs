@@ -85,7 +85,9 @@ fn start_spec() -> CommandSpec {
         "sim.start",
         "Play",
         "Starts a simulation on a copy of the document. World commands then change the running \
-         world, not the document, until sim.stop. The triggers waiting for `start` run.",
+         world, not the document, until sim.stop. The triggers waiting for `start` run. A new \
+         journal starts (journal.get): every command that changes the running world is \
+         recorded with its tick.",
         vec![],
         "{tick: 0, hash, characters: [ids], events: [{tick, event: \"start\"}], fired: \
          [{trigger, tick, event, ok, error?}]}",
@@ -100,12 +102,14 @@ fn start(session: &mut Session, _p: Params<'_>) -> Result<Value, CommandError> {
             "a simulation is already running; stop it first with sim.stop",
         ));
     }
-    let sim = Sim::new(session.document().clone()).map_err(failed)?;
+    let world = session.document().clone();
+    let sim = Sim::new(world.clone()).map_err(failed)?;
     let ids: Vec<u64> = sim.bodies().map(|(id, _)| id.0).collect();
-    session.start_live(sim);
+    session.start_live(sim, world);
     triggers::begin_report(session);
     triggers::happen(session, 0, Happening::Start);
     let report = triggers::take_report(session);
+    session.mark_journal_start();
     let sim = running(session)?;
     let mut result = Map::new();
     result.insert("tick".into(), json!(sim.tick()));
@@ -120,7 +124,7 @@ fn stop_spec() -> CommandSpec {
         "sim.stop",
         "Stop",
         "Stops the simulation and throws the running world away, or with `keep` makes it the \
-         document, as one undo step.",
+         document, as one undo step. Its journal stays readable until the next sim.start.",
         vec![
             param(
                 "keep",

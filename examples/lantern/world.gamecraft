@@ -24,7 +24,81 @@
     "mist": 0.3,
     "rain": 0.0
   },
-  "next_entity_id": 58,
+  "prefabs": [
+    {
+      "id": "beacon",
+      "name": "Beacon",
+      "components": [
+        {
+          "type": "shape",
+          "kind": "cylinder",
+          "size": [
+            0.4,
+            2.5,
+            0.4
+          ],
+          "color": [
+            0.35,
+            0.28,
+            0.2
+          ],
+          "solid": true
+        },
+        {
+          "type": "interactable",
+          "reach_m": 2.0,
+          "prompt": "Light the beacon"
+        },
+        {
+          "type": "light",
+          "color": [
+            1.0,
+            0.6,
+            0.2
+          ],
+          "intensity_cd": 400.0,
+          "range_m": 20.0,
+          "on": false
+        },
+        {
+          "type": "tags",
+          "tags": [
+            "beacon"
+          ]
+        }
+      ],
+      "children": [
+        {
+          "name": "Beacon ring",
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation_y_deg": 0.0,
+          "components": [
+            {
+              "type": "zone",
+              "shape": "circle",
+              "radius_m": 3.0,
+              "size": [
+                4.0,
+                4.0
+              ],
+              "height_m": 3.0
+            },
+            {
+              "type": "tags",
+              "tags": [
+                "beacon-ring"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "next_entity_id": 63,
   "entities": [
     {
       "id": 1,
@@ -1090,48 +1164,40 @@
       ],
       "rotation_y_deg": 0.0,
       "scale": 1.0,
+      "prefab": "beacon"
+    },
+    {
+      "id": 54,
+      "name": "Beacon ring",
+      "position": [
+        -45.0,
+        -0.8665889799594879,
+        -35.0
+      ],
+      "rotation_y_deg": 0.0,
+      "scale": 1.0,
+      "parent": 53,
       "components": [
         {
-          "type": "shape",
-          "kind": "cylinder",
+          "type": "zone",
+          "shape": "circle",
+          "radius_m": 3.0,
           "size": [
-            0.4,
-            2.5,
-            0.4
+            4.0,
+            4.0
           ],
-          "color": [
-            0.35,
-            0.28,
-            0.2
-          ],
-          "solid": true
-        },
-        {
-          "type": "interactable",
-          "reach_m": 2.0,
-          "prompt": "Light the beacon"
-        },
-        {
-          "type": "light",
-          "color": [
-            1.0,
-            0.6,
-            0.2
-          ],
-          "intensity_cd": 400.0,
-          "range_m": 20.0,
-          "on": false
+          "height_m": 3.0
         },
         {
           "type": "tags",
           "tags": [
-            "beacon"
+            "beacon-ring"
           ]
         }
       ]
     },
     {
-      "id": 54,
+      "id": 55,
       "name": "Beacon Pines",
       "position": [
         -30.0,
@@ -1140,48 +1206,40 @@
       ],
       "rotation_y_deg": 0.0,
       "scale": 1.0,
+      "prefab": "beacon"
+    },
+    {
+      "id": 56,
+      "name": "Beacon ring",
+      "position": [
+        -30.0,
+        -0.44486188888549805,
+        60.0
+      ],
+      "rotation_y_deg": 0.0,
+      "scale": 1.0,
+      "parent": 55,
       "components": [
         {
-          "type": "shape",
-          "kind": "cylinder",
+          "type": "zone",
+          "shape": "circle",
+          "radius_m": 3.0,
           "size": [
-            0.4,
-            2.5,
-            0.4
+            4.0,
+            4.0
           ],
-          "color": [
-            0.35,
-            0.28,
-            0.2
-          ],
-          "solid": true
-        },
-        {
-          "type": "interactable",
-          "reach_m": 2.0,
-          "prompt": "Light the beacon"
-        },
-        {
-          "type": "light",
-          "color": [
-            1.0,
-            0.6,
-            0.2
-          ],
-          "intensity_cd": 400.0,
-          "range_m": 20.0,
-          "on": false
+          "height_m": 3.0
         },
         {
           "type": "tags",
           "tags": [
-            "beacon"
+            "beacon-ring"
           ]
         }
       ]
     },
     {
-      "id": 55,
+      "id": 57,
       "name": "Beacon Ford",
       "position": [
         60.0,
@@ -1190,48 +1248,40 @@
       ],
       "rotation_y_deg": 0.0,
       "scale": 1.0,
+      "prefab": "beacon"
+    },
+    {
+      "id": 58,
+      "name": "Beacon ring",
+      "position": [
+        60.0,
+        -5.4550416469573975,
+        75.0
+      ],
+      "rotation_y_deg": 0.0,
+      "scale": 1.0,
+      "parent": 57,
       "components": [
         {
-          "type": "shape",
-          "kind": "cylinder",
+          "type": "zone",
+          "shape": "circle",
+          "radius_m": 3.0,
           "size": [
-            0.4,
-            2.5,
-            0.4
+            4.0,
+            4.0
           ],
-          "color": [
-            0.35,
-            0.28,
-            0.2
-          ],
-          "solid": true
-        },
-        {
-          "type": "interactable",
-          "reach_m": 2.0,
-          "prompt": "Light the beacon"
-        },
-        {
-          "type": "light",
-          "color": [
-            1.0,
-            0.6,
-            0.2
-          ],
-          "intensity_cd": 400.0,
-          "range_m": 20.0,
-          "on": false
+          "height_m": 3.0
         },
         {
           "type": "tags",
           "tags": [
-            "beacon"
+            "beacon-ring"
           ]
         }
       ]
     },
     {
-      "id": 56,
+      "id": 59,
       "name": "Beacon Hill",
       "position": [
         100.0,
@@ -1240,48 +1290,40 @@
       ],
       "rotation_y_deg": 0.0,
       "scale": 1.0,
+      "prefab": "beacon"
+    },
+    {
+      "id": 60,
+      "name": "Beacon ring",
+      "position": [
+        100.0,
+        5.115922689437866,
+        5.0
+      ],
+      "rotation_y_deg": 0.0,
+      "scale": 1.0,
+      "parent": 59,
       "components": [
         {
-          "type": "shape",
-          "kind": "cylinder",
+          "type": "zone",
+          "shape": "circle",
+          "radius_m": 3.0,
           "size": [
-            0.4,
-            2.5,
-            0.4
+            4.0,
+            4.0
           ],
-          "color": [
-            0.35,
-            0.28,
-            0.2
-          ],
-          "solid": true
-        },
-        {
-          "type": "interactable",
-          "reach_m": 2.0,
-          "prompt": "Light the beacon"
-        },
-        {
-          "type": "light",
-          "color": [
-            1.0,
-            0.6,
-            0.2
-          ],
-          "intensity_cd": 400.0,
-          "range_m": 20.0,
-          "on": false
+          "height_m": 3.0
         },
         {
           "type": "tags",
           "tags": [
-            "beacon"
+            "beacon-ring"
           ]
         }
       ]
     },
     {
-      "id": 57,
+      "id": 61,
       "name": "Beacon Ridge",
       "position": [
         30.0,
@@ -1290,42 +1332,34 @@
       ],
       "rotation_y_deg": 0.0,
       "scale": 1.0,
+      "prefab": "beacon"
+    },
+    {
+      "id": 62,
+      "name": "Beacon ring",
+      "position": [
+        30.0,
+        1.4767658710479736,
+        -85.0
+      ],
+      "rotation_y_deg": 0.0,
+      "scale": 1.0,
+      "parent": 61,
       "components": [
         {
-          "type": "shape",
-          "kind": "cylinder",
+          "type": "zone",
+          "shape": "circle",
+          "radius_m": 3.0,
           "size": [
-            0.4,
-            2.5,
-            0.4
+            4.0,
+            4.0
           ],
-          "color": [
-            0.35,
-            0.28,
-            0.2
-          ],
-          "solid": true
-        },
-        {
-          "type": "interactable",
-          "reach_m": 2.0,
-          "prompt": "Light the beacon"
-        },
-        {
-          "type": "light",
-          "color": [
-            1.0,
-            0.6,
-            0.2
-          ],
-          "intensity_cd": 400.0,
-          "range_m": 20.0,
-          "on": false
+          "height_m": 3.0
         },
         {
           "type": "tags",
           "tags": [
-            "beacon"
+            "beacon-ring"
           ]
         }
       ]

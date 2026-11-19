@@ -58,7 +58,7 @@ fn at_param() -> crate::spec::ParamSpec {
 }
 
 /// The base position from `position` or `at`; `None` when neither is given.
-fn placement(edit: &Edit<'_>, p: Params<'_>) -> Result<Option<[f64; 3]>, CommandError> {
+pub(crate) fn placement(edit: &Edit<'_>, p: Params<'_>) -> Result<Option<[f64; 3]>, CommandError> {
     match (p.point3("position")?, p.point2("at")?) {
         (Some(_), Some(_)) => Err(bad(
             "give `position` or `at`, not both: `at` puts the base on the ground",
@@ -145,7 +145,8 @@ fn set_spec() -> CommandSpec {
     spec(
         "entity.set",
         "Edit Entity",
-        "Renames, moves, turns or scales an entity; only the fields given change.",
+        "Renames, moves, turns or scales an entity; only the fields given change. The \
+         entities that belong to it (a prefab's children) move and turn with it.",
         vec![
             param("id", T::Entity, ID_DOC).required(),
             param("name", T::String, "Its new name, at most 200 characters."),
@@ -170,15 +171,17 @@ fn set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
     let name = p.str("name")?;
     let rotation = p.f64("rotation_y_deg")?;
     let scale = p.f64("scale")?;
+    if position.is_some() || rotation.is_some() {
+        let entity = entity_mut(edit, id)?;
+        let to = position.unwrap_or(entity.position);
+        let turn = rotation.unwrap_or(entity.rotation_y_deg);
+        edit.world
+            .place_entity(id, to, turn)
+            .map_err(|e| bad(e.to_string()))?;
+    }
     let entity = entity_mut(edit, id)?;
     if let Some(name) = name {
         entity.name = name.to_string();
-    }
-    if let Some(position) = position {
-        entity.position = position;
-    }
-    if let Some(r) = rotation {
-        entity.rotation_y_deg = r;
     }
     if let Some(s) = scale {
         entity.scale = s;
@@ -191,7 +194,8 @@ fn remove_spec() -> CommandSpec {
     spec(
         "entity.remove",
         "Remove Entity",
-        "Removes an entity; its id is never handed out again.",
+        "Removes an entity, and the entities that belong to it (a prefab's children); their \
+         ids are never handed out again.",
         vec![param("id", T::Entity, ID_DOC).required()],
         "null",
         json!({"id": 1}),

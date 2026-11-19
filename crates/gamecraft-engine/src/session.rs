@@ -7,6 +7,7 @@
 //! three kinds (by [`Scope`]), and a session has two states, editing and playing.
 
 use crate::error::{CommandError, failed};
+use crate::journal::{Journal, JournalEnd, JournalEntry, MAX_JOURNAL_ENTRIES, hash_text};
 use crate::params::Params;
 use crate::spec::{CommandSpec, Scope, nearest};
 use crate::triggers::PlayLog;
@@ -113,6 +114,8 @@ const MODULES: &[&[Registration]] = &[
     crate::catalog_cmds::SPECS,
     crate::scatter_cmds::SPECS,
     crate::scenario_cmds::SPECS,
+    crate::prefab_cmds::SPECS,
+    crate::journal_cmds::SPECS,
 ];
 
 /// The spec and scope of the built-in command `name`, without a session (for checking the
@@ -182,7 +185,18 @@ pub struct Session {
     /// What the scenario keeps while playing: messages, trigger errors, variables changed
     /// since the last step.
     play: PlayLog,
+    /// The journal of the current simulation, or of the last one until the next `sim.start`.
+    journal: Option<Journal>,
+    /// The journal a `sim.start` inside the running transaction replaced, to put back when
+    /// the transaction fails.
+    journal_stash: Option<Option<Journal>>,
+    /// How deep [`Session::run`] is nested (a trigger's commands run inside a step): only
+    /// the outermost command is recorded in the journal.
+    depth: u32,
 }
+
+/// What a transaction remembers of the journal: its length, end and truncation.
+type JournalMark = Option<(usize, Option<JournalEnd>, bool)>;
 
 impl Session {
     /// A session editing `world`, with the built-in commands registered.
@@ -214,7 +228,49 @@ impl Session {
             in_transaction: false,
             cleared_in_transaction: false,
             play: PlayLog::default(),
+            journal: None,
+            journal_stash: None,
+            depth: 0,
         }
+    }
+
+    /// The journal of the running simulation, or of the last one until the next `sim.start`
+    /// (`docs/design/journal.md`); `None` before the first `sim.start`.
+    pub fn journal(&self) -> Option<&Journal> {
+        self.journal.as_ref()
+    }
+
+    /// Records a command that succeeded while playing, at `tick` (the tick before it ran).
+    fn record(&mut self, command: &str, params: &Value, tick: u64) {
+        let Some(sim) = &self.live else {
+            return;
+        };
+        let Some(journal) = &mut self.journal else {
+            return;
+        };
+        if journal.truncated {
+            return;
+        }
+        if journal.entries.len() >= MAX_JOURNAL_ENTRIES {
+            journal.truncated = true;
+            return;
+        }
+        let after = sim.tick();
+        let hash = hash_text(sim.state_hash());
+        journal.entries.push(JournalEntry {
+            tick,
+            command: command.to_string(),
+            params: params.clone(),
+            end_tick: (command == "sim.step").then_some(after),
+            hash: Some(hash.clone()),
+        });
+        journal.end = Some(JournalEnd { tick: after, hash });
+    }
+
+    fn journal_mark(&self) -> JournalMark {
+        self.journal
+            .as_ref()
+            .map(|j| (j.entries.len(), j.end.clone(), j.truncated))
     }
 
     /// The document being edited.
@@ -292,12 +348,24 @@ impl Session {
             .spec
             .check(params)
             .map_err(|why| CommandError::BadParams(why).for_command(command))?;
-        let params = Params::new(map);
-        let outcome = match entry.handler {
-            Handler::World(f) => self.run_world(f, params),
-            Handler::Query(f) => f(self, params),
-            Handler::Play(f) => f(self, params),
+        let recorded = crate::journal::records(command, entry.spec.scope);
+        let handler = entry.handler;
+        let outer = self.depth == 0;
+        let tick = self.live.as_ref().map(Sim::tick);
+        self.depth = self.depth.saturating_add(1);
+        let outcome = match handler {
+            Handler::World(f) => self.run_world(f, Params::new(map)),
+            Handler::Query(f) => f(self, Params::new(map)),
+            Handler::Play(f) => f(self, Params::new(map)),
         };
+        self.depth = self.depth.saturating_sub(1);
+        if outer
+            && recorded
+            && outcome.is_ok()
+            && let Some(tick) = tick
+        {
+            self.record(command, params, tick);
+        }
         outcome.map_err(|e| e.for_command(command))
     }
 
@@ -367,11 +435,28 @@ impl Session {
         self.live.as_mut()
     }
 
-    /// Starts playing `sim`, with an empty play log.
-    pub(crate) fn start_live(&mut self, sim: Sim) {
+    /// Starts playing `sim`, with an empty play log and a new journal of `world`, the
+    /// document it started from.
+    pub(crate) fn start_live(&mut self, sim: Sim, world: World) {
         self.live = Some(sim);
         self.play = PlayLog::default();
         self.view_revision += 1;
+        let journal = Some(Journal::new(world));
+        let old = std::mem::replace(&mut self.journal, journal);
+        if self.in_transaction && self.journal_stash.is_none() {
+            self.journal_stash = Some(old);
+        }
+    }
+
+    /// Marks the journal's end at the simulation's current tick and hash (after `sim.start`
+    /// and its triggers).
+    pub(crate) fn mark_journal_start(&mut self) {
+        if let (Some(sim), Some(journal)) = (&self.live, &mut self.journal) {
+            journal.end = Some(JournalEnd {
+                tick: sim.tick(),
+                hash: hash_text(sim.state_hash()),
+            });
+        }
     }
 
     /// Stops playing and hands back the simulation; the play log is cleared.
@@ -496,12 +581,15 @@ impl Session {
         let live = self.live.clone();
         let heights = self.heights.clone();
         let play = self.play.clone();
+        let mark = self.journal_mark();
+        self.journal_stash = None;
         let (revision, view_revision) = (self.revision, self.view_revision);
         self.in_transaction = true;
         self.cleared_in_transaction = false;
         let outcome = f(self);
         self.in_transaction = false;
         let cleared = std::mem::take(&mut self.cleared_in_transaction);
+        let stash = self.journal_stash.take();
         match outcome {
             Ok(value) => {
                 if cleared {
@@ -518,6 +606,16 @@ impl Session {
                 self.live = live;
                 self.heights = heights;
                 self.play = play;
+                match stash {
+                    Some(old) => self.journal = old,
+                    None => {
+                        if let (Some(j), Some((len, end, truncated))) = (&mut self.journal, mark) {
+                            j.entries.truncate(len);
+                            j.end = end;
+                            j.truncated = truncated;
+                        }
+                    }
+                }
                 self.revision = revision;
                 self.view_revision = view_revision;
                 Err(e)

@@ -54,8 +54,9 @@ A world is one JSON document (`.gamecraft`, format version 1, `gamecraft-world`)
   a world with, optionally solid), `plant` (a species of the plant library, a seed and a growth
   stage) and `character` (a body that an input can move).
 
-Planned additions, each with the milestone that brings it (`roadmap.md`): prefabs with
-overrides and scenario data such as zones, objectives and triggers (M2); full orientation,
+Since then: scenario data (zones, objectives, triggers; `design/scenarios.md`), combat
+(`design/ballistics.md`) and prefabs with overrides and children, which an entity refers to by
+`prefab` and a child to its `parent` (`design/journal.md`). Planned: full orientation,
 layers, generators (forests, roads, rivers), sculpted terrain as edits over the source, a project
 of several worlds and mods layered over it (M3); rigid bodies and colliders (M4); scripts (M5).
 
@@ -85,8 +86,9 @@ simulation, or with `keep` makes the running world the document, as one undo ste
 the running world. When it succeeds the simulation takes the new world over between two ticks:
 bodies are matched to the characters that exist now (a new character gets a body at rest, a
 removed one loses it, the others keep their motion) and derived data is rebuilt if the terrain
-changed. There is no undo on a running world. A journal of these commands with their ticks,
-which makes a directed session replayable, is planned (M2).
+changed. There is no undo on a running world. The session's journal records these commands, the inputs
+and the steps with their ticks and hashes, so a directed session replays to the same hash
+(`docs/design/journal.md`).
 
 **Picture.** `view.render` is a host command: the automation asks its `Pictures` implementation
 (the CLI's is `gamecraft-render` on a headless wgpu device) to draw the world of the running

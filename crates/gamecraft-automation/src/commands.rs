@@ -206,6 +206,24 @@ fn file_specs() -> Vec<CommandSpec> {
             "{path, bytes}",
             json!({"path": "valley.gamecraft"}),
         ),
+        host_spec(
+            "journal.save",
+            "Save Journal",
+            "Writes the journal of the running simulation, or of the last one, as a .json file \
+             inside the write root: {gamecraft_journal: 1, world: <the document the simulation \
+             started from>, entries: [{tick, command, params, end_tick?, hash}], final: {tick, \
+             hash}}, one JSON document with the world and each entry on a line of its own. \
+             `gamecraft-cli replay FILE --check` runs it again and compares every hash. Written \
+             through a temporary file and a rename; replacing an existing file needs \
+             `overwrite`.",
+            vec![
+                param("path", T::String, "A .json file inside the write root.").required(),
+                param("overwrite", T::Boolean, "Replace an existing file.")
+                    .default(json!(false)),
+            ],
+            "{path, bytes, entries, final: {tick, hash}}",
+            json!({"path": "session.journal.json"}),
+        ),
     ]
 }
 
@@ -253,6 +271,12 @@ impl Host {
             }
             "file.open" if self.access.read_root.is_none() => {
                 Err("no read root is set (--automation-read-root DIR)".into())
+            }
+            "journal.save" if self.access.write_root.is_none() => {
+                Err("no write root is set (--automation-write-root DIR)".into())
+            }
+            "journal.save" if self.session.journal().is_none() => {
+                Err("there is no journal yet; it starts with sim.start".into())
             }
             "file.save" if self.access.write_root.is_none() => {
                 Err("no write root is set (--automation-write-root DIR)".into())
@@ -358,6 +382,8 @@ impl Host {
             "file.new" => self.file_new(p),
             #[cfg(not(target_arch = "wasm32"))]
             "file.open" => self.file_open(p),
+            #[cfg(not(target_arch = "wasm32"))]
+            "journal.save" => self.journal_save(p),
             #[cfg(not(target_arch = "wasm32"))]
             "file.save" => self.file_save(p),
             other => Err(format!("`{other}` is not a host command (a bug)")),
@@ -641,6 +667,31 @@ impl Host {
         self.path = Some(path);
         self.saved_revision = self.session.revision();
         Ok(result)
+    }
+
+    fn journal_save(&self, p: &Fields) -> Result<Value, String> {
+        use crate::files::{Direction, resolve, write_whole};
+        let overwrite = p.bool("overwrite").map_err(strip_owner)?.unwrap_or(false);
+        let given = p.required_str("path").map_err(strip_owner)?;
+        let journal = self
+            .session
+            .journal()
+            .ok_or("there is no journal yet; it starts with sim.start")?;
+        let target = resolve(&self.access, given, Direction::Write, "json")?;
+        if target.exists() && !overwrite {
+            return Err(format!(
+                "`{}` exists; give overwrite: true to replace it",
+                target.display()
+            ));
+        }
+        let text = journal.to_json()?;
+        write_whole(&target, text.as_bytes())?;
+        Ok(json!({
+            "path": target.display().to_string(),
+            "bytes": text.len(),
+            "entries": journal.entries.len(),
+            "final": journal.end.as_ref().map(|e| json!({"tick": e.tick, "hash": e.hash})),
+        }))
     }
 
     fn file_save(&mut self, p: &Fields) -> Result<Value, String> {

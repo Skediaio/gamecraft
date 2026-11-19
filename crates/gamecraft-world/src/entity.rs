@@ -43,7 +43,17 @@ pub struct Entity {
     /// Uniform scale, 0.001 to 1000. Default 1.
     #[serde(default = "default_scale")]
     pub scale: f64,
-    /// Components, at most one of each type. Default none.
+    /// The prefab this entity was placed from, by id; `None` for an entity of its own. Its
+    /// `components` are then the prefab's with its overrides replacing those of the same type
+    /// ([`crate::Prefab::effective`]); the file keeps only the overrides. Default none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefab: Option<String>,
+    /// The entity this one belongs to (a prefab's child): it moves with it and is removed with
+    /// it. Default none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<EntityId>,
+    /// Components, at most one of each type: for a prefab's instance its effective
+    /// components. Default none.
     #[serde(default)]
     pub components: Vec<Component>,
 }
@@ -85,6 +95,8 @@ impl EntityDraft {
             position: self.position,
             rotation_y_deg: self.rotation_y_deg,
             scale: self.scale,
+            prefab: None,
+            parent: None,
             components: self.components,
         }
     }

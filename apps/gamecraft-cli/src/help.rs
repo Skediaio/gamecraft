@@ -13,6 +13,7 @@ Subcommands:
   info       Print a world file's state as JSON
   render     Draw a world file to a PNG (needs a GPU)
   play       Play a world file for a while and print the state hash (the file is not changed)
+  replay     Run a journal of a play session again and compare its state hashes
   new        Write an empty world file
   serve      JSON-lines server on stdin and stdout, for scripts
   mcp        Model Context Protocol server on stdin and stdout, for agents
@@ -80,7 +81,7 @@ Options:
 
 pub const PLAY: &str = "\
 Usage: gamecraft-cli play FILE [--script FILE] [--seconds S | --ticks N]
-                          [--out-state FILE] [--picture PNG]
+                          [--out-state FILE] [--picture PNG] [--journal FILE]
 
 Starts the simulation of the world FILE, runs the script (steps as for run, typically sim.input
 and sim.step), steps on until the total time given is reached, and prints sim.state as one line
@@ -93,7 +94,25 @@ Options:
                    script's own end when that is later)
   --ticks N        The same in ticks
   --out-state FILE Also write the state to FILE as JSON
-  --picture PNG    Draw the last state to PNG (needs a GPU); the state line gets a \"picture\" key";
+  --picture PNG    Draw the last state to PNG (needs a GPU); the state line gets a \"picture\" key
+  --journal FILE   Also write the journal of the run (every command with its tick and the state
+                   hash after it; docs/design/journal.md), for `gamecraft-cli replay`";
+
+pub const REPLAY: &str = "\
+Usage: gamecraft-cli replay JOURNAL [--to-tick N] [--check]
+
+Runs a journal (written by `play --journal` or the command journal.save) again from the world it
+embeds: sim.start, then every recorded command at its tick, comparing the state hash after each
+with the recorded one. Prints one line of JSON: {tick, hash, entries, entries_run, hashes_checked,
+final (the journal's), matches, divergence: null | {entry, tick, message}}. The first divergence
+names the tick where the hash first differs.
+
+Options:
+  --to-tick N   Stop when the simulation reaches tick N, before the commands recorded at it (a
+                step that crosses it is cut short), and print sim.state there instead, with a
+                \"replay\" key ({tick, entries_run, hashes_checked, divergence}); halve N to
+                bisect a bug
+  --check       Exit 1 when the replay diverges, naming the tick (with --to-tick: up to N)";
 
 pub const NEW: &str = "\
 Usage: gamecraft-cli new FILE [--name NAME] [--seed N]

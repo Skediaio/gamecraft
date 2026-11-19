@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 gamecraft-world = { workspace = true }
+# The journal type and its replay (`replay`).
+gamecraft-engine = { workspace = true }
 gamecraft-automation = { workspace = true }
 gamecraft-render = { workspace = true }
 serde_json = { workspace = true }

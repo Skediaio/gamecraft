@@ -1,9 +1,11 @@
 //! The world document and its `.gamecraft` JSON format.
 
 use crate::error::Ctx;
-use crate::limits::MAX_ENTITIES;
+use crate::limits::{MAX_ENTITIES, MAX_HIERARCHY_DEPTH, MAX_PREFABS};
+use crate::prefab::{check_components, place_child, relative};
 use crate::{
-    Entity, EntityDraft, EntityId, Environment, Objective, Terrain, Trigger, VarValue, WorldError,
+    Component, Entity, EntityDraft, EntityId, Environment, Objective, Prefab, Spawn, Spawned,
+    Terrain, Trigger, VarValue, WorldError,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -39,6 +41,10 @@ pub struct World {
     pub objectives: Vec<Objective>,
     /// The scenario's triggers, in the order given (the order they run in); ids unique.
     pub triggers: Vec<Trigger>,
+    /// The prefabs entities are placed from, in the order given; ids unique. Change them
+    /// with [`World::put_prefab`] and [`World::remove_prefab`], which keep the instances in
+    /// step.
+    pub prefabs: Vec<Prefab>,
     entities: BTreeMap<EntityId, Entity>,
     next_entity_id: EntityId,
 }
@@ -56,11 +62,13 @@ struct WorldFile {
     terrain: Option<Terrain>,
     #[serde(default)]
     environment: Environment,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    prefabs: Vec<Prefab>,
     /// Absent: one more than the highest entity id.
     #[serde(default)]
     next_entity_id: Option<EntityId>,
     #[serde(default)]
-    entities: Vec<Entity>,
+    entities: Vec<EntityFile>,
     #[serde(
         default,
         deserialize_with = "crate::scenario::deserialize_vars",
@@ -71,6 +79,142 @@ struct WorldFile {
     objectives: Vec<Objective>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     triggers: Vec<Trigger>,
+}
+
+fn default_scale() -> f64 {
+    1.0
+}
+
+/// An entity as the file holds it: an instance of a prefab keeps its prefab and overrides
+/// instead of its components.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EntityFile {
+    id: EntityId,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    position: [f64; 3],
+    #[serde(default)]
+    rotation_y_deg: f64,
+    #[serde(default = "default_scale")]
+    scale: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prefab: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent: Option<EntityId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    components: Option<Vec<Component>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    overrides: Option<Vec<Component>>,
+}
+
+impl EntityFile {
+    /// The file form of `e`; `prefab` is the prefab it names, if it names one.
+    fn of(e: &Entity, prefab: Option<&Prefab>) -> EntityFile {
+        let (components, overrides) = match prefab {
+            Some(p) => {
+                let overrides = p.overrides_of(&e.components);
+                (None, (!overrides.is_empty()).then_some(overrides))
+            }
+            None => (Some(e.components.clone()), None),
+        };
+        EntityFile {
+            id: e.id,
+            name: e.name.clone(),
+            position: e.position,
+            rotation_y_deg: e.rotation_y_deg,
+            scale: e.scale,
+            prefab: e.prefab.clone(),
+            parent: e.parent,
+            components,
+            overrides,
+        }
+    }
+
+    /// The entity, its components materialised from its prefab in `prefabs`.
+    fn into_entity(self, prefabs: &[Prefab]) -> Result<Entity, WorldError> {
+        let ctx = Ctx::entity(self.id);
+        let components = match &self.prefab {
+            Some(id) => {
+                if self.components.is_some() {
+                    return Err(ctx.invalid(
+                        "components",
+                        "given",
+                        format!(
+                            "an entity placed from prefab \"{id}\" takes its prefab's \
+                             components; give its own as `overrides`, which replace the \
+                             prefab's components of the same type"
+                        ),
+                    ));
+                }
+                let prefab = prefabs
+                    .iter()
+                    .find(|p| p.id == *id)
+                    .ok_or_else(|| unknown_prefab(ctx, id, prefabs))?;
+                let overrides = self.overrides.unwrap_or_default();
+                check_components(&overrides, "overrides").map_err(|e| in_entity(e, self.id))?;
+                prefab.effective(&overrides)
+            }
+            None => {
+                if self.overrides.is_some() {
+                    return Err(ctx.invalid(
+                        "overrides",
+                        "given",
+                        "overrides belong to an entity placed from a prefab; give `prefab`, \
+                         or put the components in `components`",
+                    ));
+                }
+                self.components.unwrap_or_default()
+            }
+        };
+        Ok(Entity {
+            id: self.id,
+            name: self.name,
+            position: self.position,
+            rotation_y_deg: self.rotation_y_deg,
+            scale: self.scale,
+            prefab: self.prefab,
+            parent: self.parent,
+            components,
+        })
+    }
+}
+
+/// The error of an entity that names a prefab that does not exist.
+fn unknown_prefab(ctx: Ctx, id: &str, prefabs: &[Prefab]) -> WorldError {
+    let known: Vec<&str> = prefabs
+        .iter()
+        .take(MAX_CANDIDATES)
+        .map(|p| p.id.as_str())
+        .collect();
+    let expected = if known.is_empty() {
+        "no prefab has that id; the world has no prefabs".to_string()
+    } else {
+        format!(
+            "no prefab has that id; the prefabs are: {}",
+            known.join(", ")
+        )
+    };
+    ctx.invalid("prefab", format!("{id:?}"), expected)
+}
+
+/// `e` as an error of entity `id`.
+fn in_entity(e: WorldError, id: EntityId) -> WorldError {
+    match e {
+        WorldError::Invalid {
+            field,
+            value,
+            expected,
+            ..
+        } => WorldError::Invalid {
+            entity: Some(id),
+            field,
+            value,
+            expected,
+        },
+        other => other,
+    }
 }
 
 /// Reads only the format version, ignoring everything else, so a document of another
@@ -92,6 +236,7 @@ impl World {
             vars: BTreeMap::new(),
             objectives: Vec::new(),
             triggers: Vec::new(),
+            prefabs: Vec::new(),
             entities: BTreeMap::new(),
             next_entity_id: EntityId(1),
         }
@@ -142,9 +287,245 @@ impl World {
         Ok(id)
     }
 
-    /// Removes an entity and returns it. Its id is not handed out again.
+    /// Removes an entity, and the entities that belong to it (its children, theirs, ...),
+    /// and returns it. Its id is not handed out again.
     pub fn remove_entity(&mut self, id: EntityId) -> Option<Entity> {
-        self.entities.remove(&id)
+        let removed = self.entities.remove(&id)?;
+        for child in self.descendants(id) {
+            self.entities.remove(&child);
+        }
+        Some(removed)
+    }
+
+    /// The entities whose parent is `id`, in id order.
+    pub fn children(&self, id: EntityId) -> Vec<EntityId> {
+        self.entities
+            .values()
+            .filter(|e| e.parent == Some(id))
+            .map(|e| e.id)
+            .collect()
+    }
+
+    /// Everything below `id`: its children, their children, ..., at most
+    /// [`MAX_HIERARCHY_DEPTH`] levels deep, level by level in id order.
+    pub fn descendants(&self, id: EntityId) -> Vec<EntityId> {
+        let mut out = Vec::new();
+        let mut level = vec![id];
+        for _ in 0..MAX_HIERARCHY_DEPTH {
+            let next: Vec<EntityId> = self
+                .entities
+                .values()
+                .filter(|e| e.parent.is_some_and(|p| level.contains(&p)))
+                .map(|e| e.id)
+                .filter(|c| *c != id && !out.contains(c))
+                .collect();
+            if next.is_empty() {
+                break;
+            }
+            out.extend(next.iter().copied());
+            level = next;
+        }
+        out
+    }
+
+    /// Moves and turns entity `id`, and carries everything below it along rigidly (children
+    /// keep their place relative to it). Nothing changes when a moved entity would be invalid
+    /// (a coordinate beyond 1e6 m, a non-finite number); the error names it.
+    pub fn place_entity(
+        &mut self,
+        id: EntityId,
+        position: [f64; 3],
+        rotation_y_deg: f64,
+    ) -> Result<(), WorldError> {
+        let entity = self.entities.get(&id).ok_or_else(|| WorldError::NotFound {
+            reference: id.to_string(),
+            candidates: Vec::new(),
+        })?;
+        let (from, from_yaw) = (entity.position, entity.rotation_y_deg);
+        let mut moved = Vec::new();
+        let mut root = entity.clone();
+        root.position = position;
+        root.rotation_y_deg = rotation_y_deg;
+        root.validate()?;
+        moved.push(root);
+        for child in self.descendants(id) {
+            let Some(e) = self.entities.get(&child) else {
+                continue;
+            };
+            let (offset, turn) = relative(from, from_yaw, e.position, e.rotation_y_deg);
+            let (p, yaw) = place_child(position, rotation_y_deg, offset, turn);
+            let mut e = e.clone();
+            e.position = p;
+            e.rotation_y_deg = yaw;
+            e.validate()?;
+            moved.push(e);
+        }
+        for e in moved {
+            self.entities.insert(e.id, e);
+        }
+        Ok(())
+    }
+
+    /// The prefab with this id.
+    pub fn prefab(&self, id: &str) -> Option<&Prefab> {
+        self.prefabs.iter().find(|p| p.id == id)
+    }
+
+    fn prefab_not_found(&self, id: &str) -> WorldError {
+        WorldError::PrefabNotFound {
+            prefab: id.to_string(),
+            known: self
+                .prefabs
+                .iter()
+                .take(MAX_CANDIDATES)
+                .map(|p| p.id.clone())
+                .collect(),
+        }
+    }
+
+    /// The entities placed from prefab `id`, in id order.
+    pub fn prefab_instances(&self, id: &str) -> Vec<EntityId> {
+        self.entities
+            .values()
+            .filter(|e| e.prefab.as_deref() == Some(id))
+            .map(|e| e.id)
+            .collect()
+    }
+
+    /// The overrides of entity `id`: its components that differ from its prefab's (none for
+    /// an entity without a prefab, or one that does not exist).
+    pub fn overrides_of(&self, id: EntityId) -> Vec<Component> {
+        let Some(e) = self.entities.get(&id) else {
+            return Vec::new();
+        };
+        match e.prefab.as_deref().and_then(|p| self.prefab(p)) {
+            Some(prefab) => prefab.overrides_of(&e.components),
+            None => Vec::new(),
+        }
+    }
+
+    /// Adds `prefab`, or replaces the prefab with its id. Replacing one changes its
+    /// instances: each keeps its overrides (its components that differed from the old
+    /// prefab) and takes the rest from the new one. Children already placed stay as they are.
+    /// The prefab is validated first; an invalid one changes nothing.
+    pub fn put_prefab(&mut self, prefab: Prefab) -> Result<(), WorldError> {
+        prefab.validate()?;
+        match self.prefabs.iter().position(|p| p.id == prefab.id) {
+            Some(index) => {
+                let Some(slot) = self.prefabs.get_mut(index) else {
+                    return Err(self.prefab_not_found(&prefab.id));
+                };
+                let old = std::mem::replace(slot, prefab.clone());
+                for e in self.entities.values_mut() {
+                    if e.prefab.as_deref() == Some(prefab.id.as_str()) {
+                        let overrides = old.overrides_of(&e.components);
+                        e.components = prefab.effective(&overrides);
+                    }
+                }
+            }
+            None => {
+                if self.prefabs.len() >= MAX_PREFABS {
+                    return Err(Ctx::WORLD.invalid(
+                        "prefabs",
+                        format!("a list of {}", self.prefabs.len()),
+                        format!("a world holds at most {MAX_PREFABS} prefabs"),
+                    ));
+                }
+                self.prefabs.push(prefab);
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes prefab `id` and returns it; refused while entities are placed from it (the
+    /// error names them).
+    pub fn remove_prefab(&mut self, id: &str) -> Result<Prefab, WorldError> {
+        let index = self
+            .prefabs
+            .iter()
+            .position(|p| p.id == id)
+            .ok_or_else(|| self.prefab_not_found(id))?;
+        let placed = self.prefab_instances(id);
+        if !placed.is_empty() {
+            return Err(WorldError::PrefabInUse {
+                prefab: id.to_string(),
+                count: placed.len(),
+                entities: placed
+                    .iter()
+                    .take(MAX_CANDIDATES)
+                    .filter_map(|i| self.entities.get(i))
+                    .map(describe)
+                    .collect(),
+            });
+        }
+        Ok(self.prefabs.remove(index))
+    }
+
+    /// Places prefab `prefab`: an entity that refers to it, with its components and the
+    /// overrides of `spawn`, and one entity per child of the prefab, placed relative to it
+    /// and linked to it as their parent. All or nothing: an invalid placement, override or
+    /// child, or a world too full for them all, changes nothing.
+    pub fn spawn_prefab(&mut self, prefab: &str, spawn: Spawn) -> Result<Spawned, WorldError> {
+        let p = self
+            .prefab(prefab)
+            .ok_or_else(|| self.prefab_not_found(prefab))?
+            .clone();
+        check_components(&spawn.overrides, "overrides")?;
+        let total = 1usize.saturating_add(p.children.len());
+        if self.entities.len().saturating_add(total) > MAX_ENTITIES {
+            return Err(WorldError::TooManyEntities {
+                count: self.entities.len().saturating_add(total),
+                max: MAX_ENTITIES,
+            });
+        }
+        let first = self.next_entity_id.0;
+        let next = first
+            .checked_add(total as u64)
+            .ok_or(WorldError::IdsExhausted)?;
+        let root_id = EntityId(first);
+        let root = Entity {
+            id: root_id,
+            name: spawn.name.unwrap_or_else(|| p.name.clone()),
+            position: spawn.position,
+            rotation_y_deg: spawn.rotation_y_deg,
+            scale: 1.0,
+            prefab: Some(p.id.clone()),
+            parent: None,
+            components: p.effective(&spawn.overrides),
+        };
+        root.validate()?;
+        let mut placed = vec![root];
+        let mut children = Vec::new();
+        for (i, child) in p.children.iter().enumerate() {
+            let id = EntityId(first.saturating_add(1).saturating_add(i as u64));
+            let (position, rotation_y_deg) = place_child(
+                spawn.position,
+                spawn.rotation_y_deg,
+                child.offset,
+                child.rotation_y_deg,
+            );
+            let e = Entity {
+                id,
+                name: child.name.clone(),
+                position,
+                rotation_y_deg,
+                scale: 1.0,
+                prefab: None,
+                parent: Some(root_id),
+                components: child.components.clone(),
+            };
+            e.validate()?;
+            children.push(id);
+            placed.push(e);
+        }
+        for e in placed {
+            self.entities.insert(e.id, e);
+        }
+        self.next_entity_id = EntityId(next);
+        Ok(Spawned {
+            id: root_id,
+            children,
+        })
     }
 
     /// Resolves a reference to an entity: an id (`"12"`) or a name, matched without regard to
@@ -225,6 +606,25 @@ impl World {
                 "it must be at least 1, and above every entity id",
             ));
         }
+        if self.prefabs.len() > MAX_PREFABS {
+            return Err(ctx.invalid(
+                "prefabs",
+                format!("a list of {}", self.prefabs.len()),
+                format!("a world holds at most {MAX_PREFABS} prefabs"),
+            ));
+        }
+        let mut prefabs: BTreeMap<&str, &Prefab> = BTreeMap::new();
+        for prefab in &self.prefabs {
+            prefab.validate()?;
+            if prefabs.insert(prefab.id.as_str(), prefab).is_some() {
+                return Err(WorldError::Prefab {
+                    prefab: prefab.id.clone(),
+                    message: "the id is used by more than one prefab; every prefab needs its \
+                              own id"
+                        .to_string(),
+                });
+            }
+        }
         for (&key, entity) in &self.entities {
             let ectx = Ctx::entity(key);
             if entity.id != key {
@@ -244,8 +644,62 @@ impl World {
                 });
             }
             entity.validate()?;
+            if let Some(id) = &entity.prefab {
+                let prefab = prefabs
+                    .get(id.as_str())
+                    .ok_or_else(|| unknown_prefab(ectx, id, &self.prefabs))?;
+                if let Some(missing) = prefab
+                    .components
+                    .iter()
+                    .find(|c| entity.components.iter().all(|e| e.kind() != c.kind()))
+                {
+                    return Err(ectx.invalid(
+                        "components",
+                        format!("without `{}`", missing.kind()),
+                        format!(
+                            "an entity placed from prefab \"{id}\" keeps every component type \
+                             of its prefab; override the `{}` instead of removing it, or \
+                             remove it from the prefab",
+                            missing.kind()
+                        ),
+                    ));
+                }
+            }
+            self.check_parent(entity)?;
         }
         crate::scenario::validate(&self.vars, &self.objectives, &self.triggers)
+    }
+
+    /// An entity's parent exists, is not the entity itself, and the chain above it ends
+    /// within [`MAX_HIERARCHY_DEPTH`] steps (no loop).
+    fn check_parent(&self, entity: &Entity) -> Result<(), WorldError> {
+        let ctx = Ctx::entity(entity.id);
+        let mut above = entity.parent;
+        for _ in 0..=MAX_HIERARCHY_DEPTH {
+            let Some(parent) = above else {
+                return Ok(());
+            };
+            if parent == entity.id {
+                return Err(ctx.invalid(
+                    "parent",
+                    parent,
+                    "an entity cannot be its own parent, nor below itself",
+                ));
+            }
+            let Some(p) = self.entities.get(&parent) else {
+                return Err(ctx.invalid(
+                    "parent",
+                    parent,
+                    "no entity has that id; a parent must exist (or leave `parent` out)",
+                ));
+            };
+            above = p.parent;
+        }
+        Err(ctx.invalid(
+            "parent",
+            entity.parent.map_or(0, |p| p.0),
+            format!("the chain of parents above it is deeper than {MAX_HIERARCHY_DEPTH} or loops"),
+        ))
     }
 
     /// The objective with this id.
@@ -270,8 +724,13 @@ impl World {
             seed: self.seed,
             terrain: self.terrain.clone(),
             environment: self.environment.clone(),
+            prefabs: self.prefabs.clone(),
             next_entity_id: Some(self.next_entity_id),
-            entities: self.entities.values().cloned().collect(),
+            entities: self
+                .entities
+                .values()
+                .map(|e| EntityFile::of(e, e.prefab.as_deref().and_then(|p| self.prefab(p))))
+                .collect(),
             vars: self.vars.clone(),
             objectives: self.objectives.clone(),
             triggers: self.triggers.clone(),
@@ -317,6 +776,7 @@ impl World {
         }
         let mut entities = BTreeMap::new();
         for entity in file.entities {
+            let entity = entity.into_entity(&file.prefabs)?;
             let id = entity.id;
             if entities.insert(id, entity).is_some() {
                 return Err(WorldError::DuplicateEntityId { id });
@@ -337,6 +797,7 @@ impl World {
             vars: file.vars,
             objectives: file.objectives,
             triggers: file.triggers,
+            prefabs: file.prefabs,
             entities,
             next_entity_id,
         };

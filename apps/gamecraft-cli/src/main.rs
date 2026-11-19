@@ -1,6 +1,6 @@
 //! `gamecraft-cli`: the command line of GameCraft. One binary that builds a
 //! [`gamecraft_automation::Host`], gives it a renderer and exposes it as subcommands: `run`,
-//! `play`, `render`, `info`, `new`, `commands`, and the two servers `serve` and `mcp`.
+//! `play`, `replay`, `render`, `info`, `new`, `commands`, and the two servers `serve` and `mcp`.
 //!
 //! Shaped after 3DCraft's `craft3d-cli` and VisionCraft's `visioncraft-cli` (MIT): results as
 //! JSON on stdout, diagnostics on stderr; exit code 0 on success, 1 when a command or file
@@ -46,6 +46,7 @@ fn dispatch(raw: &[String]) -> Res {
         "info" => commands::info(rest),
         "render" => commands::render(rest),
         "play" => commands::play(rest),
+        "replay" => commands::replay(rest),
         "new" => commands::new(rest),
         "serve" => commands::serve(rest, false),
         "mcp" => commands::serve(rest, true),
@@ -57,7 +58,7 @@ fn dispatch(raw: &[String]) -> Res {
         other => {
             return Err(CliError::Usage(format!(
                 "unknown subcommand `{other}`; the subcommands are: commands, run, info, render, \
-                 play, new, serve, mcp, help"
+                 play, replay, new, serve, mcp, help"
             )));
         }
     };
@@ -78,6 +79,7 @@ fn sub_help(name: &str) -> Option<&'static str> {
         "info" => help::INFO,
         "render" => help::RENDER,
         "play" => help::PLAY,
+        "replay" => help::REPLAY,
         "new" => help::NEW,
         "serve" => help::SERVE,
         "mcp" => help::MCP,

@@ -14,6 +14,7 @@ workspace = true
 gamecraft-math = { workspace = true }
 gamecraft-world = { workspace = true }
 gamecraft-sim = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 # VisionCraft (MIT): the built-in species, for `species.list` and for checking a plant's
 # species. Used in `src/plants.rs` only (AGENTS.md rule 13).

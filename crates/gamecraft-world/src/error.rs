@@ -94,6 +94,29 @@ pub enum WorldError {
         /// What the serialiser reported.
         message: String,
     },
+    /// Something is wrong with a prefab.
+    Prefab {
+        /// The prefab's id.
+        prefab: String,
+        /// What is wrong, naming the field.
+        message: String,
+    },
+    /// No prefab has this id.
+    PrefabNotFound {
+        /// The id as given.
+        prefab: String,
+        /// The ids of the world's prefabs (at most 10).
+        known: Vec<String>,
+    },
+    /// A prefab cannot be removed while entities are placed from it.
+    PrefabInUse {
+        /// The prefab's id.
+        prefab: String,
+        /// Its instances, as `id "name"` (at most 10).
+        entities: Vec<String>,
+        /// How many instances there are.
+        count: usize,
+    },
 }
 
 impl fmt::Display for WorldError {
@@ -184,6 +207,26 @@ impl fmt::Display for WorldError {
             WorldError::Serialize { message } => {
                 write!(f, "the world could not be written as JSON: {message}")
             }
+            WorldError::Prefab { prefab, message } => write!(f, "prefab \"{prefab}\": {message}"),
+            WorldError::PrefabNotFound { prefab, known } => {
+                write!(f, "no prefab has the id \"{prefab}\"")?;
+                if known.is_empty() {
+                    write!(f, "; the world has no prefabs (add one with prefab.add)")
+                } else {
+                    write!(f, "; the prefabs are: {}", known.join(", "))
+                }
+            }
+            WorldError::PrefabInUse {
+                prefab,
+                entities,
+                count,
+            } => write!(
+                f,
+                "prefab \"{prefab}\" is placed as {count} entit{}: {}{}; remove them first",
+                if *count == 1 { "y" } else { "ies" },
+                entities.join(", "),
+                if *count > entities.len() { ", ..." } else { "" }
+            ),
         }
     }
 }

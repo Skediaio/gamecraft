@@ -30,6 +30,12 @@ pub const NOISE_FEATURE_MIN_M: f64 = 1.0;
 /// Largest noise feature size, metres.
 pub const NOISE_FEATURE_MAX_M: f64 = 100_000.0;
 
+/// Most prefabs in one world.
+pub const MAX_PREFABS: usize = 1000;
+/// Most children of one prefab.
+pub const MAX_PREFAB_CHILDREN: usize = 64;
+/// Deepest chain of parents above an entity (a loop in a bad file is longer than any).
+pub const MAX_HIERARCHY_DEPTH: usize = 16;
 /// Most entities in one world.
 pub const MAX_ENTITIES: usize = 1_000_000;
 /// Longest name (of a world, an entity or a plant species), in characters.

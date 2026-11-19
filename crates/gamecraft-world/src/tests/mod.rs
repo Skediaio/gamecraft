@@ -3,6 +3,7 @@
 mod combat;
 mod document;
 mod fuzz;
+mod prefab;
 mod scenario;
 mod sun;
 mod terrain;

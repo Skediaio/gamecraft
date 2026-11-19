@@ -106,7 +106,14 @@ fn skirmish_world_is_what_its_build_script_builds() {
 /// hash), the playthrough lights each beacon in the tick it stops (one input instead of three),
 /// and the world changed (trees kept clear of the start and the beacons with `exclude`,
 /// messages with `{var:lit}`, the losing trigger conditioned on the objective).
-const LANTERN_HASH: &str = "f2c1e0c554fd093b";
+///
+/// Moved on 2026-11-19 from f2c1e0c554fd093b: the beacons became instances of a `beacon`
+/// prefab, each with a child `Beacon ring` (a 3 m zone tagged `beacon-ring`). The world's text,
+/// which the static part of the hash covers, now holds the prefab, the instances' references and
+/// the five rings (which also shift the beacons' ids), and the player's passing through the rings
+/// is zone membership in the hash. The beacons' own components, the player's path and the
+/// objectives are unchanged.
+const LANTERN_HASH: &str = "143a88eedd10f8c6";
 
 #[test]
 fn lantern_is_won_by_the_playthrough_and_replays_to_the_same_hash() {
@@ -145,7 +152,13 @@ fn lantern_is_lost_by_standing_still() {
 /// shots leave a few ticks apart from before), and the world changed (trees kept clear of the
 /// cover with `exclude`, one `enemy-down` message with `{target}` and `{var:enemies_left}`
 /// instead of three count triggers, objective conditions on the end triggers).
-const SKIRMISH_HASH: &str = "18006793b8e61716";
+///
+/// Moved on 2026-11-19 from 18006793b8e61716: the four enemies became instances of an
+/// `enemy-soldier` prefab (the patrols override its behaviour) and the two houses of a `house`
+/// prefab (House 2 overrides its shape). The world's text, which the static part of the hash
+/// covers, now holds the prefabs and the instances' references and overrides; every entity has
+/// the same id and the same effective components as before, and the fight is the same.
+const SKIRMISH_HASH: &str = "0221de111eb7dd5d";
 
 #[test]
 fn skirmish_is_won_by_the_playthrough_and_replays_to_the_same_hash() {
