@@ -5,10 +5,11 @@ use std::path::PathBuf;
 
 /// The usage, as `--help` prints it.
 pub const USAGE: &str = "\
-Usage: gamecraft [world.gamecraft] [--stdin] [--quality low|medium|high] [--invert-look]
+Usage: gamecraft [world.gamecraft | PROJECT] [--stdin] [--quality low|medium|high] [--invert-look]
 
-Opens a window in which you walk the world's first character (by id). Without a world, the
-engine's example valley opens.
+Opens a window in which you walk the world's first character (by id). A folder is a project:
+its packs are layered and its models drawn from their assets. Without a world, the engine's
+example valley opens.
 
   --stdin            read JSON-lines requests on stdin (the protocol of `gamecraft-cli serve`),
                      run them between frames and answer on stdout
@@ -27,7 +28,7 @@ const FLAGS: [&str; 4] = ["--stdin", "--quality", "--invert-look", "--help"];
 /// What the command line asks for.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Args {
-    /// The world file; `None` opens the example world.
+    /// The world file or project folder; `None` opens the example world.
     pub world: Option<PathBuf>,
     /// Read the control protocol on stdin.
     pub stdin: bool,

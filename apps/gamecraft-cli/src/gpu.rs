@@ -12,6 +12,8 @@ use serde_json::{Value, json};
 #[derive(Default)]
 pub struct GpuPictures {
     gpu: Option<Result<Gpu, String>>,
+    /// Asset files handed over before the device was opened, for the renderer it gets.
+    pending: Vec<(String, Vec<u8>)>,
 }
 
 struct Gpu {
@@ -35,6 +37,13 @@ fn open_gpu() -> Result<Gpu, String> {
 }
 
 impl Pictures for GpuPictures {
+    fn provide_asset(&mut self, path: &str, bytes: Vec<u8>) {
+        match &mut self.gpu {
+            Some(Ok(gpu)) => gpu.renderer.provide_asset(path, bytes),
+            _ => self.pending.push((path.to_string(), bytes)),
+        }
+    }
+
     fn render(
         &mut self,
         world: &World,
@@ -46,6 +55,9 @@ impl Pictures for GpuPictures {
             Ok(gpu) => gpu,
             Err(why) => return Err(why.clone()),
         };
+        for (path, bytes) in self.pending.drain(..) {
+            gpu.renderer.provide_asset(&path, bytes);
+        }
         let aspect = f64::from(request.width) / f64::from(request.height);
         let camera = camera_for(world, heights, &request.camera, aspect)?;
         if gpu.synced != Some(view_revision) {

@@ -12,7 +12,7 @@ use crate::params::Params;
 use crate::spec::{CommandSpec, Scope, nearest};
 use crate::triggers::PlayLog;
 use gamecraft_sim::Sim;
-use gamecraft_world::{HeightField, Terrain, World};
+use gamecraft_world::{HeightField, ModelBounds, Terrain, World};
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -588,6 +588,24 @@ impl Session {
             field: world.terrain.as_ref().map(|_| Arc::new(heights)),
         };
         self.replace_document(world);
+    }
+
+    /// Hands over the bounding boxes of the model assets (by asset path), which the host
+    /// derived from the assets' bytes: they replace those of the document, of every world in
+    /// the history and of the running world, where solid models start or stop blocking from
+    /// the next tick. Derived data: neither revision changes and nothing is undone by it.
+    pub fn set_model_bounds(&mut self, bounds: BTreeMap<String, ModelBounds>) {
+        self.document.set_model_bounds(bounds.clone());
+        for world in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            world.set_model_bounds(bounds.clone());
+        }
+        if let Some(sim) = self.live.as_mut() {
+            let mut running = sim.world().clone();
+            running.set_model_bounds(bounds);
+            // The running world was valid and only its derived data changed, so this cannot
+            // fail; if it did, the simulation would keep the bounds it had.
+            let _ = sim.replace_world(running);
+        }
     }
 
     /// A host opened a file or started a new world: stops any simulation, makes `world` the

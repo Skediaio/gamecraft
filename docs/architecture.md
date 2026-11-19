@@ -56,7 +56,9 @@ A world is one JSON document (`.gamecraft`, format version 1, `gamecraft-world`)
 
 Since then: scenario data (zones, objectives, triggers; `design/scenarios.md`), combat
 (`design/ballistics.md`) and prefabs with overrides and children, which an entity refers to by
-`prefab` and a child to its `parent` (`design/journal.md`). Terrain edits (sculpting and painting as an ordered list of recipes over the source) and
+`prefab` and a child to its `parent` (`design/journal.md`). Models (`model` components referring to glTF assets of a pack, whose bounding boxes the host
+measures and the world carries as derived data, so the simulation can collide without reading a
+file), terrain edits (sculpting and painting as an ordered list of recipes over the source) and
 projects of packs layered by id are in (`design/projects.md`). Planned: full orientation,
 layers, generators (forests, roads, rivers) (M3); rigid bodies and colliders (M4); scripts (M5).
 

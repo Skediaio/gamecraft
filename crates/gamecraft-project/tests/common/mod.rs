@@ -15,6 +15,7 @@ pub fn pack(location: &str, files: &[(&str, &str)]) -> PackSource {
             .iter()
             .map(|(p, t)| ((*p).to_string(), (*t).to_string()))
             .collect(),
+        assets: BTreeMap::new(),
     }
 }
 
@@ -23,6 +24,7 @@ pub fn pack_of(location: &str, plan: &SavePlan) -> PackSource {
     PackSource {
         location: location.to_string(),
         files: plan.writes.clone(),
+        assets: BTreeMap::new(),
     }
 }
 

@@ -1,5 +1,6 @@
-//! `gamecraft [world.gamecraft] [--stdin] [--quality low|medium|high] [--invert-look]`: the window natively;
-//! the same binary built for `wasm32-unknown-unknown` is the page Trunk serves.
+//! `gamecraft [world.gamecraft | PROJECT] [--stdin] [--quality low|medium|high]
+//! [--invert-look]`: the window natively; the same binary built for `wasm32-unknown-unknown` is
+//! the page Trunk serves.
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> std::process::ExitCode {
@@ -15,17 +16,19 @@ fn main() -> std::process::ExitCode {
         println!("{}", gamecraft::args::USAGE);
         return ExitCode::SUCCESS;
     }
-    let world = match &args.world {
-        Some(path) => match gamecraft::app::load_world_file(path) {
-            Ok(world) => world,
-            Err(e) => {
-                eprintln!("gamecraft: {e}");
-                return ExitCode::from(2);
-            }
-        },
-        None => gamecraft_engine::example_world(),
+    let game = match &args.world {
+        Some(path) if path.is_dir() => gamecraft::game::Game::from_project(path),
+        Some(path) => gamecraft::app::load_world_file(path).map(gamecraft::game::Game::new),
+        None => Ok(gamecraft::game::Game::new(gamecraft_engine::example_world())),
     };
-    match gamecraft::app::run_native(world, &args) {
+    let game = match game {
+        Ok(game) => game,
+        Err(e) => {
+            eprintln!("gamecraft: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    match gamecraft::app::run_native(game, &args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("gamecraft: {e}");

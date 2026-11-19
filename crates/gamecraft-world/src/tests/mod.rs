@@ -4,6 +4,7 @@ mod combat;
 mod document;
 mod fuzz;
 mod layer;
+mod model;
 mod prefab;
 mod scenario;
 mod sculpt;

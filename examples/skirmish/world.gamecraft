@@ -624,7 +624,7 @@
       ]
     }
   ],
-  "next_entity_id": 56,
+  "next_entity_id": 59,
   "entities": [
     {
       "id": 1,
@@ -1703,6 +1703,66 @@
     },
     {
       "id": 52,
+      "name": "Crate 1",
+      "position": [
+        -14.0,
+        2.3045175075531006,
+        -41.0
+      ],
+      "rotation_y_deg": 10.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "model",
+          "asset": "models/crate.glb",
+          "scale": 1.0,
+          "solid": true,
+          "collider": "box"
+        }
+      ]
+    },
+    {
+      "id": 53,
+      "name": "Crate 2",
+      "position": [
+        -12.9,
+        2.417619919776916,
+        -41.5
+      ],
+      "rotation_y_deg": -15.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "model",
+          "asset": "models/crate.glb",
+          "scale": 1.0,
+          "solid": true,
+          "collider": "box"
+        }
+      ]
+    },
+    {
+      "id": 54,
+      "name": "Crate 3",
+      "position": [
+        -13.7,
+        2.174963915348054,
+        -39.9
+      ],
+      "rotation_y_deg": 35.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "model",
+          "asset": "models/crate.glb",
+          "scale": 1.0,
+          "solid": true,
+          "collider": "box"
+        }
+      ]
+    },
+    {
+      "id": 55,
       "name": "Patrol Alpha",
       "position": [
         -45.0,
@@ -1737,7 +1797,7 @@
       ]
     },
     {
-      "id": 53,
+      "id": 56,
       "name": "Patrol Bravo",
       "position": [
         60.0,
@@ -1772,7 +1832,7 @@
       ]
     },
     {
-      "id": 54,
+      "id": 57,
       "name": "Village Guard",
       "position": [
         -8.0,
@@ -1784,7 +1844,7 @@
       "prefab": "enemy-soldier"
     },
     {
-      "id": 55,
+      "id": 58,
       "name": "Hill Sentry",
       "position": [
         90.0,

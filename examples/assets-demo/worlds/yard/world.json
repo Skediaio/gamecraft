@@ -1,0 +1,24 @@
+{
+  "gamecraft_world": 1,
+  "name": "Yard",
+  "seed": 5,
+  "default_layer": "yard",
+  "terrain": {
+    "cell_m": 1.0,
+    "size_m": 64.0,
+    "source": {
+      "height_m": 0.0,
+      "kind": "flat"
+    }
+  },
+  "environment": {
+    "cloud_cover": 0.2,
+    "day_of_year": 172,
+    "latitude_deg": 50.85,
+    "mist": 0.0,
+    "rain": 0.0,
+    "time_of_day_h": 15.0,
+    "wind_direction_deg": 250.0,
+    "wind_speed_mps": 2.0
+  }
+}

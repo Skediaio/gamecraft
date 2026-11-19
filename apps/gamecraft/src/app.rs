@@ -279,7 +279,9 @@ impl App {
             crate::web::set_title(&title);
             self.title = title;
         }
+        let files = game.take_assets();
         if let Some(gpu) = &mut self.gpu {
+            gpu.view.provide_assets(files);
             gpu.draw(game);
         }
     }
@@ -378,9 +380,12 @@ impl ApplicationHandler for App {
             wasm_bindgen_futures::spawn_local(async move {
                 let started = async {
                     crate::web::wait_for_webgpu().await?;
-                    let world = crate::web::load_world().await?;
+                    let mut world = crate::web::load_world().await?;
+                    let files = crate::web::load_assets(&mut world).await;
                     let gpu = Gpu::new(window.clone(), quality).await?;
-                    Ok((Game::new(world), gpu))
+                    let mut game = Game::new(world);
+                    game.provide_assets(files);
+                    Ok((game, gpu))
                 }
                 .await;
                 *pending.borrow_mut() = Some(started);
@@ -456,12 +461,12 @@ impl ApplicationHandler for App {
 /// Opens the window natively on `world` and runs until it is closed. With `stdin`, a thread
 /// reads control lines (at most the protocol's request size each) for the frames to run.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn run_native(world: gamecraft_world::World, args: &crate::args::Args) -> Result<(), String> {
+pub fn run_native(game: Game, args: &crate::args::Args) -> Result<(), String> {
     let event_loop = EventLoop::new()
         .map_err(|e| format!("no window can be opened here ({e}); GameCraft needs a display"))?;
     let mut app = App::new(
         args.quality,
-        Some(Game::new(world)),
+        Some(game),
         PadConfig {
             invert_look: args.invert_look,
             ..PadConfig::default()

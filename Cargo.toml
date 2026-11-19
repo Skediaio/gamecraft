@@ -50,6 +50,10 @@ console_error_panic_hook = "0.1"
 # The derived project index (crates/gamecraft-index, native only): Turso, the pure-Rust,
 # SQLite-compatible database (MIT; docs/decisions.md, Text files are the source).
 turso = "0.8.3"
+# Models in packs (MIT/Apache-2.0): glTF 2.0 and GLB, parser only, as VisionCraft reads its library.
+gltf = { version = "1", default-features = false, features = ["utils", "names", "KHR_materials_emissive_strength"] }
+# Texture images of models (MIT/Apache-2.0), pure Rust on every target.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # Image encoding only (pictures for agents).
 png = "0.17"
 serde = { version = "1", features = ["derive"] }

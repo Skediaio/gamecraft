@@ -934,6 +934,10 @@ fn the_skirmish_mid_fight_and_the_lantern_at_night() {
         .health_mut()
         .unwrap()
         .current = 0.0;
+    // The village's crates come from the project's pack, as a host hands them over.
+    let crate_glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/skirmish/project/assets/models/crate.glb");
+    r.provide_asset("models/crate.glb", std::fs::read(crate_glb).unwrap());
     let problems = r.sync(&world, Some(&hf));
     assert!(problems.is_empty(), "{problems:?}");
     let g = ground(-4.0, 40.0);

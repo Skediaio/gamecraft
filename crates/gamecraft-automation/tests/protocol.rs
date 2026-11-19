@@ -17,7 +17,10 @@ use common::*;
 use gamecraft_automation::{MAX_BATCH_STEPS, MAX_REQUEST_BYTES, rpc};
 use serde_json::{Value, json};
 
-const HOST_COMMANDS: [&str; 14] = [
+const HOST_COMMANDS: [&str; 17] = [
+    "asset.credits",
+    "asset.import",
+    "asset.list",
     "edit.redo",
     "edit.undo",
     "file.new",
@@ -290,11 +293,13 @@ fn every_listed_example_runs() {
     let mut ran = 0;
     for c in list {
         let id = c["id"].as_str().unwrap();
-        // Files need roots (tests/files.rs, tests/journal.rs and tests/projects.rs run them).
+        // Files need roots (tests/files.rs, tests/journal.rs, tests/projects.rs and
+        // tests/assets.rs run them).
         if id.starts_with("file.")
             || id.starts_with("edit.")
             || id.starts_with("project.")
             || id.starts_with("pack.")
+            || id.starts_with("asset.")
             || id == "journal.save"
         {
             continue;

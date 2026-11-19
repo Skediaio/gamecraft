@@ -84,7 +84,9 @@ fn files(dir: &Path) -> BTreeMap<PathBuf, String> {
             if path.is_dir() {
                 stack.push(path);
             } else {
-                out.insert(path.clone(), std::fs::read_to_string(&path).unwrap());
+                // Model assets are binary: compared as bytes, shown lossily.
+                let bytes = std::fs::read(&path).unwrap();
+                out.insert(path.clone(), String::from_utf8_lossy(&bytes).into_owned());
             }
         }
     }
@@ -188,14 +190,14 @@ fn an_edit_of_a_game_entity_is_saved_into_the_mod_never_the_game() {
     );
     // Opened and saved unchanged, neither project writes a file.
     let opened = server.ok("project.open", json!({"path": "skirmish/project"}));
-    assert_eq!(opened["entities"], json!(55));
+    assert_eq!(opened["entities"], json!(58));
     assert_eq!(
         server.ok("project.save", json!({}))["unchanged"],
         json!(true)
     );
     let opened = server.ok("project.open", json!({"path": "skirmish-night-mod"}));
     assert_eq!(opened["packs"], json!(["skirmish", "skirmish-night"]));
-    assert_eq!(opened["entities"], json!(56));
+    assert_eq!(opened["entities"], json!(59));
     assert_eq!(
         server.ok("project.save", json!({}))["unchanged"],
         json!(true)
@@ -225,7 +227,7 @@ fn an_edit_of_a_game_entity_is_saved_into_the_mod_never_the_game() {
     assert!(lines[0].contains("\"id\":\"village-guard\"") && lines[0].contains("-57.0"));
     // Opened again, the mod has the moved guard and the game has it where it was.
     let reopened = server.ok("project.open", json!({"path": "skirmish-night-mod"}));
-    assert_eq!(reopened["entities"], json!(56));
+    assert_eq!(reopened["entities"], json!(59));
     let guard = server.ok("entity.get", json!({"id": "Village Guard"}));
     assert_eq!(guard["position"], json!([-6.0, 3.6, -57.0]));
     server.ok("project.open", json!({"path": "skirmish/project"}));
@@ -298,7 +300,7 @@ fn a_query_finds_the_four_enemies_near_the_village() {
     ]);
     assert_eq!(
         by_layer["rows"],
-        json!([["enemies", 4], ["terrain-features", 47], ["village", 4]])
+        json!([["enemies", 4], ["terrain-features", 47], ["village", 7]])
     );
     // The mod's index knows the packs.
     let packs = json_of(&[
@@ -309,7 +311,7 @@ fn a_query_finds_the_four_enemies_near_the_village() {
     ]);
     assert_eq!(
         packs["rows"],
-        json!([["skirmish", 55], ["skirmish-night", 1]])
+        json!([["skirmish", 58], ["skirmish-night", 1]])
     );
     let refused = run(&["project", "query", &text(&project), "DELETE FROM entities"]);
     assert_eq!(refused.code, 1, "{}", refused.out);
@@ -321,7 +323,7 @@ fn run_info_and_project_new_take_projects() {
     let temp = Temp::new("project-cli");
     let project = examples().join("skirmish/project");
     let info = json_of(&["info", &text(&project)]);
-    assert_eq!(info["entity_count"], json!(55));
+    assert_eq!(info["entity_count"], json!(58));
     let ran = run(&[
         "run",
         &text(&project),
@@ -347,7 +349,7 @@ fn run_info_and_project_new_take_projects() {
     ]);
     assert_eq!(made["id"], json!("copy"));
     let info = json_of(&["project", "info", &text(&temp.path("copy"))]);
-    assert_eq!(info["entities"], json!(55));
+    assert_eq!(info["entities"], json!(58));
     assert_eq!(info["changes"]["files"], json!([]));
     let bad = run(&["project", "frobnicate"]);
     assert_eq!(bad.code, 2);
@@ -369,6 +371,7 @@ fn the_committed_layer_and_prefab_files_are_in_the_form_a_save_writes() {
                 (rel, t)
             })
             .collect(),
+        assets: BTreeMap::new(),
     };
     let packs = BTreeMap::from([("skirmish".to_string(), source.clone())]);
     let (_, world) = gamecraft_project::Project::load("skirmish", &packs, None).unwrap();

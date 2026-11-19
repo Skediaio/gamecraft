@@ -308,9 +308,9 @@ fn firing_in_first_person_shows_a_crosshair_and_tracers() {
             return;
         }
     };
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/skirmish/world.gamecraft");
-    let world = gamecraft::app::load_world_file(&path).unwrap();
+    // The project, so the village's crates come from its pack as the window hands them over.
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/skirmish/project");
     let texture = target(&device);
     let surface = texture.create_view(&Default::default());
     let mut view = GameView::new(
@@ -319,7 +319,7 @@ fn firing_in_first_person_shows_a_crosshair_and_tracers() {
         Quality::Medium,
         (WIDTH, HEIGHT),
     );
-    let mut game = Game::new(world);
+    let mut game = Game::from_project(&path).unwrap();
     game.key(Key::ToggleView, true);
     game.key(Key::ToggleView, false);
     assert_eq!(game.view(), ViewMode::FirstPerson);
@@ -328,6 +328,7 @@ fn firing_in_first_person_shows_a_crosshair_and_tracers() {
     for _ in 0..4 {
         game.frame(DT);
         flying = flying.max(game.effects().tracers.len());
+        view.provide_assets(game.take_assets());
         let mut encoder = device.create_command_encoder(&Default::default());
         let problems = view.draw(&game, &surface, &mut encoder).unwrap();
         assert!(problems.is_empty(), "{problems:?}");

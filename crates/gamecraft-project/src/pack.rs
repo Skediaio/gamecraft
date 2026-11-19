@@ -1,6 +1,7 @@
 //! One pack's files, parsed: its manifest, prefab files and worlds with their layers.
 
 use crate::ProjectError;
+use crate::assets::{PackAsset, check_assets};
 use crate::fields::parse_world;
 use crate::layer::Layer;
 use crate::manifest::Manifest;
@@ -20,8 +21,12 @@ pub struct PackSource {
     pub location: String,
     /// Path to text: `pack.json`, `prefabs/<id>.json`, `worlds/<world>/world.json`,
     /// `worlds/<world>/layers/<layer>.json`, `worlds/<world>/terrain/edits.json`. Other paths
-    /// are not read.
+    /// are not read. Also the licence records (`assets/**.license.json`) and the `.gltf`
+    /// documents under `assets/`, which [`crate::check_assets`] reads.
     pub files: BTreeMap<String, String>,
+    /// Every file under `assets/` (pack-relative path, `assets/...`) with its size in bytes:
+    /// the assets, the files `.gltf` models refer to and the licence records.
+    pub assets: BTreeMap<String, u64>,
 }
 
 /// A prefab file: a prefab, or a marker that removes the prefab of an earlier pack.
@@ -49,6 +54,8 @@ pub(crate) struct Pack {
     pub location: String,
     pub prefabs: BTreeMap<String, PrefabEntry>,
     pub worlds: BTreeMap<String, WorldDir>,
+    /// The pack's assets with their records, checked.
+    pub assets: Vec<PackAsset>,
 }
 
 impl Pack {
@@ -79,9 +86,13 @@ pub(crate) fn parse_pack(source: &PackSource) -> Result<Pack, ProjectError> {
         location: source.location.clone(),
         prefabs: BTreeMap::new(),
         worlds: BTreeMap::new(),
+        assets: check_assets(source)?,
     };
     for (path, text) in &source.files {
         let file = pack.file(path);
+        if path.starts_with("assets/") {
+            continue;
+        }
         match classify(path, &source.location)? {
             FileKind::Manifest | FileKind::Other => {}
             FileKind::Prefab(id) => {

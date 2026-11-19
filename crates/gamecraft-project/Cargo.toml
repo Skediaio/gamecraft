@@ -12,5 +12,6 @@ workspace = true
 
 [dependencies]
 gamecraft-world = { workspace = true }
+gltf = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

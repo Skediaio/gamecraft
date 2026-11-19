@@ -13,6 +13,10 @@ workspace = true
 [dependencies]
 gamecraft-math = { workspace = true }
 gamecraft-world = { workspace = true }
+# Opens glTF files safely and checks their accessors (`model.rs`).
+gamecraft-project = { workspace = true }
+gltf = { workspace = true }
+image = { workspace = true }
 visioncraft-render = { workspace = true }
 visioncraft-flora = { workspace = true }
 glam = { workspace = true }

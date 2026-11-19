@@ -10,6 +10,10 @@
 //!   entity.
 //! - **Plants**: VisionCraft's plant generator at its middle level of detail, one generation per
 //!   distinct (species, seed, growth), textured, alpha-cut and moving in the wind.
+//! - **Models**: glTF assets of a pack (`model` components), handed over by the host
+//!   ([`WorldRenderer::provide_asset`]), read with their PBR materials and PNG or JPEG textures
+//!   ([`model`]), uploaded once per asset and drawn as one item with an instance per entity. A
+//!   model that cannot be drawn is a small magenta box with a problem line.
 //! - **Characters**: a body (cylinder and head) with a small dark visor at eye height on the
 //!   side the character faces.
 //! - **Sky and light**: the physical sky, the sun from the environment, clouds, mist, rain, wind
@@ -38,6 +42,7 @@ pub mod effects;
 mod image;
 mod light;
 pub mod mesh;
+pub mod model;
 mod plants;
 mod renderer;
 

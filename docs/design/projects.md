@@ -230,8 +230,73 @@ renderer.
   apron fading to the first layer, the ground plane in the first layer's colour. A terrain
   without layers is shaded by slope (grass, earth, rock) as before.
 
+### Assets
+
+Built 2026-11-19 (M3): the `model` component, licence records with the gate when a pack loads,
+`asset.import`, `asset.list` and `asset.credits` (`gamecraft-automation/src/assets.rs`), models
+drawn with their PBR materials and textures (`gamecraft-render/src/model.rs`), solid models in
+the simulation, `examples/assets-demo` (a pack with a generated crate and fence) and three crates
+as cover in the Skirmish's village.
+
+- **The component.** `{"type": "model", "asset": "models/crate.glb", "scale"?: 1, "solid"?:
+  false, "collider"?: "box" | "none"}`: `asset` is a path inside a pack's `assets/` folder (1 to
+  200 ASCII letters, digits, `-_./`, no `.` or `..` parts) ending in `.glb` or `.gltf`; the
+  asset's origin stands on the entity's position, turned by its yaw and sized by `scale` times
+  the entity's scale. With the collider `box` rays hit the asset's bounding box (solid or not,
+  as they hit any shape), and with `solid` characters are blocked by it like a solid shape box
+  (steps included).
+- **Bounds are derived data of the world.** The simulation needs each asset's local bounding
+  box and must not read files or glTF. So `World` carries `model_bounds` (asset path to
+  `ModelBounds {min, max}`), never written to a file and not part of the document's text:
+  the host measures every model of the open project's packs when it opens
+  (`gamecraft_project::inspect`, in `f64` over the node transforms with plain multiplications
+  and additions, so the same bits everywhere), sets them on the world before it becomes the
+  document, and after `asset.import` hands the new set to `Session::set_model_bounds`, which
+  sets them on the document, every world in the undo history and the running world (derived
+  data: no revision, no undo step). A world is cloned into undo steps, a running simulation and
+  every command's copy, so the bounds travel with it. The static part of the state hash covers
+  the bounds of every asset a `box` collider uses (only when there are any, so other worlds hash
+  as before). The browser measures the models it fetches the same way. A `.gamecraft` file
+  opened on its own has no assets: its models have no bounds (they do not collide) and are
+  drawn as magenta boxes.
+- **Licence records.** `assets/<path>.license.json`: `{"license": "CC0-1.0" | "CC-BY-4.0",
+  "author", "source_url", "title"?, "changes"?}` (author and source not empty, texts at most
+  2000 characters). Loading a pack refuses, naming the file: an asset without a record, a record
+  with another licence (or not a record), a record whose asset does not exist, a file name that
+  is not a plain asset path, a `.gltf` that refers to a file that is missing or outside its
+  folder. The files a `.gltf` refers to (buffers, images) belong to it and need no record of
+  their own; any other file needs one. A later pack's asset replaces an earlier one's of the
+  same path (`Project::assets`). The host lists `assets/` recursively (16 folders deep at most,
+  links out of the pack refused) and reads the records and `.gltf` documents as text; the
+  binary files are read when measured and when a renderer needs them.
+- **Commands.** `asset.import {file, to, license, author, source_url, title?, changes?}` reads
+  and measures the model before it writes anything (a broken one is refused), refuses a `to`
+  that exists, copies the file (and a `.gltf`'s files beside it, from inside the read root) and
+  writes the record. `changes` is an addition to the brief's parameters: CC BY asks for it.
+  `asset.list` and `asset.credits` as in `control-protocol.md`. The three are native only.
+- **Rendering.** The renderer is handed the bytes (`WorldRenderer::provide_asset(path, bytes)`,
+  paths inside `assets/`): `view.render` makes the host hand the files of the models shown to
+  its `Pictures` first (each once per opened project; `Pictures::provide_asset`), the window's
+  game does the same before every frame (`gamecraft PROJECT` opens a project folder), and the
+  browser fetches them from `?assets=<url>` or the `assets/` folder beside `?world=<url>`. A
+  model is read once per asset (`gltf`, opened through `gamecraft_project::model::open`, which
+  splits the GLB itself and checks the indices and accessors the `gltf` crate's reader would
+  otherwise panic on), its PNG and JPEG textures decoded with `image` (at most 8192 pixels a
+  side), one mesh and one material per glTF material, and drawn as one item per asset with an
+  instance per entity; it is uploaded again only when a file it was read from changes. glTF
+  PBR maps onto VisionCraft's material: base colour (sRGB), metallic-roughness as the packed
+  occlusion-roughness-metallic map (red set to 1 unless the occlusion texture is the same
+  image), a separate occlusion map, the normal map with its scale, emissive (a glTF emissive of
+  1 is 1000 cd/m2; glTF has no unit), alpha modes (mask cut out, and lit as leaves when
+  double-sided, as VisionCraft does; blend blended), double-sided; a material named like glass
+  is the renderer's thin glass. Not read: emissive textures (the renderer's material has no
+  emissive map), texture transforms, skins and animation, `KHR_materials_transmission` (the
+  workspace builds `gltf` without it), data: URIs. A missing or broken model is a small magenta
+  box (0.5 m times the scales) at each entity and one problem line naming the asset, why and
+  the entities.
+
 ## Open
 
-- Asset import commands and licence records.
+- Asset kinds beyond models (textures for terrain layers, sounds); assets in the project index.
 - Version ranges and conflicts between two mods that change the same thing (last one wins, with a
   warning naming both).

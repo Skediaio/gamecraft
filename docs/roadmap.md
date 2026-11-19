@@ -152,7 +152,8 @@ Worlds of real size, made of reusable parts, by anyone.
   formats. A game is a list of packs plus its own data, and a mod is one more pack layered on
   top (`decisions.md`, *Engine, packs, games*).
 - Resources: glTF models and textures brought in by command, with licence, author and source
-  recorded.
+  recorded: done 2026-11-19 (`model` component, `asset.import`, `asset.list`, `asset.credits`,
+  solid models in the simulation, PBR materials in the renderer; `examples/assets-demo`).
 - The first pack, "nature": terrain materials, skies and props from VisionCraft's asset library,
   and the plant species moved out of the engine.
 - A second example game, a small puzzle of GameCraft's own design that loads no pack: the guard

@@ -3,7 +3,7 @@
 use crate::error::Ctx;
 use crate::limits::{MAX_COORDINATE_M, SCALE_MAX, SCALE_MIN};
 use crate::{
-    Behaviour, Character, Component, Health, Interactable, Launcher, Light, Plant, Shape,
+    Behaviour, Character, Component, Health, Interactable, Launcher, Light, Model, Plant, Shape,
     WorldError, Zone,
 };
 use serde::{Deserialize, Serialize};
@@ -219,6 +219,14 @@ impl Entity {
     pub fn behaviour(&self) -> Option<&Behaviour> {
         self.components.iter().find_map(|c| match c {
             Component::Behaviour(b) => Some(b),
+            _ => None,
+        })
+    }
+
+    /// The model component, if any.
+    pub fn model(&self) -> Option<&Model> {
+        self.components.iter().find_map(|c| match c {
+            Component::Model(m) => Some(m),
             _ => None,
         })
     }

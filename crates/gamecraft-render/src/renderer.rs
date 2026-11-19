@@ -5,13 +5,14 @@ use crate::blit::Blit;
 use crate::effects::{self, Effects, Segment};
 use crate::light;
 use crate::mesh::{self, MeshData};
+use crate::model::{self, Alpha, ModelMaterial, TexRef};
 use crate::plants::{self, PartKind, PlantImage};
 use crate::{Camera, Quality, RenderError};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{Picture, PictureRequest, PictureStats};
 use gamecraft_math::{DQuat, DVec3, deg_to_rad};
 use gamecraft_world::{
-    Character, Entity, EntityId, Environment, HeightField, Plant, Shape, ShapeKind, Terrain,
+    Character, Entity, EntityId, Environment, HeightField, Model, Plant, Shape, ShapeKind, Terrain,
     TerrainLayer, World,
 };
 use glam::{Mat4, Vec3};
@@ -54,6 +55,16 @@ const SUN_GLOW: f64 = 0.5;
 
 /// How bright an impact puff glows, cd/m2 per unit of its emissive colour.
 const PUFF_EMISSIVE_STRENGTH: f32 = 6_000.0;
+/// A glTF emissive colour of 1 glows with this luminance, cd/m2 (glTF gives no unit; this is a
+/// lit panel's, bright at dusk and readable by day).
+const GLTF_EMISSIVE_CD_M2: f32 = 1_000.0;
+/// The stand-in of a model that cannot be drawn: magenta, so it is seen.
+const MISSING_MODEL_COLOR: [f32; 3] = [1.0, 0.0, 1.0];
+/// The stand-in's side, metres (times the entity's and the model's scale).
+const MISSING_MODEL_SIZE_M: f64 = 0.5;
+/// Most entities a problem line about one model names.
+const MAX_NAMED_ENTITIES: usize = 8;
+
 /// A character that is down lies on its side; the base of its body is turned about this.
 const LYING_DEG: f64 = 90.0;
 
@@ -112,16 +123,23 @@ struct DrawnEntity {
     shape: Option<Shape>,
     plant: Option<Plant>,
     character: Option<Character>,
+    model: Option<Model>,
+}
+
+/// Whether an entity draws anything (a zone, a light or tags alone draw nothing).
+fn draws(e: &Entity) -> bool {
+    e.shape().is_some() || e.plant().is_some() || e.character().is_some() || e.model().is_some()
 }
 
 impl DrawnEntity {
     /// What of `e` is drawn; `None` when it draws nothing (a zone, a light, tags).
     fn of(e: &Entity) -> Option<DrawnEntity> {
         let (shape, plant, character) = (e.shape(), e.plant(), e.character());
-        if shape.is_none() && plant.is_none() && character.is_none() {
+        if !draws(e) {
             return None;
         }
-        let walks = character.is_some() && shape.is_none() && plant.is_none();
+        let walks =
+            character.is_some() && shape.is_none() && plant.is_none() && e.model().is_none();
         Some(DrawnEntity {
             id: e.id,
             pose: (!walks).then_some((e.position, e.rotation_y_deg)),
@@ -129,6 +147,7 @@ impl DrawnEntity {
             shape: shape.cloned(),
             plant: plant.cloned(),
             character: character.cloned(),
+            model: e.model().cloned(),
         })
     }
 
@@ -140,6 +159,7 @@ impl DrawnEntity {
             && self.shape.as_ref() == e.shape()
             && self.plant.as_ref() == e.plant()
             && self.character.as_ref() == e.character()
+            && self.model.as_ref() == e.model()
             && (walks || self.pose == Some((e.position, e.rotation_y_deg)))
     }
 }
@@ -151,6 +171,8 @@ struct GeometryKey {
     terrain: Option<Terrain>,
     heights: Option<FieldShape>,
     entities: Vec<DrawnEntity>,
+    /// [`WorldRenderer::provide_asset`] calls so far: a new file rebuilds.
+    assets: u64,
 }
 
 /// The grid of a height field, without its samples.
@@ -176,21 +198,23 @@ impl FieldShape {
 }
 
 impl GeometryKey {
-    fn of(world: &World, heights: Option<&HeightField>) -> GeometryKey {
+    fn of(world: &World, heights: Option<&HeightField>, assets: u64) -> GeometryKey {
         GeometryKey {
             terrain: world.terrain.clone(),
             heights: heights.map(FieldShape::of),
             entities: world.entities().filter_map(DrawnEntity::of).collect(),
+            assets,
         }
     }
 
-    fn matches(&self, world: &World, heights: Option<&HeightField>) -> bool {
-        if self.terrain != world.terrain || self.heights != heights.map(FieldShape::of) {
+    fn matches(&self, world: &World, heights: Option<&HeightField>, assets: u64) -> bool {
+        if self.terrain != world.terrain
+            || self.heights != heights.map(FieldShape::of)
+            || self.assets != assets
+        {
             return false;
         }
-        let mut drawn = world
-            .entities()
-            .filter(|e| e.shape().is_some() || e.plant().is_some() || e.character().is_some());
+        let mut drawn = world.entities().filter(|e| draws(e));
         self.entities
             .iter()
             .all(|k| drawn.next().is_some_and(|e| k.is(e)))
@@ -248,6 +272,41 @@ pub struct WorldRenderer {
     problems: Vec<String>,
     /// Problems of setting the renderer up, repeated with every sync.
     setup_problems: Vec<String>,
+    /// Asset files the host handed over, by path inside a pack's `assets/` folder.
+    asset_files: BTreeMap<String, Vec<u8>>,
+    /// [`WorldRenderer::provide_asset`] calls so far.
+    assets_revision: u64,
+    /// The models uploaded, by asset path, kept from one rebuild to the next; or why one
+    /// cannot be drawn.
+    models: BTreeMap<String, Result<ResidentModel, String>>,
+    /// Model uploads so far: one per asset (and again after its files change).
+    model_uploads: u64,
+}
+
+/// A model on the GPU: its parts (one per material) and everything to free with it.
+struct ResidentModel {
+    parts: Vec<(vc::MeshId, vc::MaterialId)>,
+    meshes: Vec<vc::MeshId>,
+    materials: Vec<vc::MaterialId>,
+    textures: Vec<vc::TextureId>,
+    /// The asset files it was read from (a new version of one uploads it again).
+    files: Vec<String>,
+    /// Textures that could not be decoded, as a sentence; the model is drawn without them.
+    note: Option<String>,
+}
+
+impl ResidentModel {
+    fn free(self, r: &mut vc::Renderer) {
+        for id in self.meshes {
+            r.remove_mesh(id);
+        }
+        for id in self.materials {
+            r.remove_material(id);
+        }
+        for id in self.textures {
+            r.remove_texture(id);
+        }
+    }
 }
 
 impl WorldRenderer {
@@ -324,6 +383,10 @@ impl WorldRenderer {
             synced: None,
             problems: setup_problems.clone(),
             setup_problems,
+            asset_files: BTreeMap::new(),
+            assets_revision: 0,
+            models: BTreeMap::new(),
+            model_uploads: 0,
         };
         world_renderer.apply_environment(&Environment::default(), false);
         world_renderer
@@ -362,13 +425,13 @@ impl WorldRenderer {
         let unchanged = self
             .synced
             .as_ref()
-            .is_some_and(|key| key.matches(world, heights));
+            .is_some_and(|key| key.matches(world, heights, self.assets_revision));
         if unchanged {
             self.move_characters(world);
         } else {
             self.rebuild(world, heights);
             self.rebuilds += 1;
-            self.synced = Some(GeometryKey::of(world, heights));
+            self.synced = Some(GeometryKey::of(world, heights, self.assets_revision));
             self.move_characters(world);
         }
         self.problems()
@@ -427,6 +490,38 @@ impl WorldRenderer {
     /// tests and measurements.
     pub fn rebuild_count(&self) -> u64 {
         self.rebuilds
+    }
+
+    /// Hands over the bytes of an asset file, by its path inside a pack's `assets/` folder
+    /// (`models/crate.glb`; a `.gltf`'s buffers and images under their own paths, beside it).
+    /// A model whose file this replaces is read and uploaded again at the next
+    /// [`WorldRenderer::sync`]. The host reads the files (the CLI and the window from the open
+    /// project, the browser by fetching them).
+    pub fn provide_asset(&mut self, path: &str, bytes: Vec<u8>) {
+        if self.asset_files.get(path) == Some(&bytes) {
+            return;
+        }
+        self.asset_files.insert(path.to_string(), bytes);
+        self.assets_revision += 1;
+        let stale: Vec<String> = self
+            .models
+            .iter()
+            .filter(|(asset, m)| {
+                *asset == path || m.as_ref().is_ok_and(|m| m.files.iter().any(|f| f == path))
+            })
+            .map(|(asset, _)| asset.clone())
+            .collect();
+        for asset in stale {
+            if let Some(Ok(m)) = self.models.remove(&asset) {
+                m.free(&mut self.renderer);
+            }
+        }
+    }
+
+    /// How many models were read and uploaded so far: one per asset, however many entities
+    /// show it (a count of work for tests).
+    pub fn model_uploads(&self) -> u64 {
+        self.model_uploads
     }
 
     /// Sets the live frames' size in pixels (each side 1 to 8192): call it when the window's
@@ -674,6 +769,13 @@ impl WorldRenderer {
         if let Some(units) = self.units {
             scene.shapes(world, units);
         }
+        scene.models(
+            world,
+            &mut self.models,
+            &self.asset_files,
+            &mut self.model_uploads,
+            self.units,
+        );
         scene.characters(world);
         scene.plants(world);
         self.problems = problems;
@@ -742,6 +844,203 @@ fn upload_mesh(r: &mut vc::Renderer, m: &MeshData) -> Result<vc::MeshId, String>
         uvs: m.uvs.as_deref(),
         wind: None,
     })
+}
+
+/// How a texture is used, which decides its colour space and what is done to it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Role {
+    /// Base colour: sRGB.
+    Base,
+    /// Normal map: linear.
+    Normal,
+    /// Metallic-roughness packed as occlusion-roughness-metallic, the occlusion in red kept.
+    OrmWithOcclusion,
+    /// Metallic-roughness packed as occlusion-roughness-metallic, red set to 1.
+    Orm,
+    /// Occlusion in red: linear.
+    Occlusion,
+}
+
+/// Reads the model `path` from the handed-over `files` and uploads it: one mesh and one
+/// material per glTF material used, each image decoded and uploaded once per role. Errors say
+/// why it cannot be drawn; a texture that cannot be decoded is left out with a note.
+fn upload_model(
+    r: &mut vc::Renderer,
+    path: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<ResidentModel, String> {
+    let bytes = files.get(path).ok_or(
+        "its file was not handed to the renderer (the host reads it from the open project's \
+         packs; asset.list shows what they hold)",
+    )?;
+    let folder = gamecraft_project::model::folder_of(path);
+    let used = std::cell::RefCell::new(vec![path.to_string()]);
+    let data = model::parse(bytes, &|f: &str| {
+        let key = format!("{folder}{f}");
+        used.borrow_mut().push(key.clone());
+        files.get(&key).cloned()
+    })?;
+    let mut out = ResidentModel {
+        parts: Vec::new(),
+        meshes: Vec::new(),
+        materials: Vec::new(),
+        textures: Vec::new(),
+        files: used.into_inner(),
+        note: None,
+    };
+    let mut textures: BTreeMap<(usize, bool, Role), Option<vc::TextureId>> = BTreeMap::new();
+    let mut notes: Vec<String> = Vec::new();
+    let mut texture = |r: &mut vc::Renderer,
+                       out: &mut ResidentModel,
+                       slot: Option<TexRef>,
+                       role: Role|
+     -> Option<vc::TextureId> {
+        let slot = slot?;
+        let key = (slot.image, slot.repeat, role);
+        if let Some(id) = textures.get(&key) {
+            return *id;
+        }
+        let made = data
+            .images
+            .get(slot.image)
+            .ok_or_else(|| format!("image {} does not exist", slot.image))
+            .and_then(|b| model::decode_image(b))
+            .map(|img| match role {
+                Role::Orm => model::orm_from_metal_rough(img, false),
+                _ => img,
+            })
+            .and_then(|img| {
+                r.add_texture(&vc::TextureDesc {
+                    width: img.width,
+                    height: img.height,
+                    rgba8: &img.pixels,
+                    color_space: if role == Role::Base {
+                        vc::ColorSpace::Srgb
+                    } else {
+                        vc::ColorSpace::Linear
+                    },
+                    repeat: slot.repeat,
+                })
+            });
+        let id = match made {
+            Ok(id) => {
+                out.textures.push(id);
+                Some(id)
+            }
+            Err(e) => {
+                notes.push(format!("image {}: {e}", slot.image));
+                None
+            }
+        };
+        textures.insert(key, id);
+        id
+    };
+    let mut fail = None;
+    for prim in &data.prims {
+        let Some(m) = data.materials.get(prim.material) else {
+            continue;
+        };
+        let orm_role = if m.occlusion_image.is_some()
+            && m.occlusion_image.map(|t| t.image) == m.metal_rough_image.map(|t| t.image)
+        {
+            Role::OrmWithOcclusion
+        } else {
+            Role::Orm
+        };
+        let maps = MaterialMaps {
+            base: texture(r, &mut out, m.base_image, Role::Base),
+            normal: texture(r, &mut out, m.normal_image, Role::Normal),
+            orm: texture(r, &mut out, m.metal_rough_image, orm_role),
+            occlusion: if orm_role == Role::OrmWithOcclusion {
+                None
+            } else {
+                texture(r, &mut out, m.occlusion_image, Role::Occlusion)
+            },
+        };
+        let material = r.add_material(&model_material(m, maps));
+        out.materials.push(material);
+        let uploaded = r.add_mesh(&vc::Mesh {
+            positions: &prim.positions,
+            normals: &prim.normals,
+            indices: &prim.indices,
+            face_ids: None,
+            uvs: Some(&prim.uvs),
+            wind: None,
+        });
+        match uploaded {
+            Ok(mesh) => {
+                out.meshes.push(mesh);
+                out.parts.push((mesh, material));
+            }
+            Err(e) => {
+                fail = Some(format!("a mesh could not be uploaded: {e}"));
+                break;
+            }
+        }
+    }
+    if let Some(why) = fail {
+        out.free(r);
+        return Err(why);
+    }
+    if !notes.is_empty() {
+        out.note = Some(format!(
+            "some textures could not be read and are left out ({})",
+            notes.join("; ")
+        ));
+    }
+    Ok(out)
+}
+
+/// The uploaded textures of a model's material.
+struct MaterialMaps {
+    base: Option<vc::TextureId>,
+    normal: Option<vc::TextureId>,
+    orm: Option<vc::TextureId>,
+    occlusion: Option<vc::TextureId>,
+}
+
+/// The renderer material of a glTF material. Ported from `model_material` of VisionCraft's
+/// `apps/visioncraft/src/library.rs` (MIT): glass as the renderer's thin glass, a masked
+/// double-sided material lit as leaves, blending as blending; here also the normal map's scale,
+/// a separate occlusion map, and the emissive colour in cd/m2 ([`GLTF_EMISSIVE_CD_M2`]).
+fn model_material(m: &ModelMaterial, maps: MaterialMaps) -> vc::Material {
+    let mut out = vc::Material {
+        base_color: m.base_color,
+        metallic: m.metallic,
+        roughness: m.roughness,
+        projection: vc::Projection::Uv,
+        double_sided: m.double_sided,
+        ..Default::default()
+    };
+    if m.glass {
+        // The renderer's glass: `base_color.rgb` is the tint, alpha the opacity.
+        let opacity = if m.alpha == Alpha::Blend {
+            m.base_color[3]
+        } else {
+            0.12
+        };
+        out.base_color[3] = opacity.clamp(0.05, 0.6);
+        out.surface = vc::Surface::Glass;
+        out.metallic = 0.0;
+        out.roughness = m.roughness.min(0.15);
+        return out;
+    }
+    out.base_color_map = maps.base;
+    out.normal_map = maps.normal;
+    out.relief = m.normal_scale;
+    out.orm_map = maps.orm;
+    out.occlusion_map = maps.occlusion;
+    out.emissive = m.emissive;
+    out.emissive_strength = m.emissive_strength * GLTF_EMISSIVE_CD_M2;
+    match m.alpha {
+        Alpha::Opaque => {}
+        Alpha::Mask(t) => {
+            out.alpha_mode = vc::AlphaMode::Cutout { threshold: t };
+            out.foliage = m.double_sided;
+        }
+        Alpha::Blend => out.alpha_mode = vc::AlphaMode::Blend,
+    }
+    out
 }
 
 /// The mean height of the height field's border samples: the endless ground's height, so the
@@ -910,6 +1209,81 @@ impl Scene<'_> {
         for ((_, color), (kind, instances)) in groups {
             let material = self.color(color.map(f32::from_bits));
             self.add_item(&[(units.of(kind), material)], &instances);
+        }
+    }
+
+    /// Models: one upload per asset (kept from one rebuild to the next), one item per asset
+    /// with an instance per entity. A model that cannot be drawn is a small magenta box at
+    /// each entity, with a problem line that names the asset, why and the entities.
+    fn models(
+        &mut self,
+        world: &World,
+        resident: &mut BTreeMap<String, Result<ResidentModel, String>>,
+        files: &BTreeMap<String, Vec<u8>>,
+        uploads: &mut u64,
+        units: Option<UnitMeshes>,
+    ) {
+        let mut groups: BTreeMap<String, Vec<&Entity>> = BTreeMap::new();
+        for e in world.entities() {
+            if let Some(m) = e.model() {
+                groups.entry(m.asset.clone()).or_default().push(e);
+            }
+        }
+        let mut missing: Vec<Mat4> = Vec::new();
+        for (asset, entities) in groups {
+            if !resident.contains_key(&asset) {
+                let made = upload_model(self.r, &asset, files);
+                if made.is_ok() {
+                    *uploads += 1;
+                }
+                resident.insert(asset.clone(), made);
+            }
+            match resident.get(&asset) {
+                None => {}
+                Some(Ok(m)) => {
+                    let instances: Vec<Mat4> = entities
+                        .iter()
+                        .filter_map(|e| {
+                            let s = e.model()?.scale * e.scale;
+                            Some(placement(e.position, e.rotation_y_deg, [s; 3]))
+                        })
+                        .collect();
+                    if let Some(note) = &m.note {
+                        self.problems.push(format!("Model `{asset}`: {note}"));
+                    }
+                    let lods: Vec<(vc::MeshId, vc::MaterialId, f32)> = m
+                        .parts
+                        .iter()
+                        .map(|&(mesh, material)| (mesh, material, f32::INFINITY))
+                        .collect();
+                    let id = self.r.add_lod_item(&lods, &instances);
+                    self.built.items.push(id);
+                }
+                Some(Err(why)) => {
+                    let named: Vec<String> = entities
+                        .iter()
+                        .take(MAX_NAMED_ENTITIES)
+                        .map(|e| format!("{} \"{}\"", e.id, e.name))
+                        .collect();
+                    let more = match entities.len().saturating_sub(MAX_NAMED_ENTITIES) {
+                        0 => String::new(),
+                        n => format!(" and {n} more"),
+                    };
+                    self.problems.push(format!(
+                        "Model `{asset}` of entity {}{more} cannot be drawn: {why}; it is \
+                         drawn as a small magenta box.",
+                        named.join(", ")
+                    ));
+                    missing.extend(entities.iter().map(|e| {
+                        let s = e.model().map_or(1.0, |m| m.scale) * e.scale;
+                        placement(e.position, e.rotation_y_deg, [MISSING_MODEL_SIZE_M * s; 3])
+                    }));
+                }
+            }
+        }
+        if let (Some(units), false) = (units, missing.is_empty()) {
+            let material = self.color(MISSING_MODEL_COLOR);
+            self.add_item(&[(units.cube, material)], &missing);
         }
     }
 

@@ -88,6 +88,14 @@ pub trait Pictures {
         view_revision: u64,
         request: &RenderRequest,
     ) -> Result<Rendered, String>;
+
+    /// Hands over the bytes of an asset file the world's models need, by its path inside a
+    /// pack's `assets/` folder (`models/crate.glb`; a `.gltf`'s buffers and images under their
+    /// own paths). The host calls it before [`Pictures::render`] for every model asset the
+    /// world shows that it has not handed over yet. The default keeps nothing.
+    fn provide_asset(&mut self, path: &str, bytes: Vec<u8>) {
+        let _ = (path, bytes);
+    }
 }
 
 /// The SQL index of an open project (the CLI's is `gamecraft-index`, on Turso): rebuilt from

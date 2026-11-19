@@ -35,6 +35,10 @@ pub(crate) struct OpenProject {
     pub indexed: Option<u64>,
     /// The terrain tiles the cache folder holds, by key, as last written or checked.
     pub terrain_keys: crate::terrain_cache::Keys,
+    /// The assets of the project's packs, the models measured.
+    pub assets: crate::assets::Catalog,
+    /// The model assets whose files the renderer was given.
+    pub provided: std::collections::BTreeSet<String>,
 }
 
 /// The specs of this module.
@@ -245,7 +249,7 @@ fn resolve_dir(
 }
 
 /// Whether `dir` lies inside the write root.
-fn writable(access: &Access, dir: &Path) -> bool {
+pub(crate) fn writable(access: &Access, dir: &Path) -> bool {
     access
         .write_root
         .as_ref()
@@ -261,6 +265,7 @@ fn read_pack(dir: &Path, budget: &mut u64) -> Result<PackSource, String> {
     let mut source = PackSource {
         location: dir.display().to_string(),
         files: BTreeMap::new(),
+        assets: BTreeMap::new(),
     };
     let mut read = |relative: &str, source: &mut PackSource| -> Result<(), String> {
         let path = dir.join(relative);
@@ -321,7 +326,71 @@ fn read_pack(dir: &Path, budget: &mut u64) -> Result<PackSource, String> {
             read(&format!("{base}/terrain/edits.json"), &mut source)?;
         }
     }
+    let mut listed = Vec::new();
+    list_assets(dir, "assets", 0, &mut listed)?;
+    for (relative, size) in listed {
+        if source.assets.len() + source.files.len() >= MAX_PACK_FILES {
+            return Err(format!(
+                "the pack `{}` has more than {MAX_PACK_FILES} files",
+                dir.display()
+            ));
+        }
+        // The licence records and the .gltf documents are read for the licence gate.
+        if relative.ends_with(gamecraft_project::RECORD_SUFFIX) || relative.ends_with(".gltf") {
+            read(&relative, &mut source)?;
+        }
+        source.assets.insert(relative, size);
+    }
     Ok(source)
+}
+
+/// Deepest folder below `assets/` that is listed.
+const MAX_ASSET_DEPTH: usize = 16;
+
+/// Every file under the pack-relative folder `relative` of the pack in `dir` with its size,
+/// sorted; a file or folder that is a link out of the pack is refused.
+fn list_assets(
+    dir: &Path,
+    relative: &str,
+    depth: usize,
+    out: &mut Vec<(String, u64)>,
+) -> Result<(), String> {
+    let folder = dir.join(relative);
+    if depth > MAX_ASSET_DEPTH {
+        return Err(format!(
+            "`{}` lies more than {MAX_ASSET_DEPTH} folders deep in assets/",
+            folder.display()
+        ));
+    }
+    for (name, _) in entries(&folder)? {
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = folder.join(&name);
+        let shown = path.display().to_string();
+        let real = fs::canonicalize(&path).map_err(|e| format!("cannot read `{shown}`: {e}"))?;
+        if !real.starts_with(dir) {
+            return Err(format!(
+                "`{shown}` is a link that leads out of its pack `{}`; a pack's files lie inside \
+                 its folder",
+                dir.display()
+            ));
+        }
+        let child = format!("{relative}/{name}");
+        let meta = fs::metadata(&real).map_err(|e| format!("cannot read `{shown}`: {e}"))?;
+        if meta.is_dir() {
+            list_assets(dir, &child, depth + 1, out)?;
+        } else if meta.is_file() {
+            out.push((child, meta.len()));
+            if out.len() > MAX_PACK_FILES {
+                return Err(format!(
+                    "the pack `{}` has more than {MAX_PACK_FILES} files",
+                    dir.display()
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The names of the entries of `dir` (none when it does not exist), sorted.
@@ -524,6 +593,9 @@ impl Host {
         dir: PathBuf,
         world: gamecraft_world::World,
     ) -> (Value, Value) {
+        let assets = crate::assets::catalog(&project);
+        let mut world = world;
+        world.set_model_bounds(crate::assets::bounds(&assets));
         let mut terrain_keys = crate::terrain_cache::Keys::new();
         let cached = world.terrain.as_ref().map(|terrain| {
             crate::terrain_cache::load(&dir, project.world(), terrain, writable(&self.access, &dir))
@@ -553,6 +625,8 @@ impl Host {
             index,
             indexed: None,
             terrain_keys,
+            assets,
+            provided: std::collections::BTreeSet::new(),
         });
         let index = if problem.is_null() {
             self.refresh_index().unwrap_or_else(|e| json!({"error": e}))

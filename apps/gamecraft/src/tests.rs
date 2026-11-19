@@ -704,3 +704,27 @@ fn the_left_stick_walks_the_player_north_and_start_pauses() {
     );
     assert!(game.is_paused());
 }
+
+// ---- projects and their models ----
+
+#[test]
+fn a_project_folder_opens_with_its_models_handed_to_the_view_once() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/assets-demo");
+    let mut game = Game::from_project(&dir).unwrap();
+    assert!(game.session().is_playing());
+    let mut paths: Vec<String> = game.take_assets().into_iter().map(|(p, _)| p).collect();
+    paths.sort();
+    assert_eq!(paths, ["models/crate.glb", "models/fence.glb"]);
+    assert!(game.take_assets().is_empty(), "handed over once");
+    // The crates collide: their bounds reached the running world.
+    assert!(
+        game.session()
+            .current_world()
+            .model_bounds("models/crate.glb")
+            .is_some()
+    );
+    let e = Game::from_project(&dir.join("no-such-project"))
+        .err()
+        .unwrap();
+    assert!(e.contains("cannot be opened"), "{e}");
+}

@@ -14,6 +14,9 @@
 //! triangles the renderer draws, with the painted layers' weights; [`Terrain::rebuild`] redoes
 //! only the tiles a change touches and [`tiles`] keeps resolved tiles as binary files.
 //!
+//! A `model` component names a glTF asset of a pack; the asset's bounding box is derived data
+//! that the host computes and hands over with [`World::set_model_bounds`] ([`ModelBounds`]).
+//!
 //! No GPU, no files, no clock: everything here is deterministic. Conventions: metres, Y up,
 //! the ground plane is x and z, north is -Z and east is +X; an entity's position is its base.
 
@@ -23,6 +26,7 @@ mod entity;
 mod environment;
 mod error;
 pub mod limits;
+mod model;
 mod prefab;
 mod scenario;
 pub mod sculpt;
@@ -40,6 +44,10 @@ pub use component::{
 pub use entity::{Entity, EntityDraft, EntityId, MAX_LAYER_CHARS, is_layer_name};
 pub use environment::{Environment, STANDARD_TEMPERATURE_C, SunPosition};
 pub use error::WorldError;
+pub use model::{
+    MAX_ASSET_PATH_CHARS, MODEL_EXTENSIONS, Model, ModelBounds, ModelBox, ModelCollider,
+    is_asset_path, is_model_path,
+};
 pub use prefab::{Prefab, PrefabChild, Spawn, Spawned};
 pub use scenario::{
     CompareOp, Condition, EntityRef, Objective, ObjectiveStatus, Step, TAG_PREFIX, Trigger,

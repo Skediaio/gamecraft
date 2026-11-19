@@ -1,8 +1,8 @@
-//! Solid shapes as the simulation sees them: footprints, tops, and pushing a character's circle
+//! Solid shapes and solid models as the simulation sees them: footprints, tops, and pushing a character's circle
 //! out of them.
 
 use gamecraft_math::{Portable, deg_to_rad};
-use gamecraft_world::{Entity, ShapeKind, World};
+use gamecraft_world::{Entity, ModelBox, ShapeKind, World};
 
 use crate::STEP_HEIGHT_M;
 
@@ -38,10 +38,15 @@ pub(crate) struct Solid {
     footprint: Footprint,
 }
 
-/// Every solid shape of `world` in id order. Shapes on character entities are left out:
-/// characters do not collide with each other in M0.
+/// Every solid shape and solid model of `world` in id order (an entity's shape before its
+/// model). Shapes and models on character entities are left out: characters do not collide
+/// with each other in M0.
 pub(crate) fn solids_of(world: &World) -> Vec<Solid> {
-    world.entities().filter_map(Solid::from_entity).collect()
+    world
+        .entities()
+        .flat_map(|e| [Solid::from_entity(e), Solid::from_model(world, e)])
+        .flatten()
+        .collect()
 }
 
 impl Solid {
@@ -85,6 +90,38 @@ impl Solid {
             bottom: py,
             top: py + height,
             footprint,
+        };
+        let finite = solid.centre.iter().all(|v| v.is_finite())
+            && solid.bottom.is_finite()
+            && solid.top.is_finite();
+        finite.then_some(solid)
+    }
+
+    /// The solid of an entity's model: a solid model with a `box` collider whose asset has
+    /// bounds, on an entity that is not a character. Its box is the asset's bounding box
+    /// scaled and turned by the entity's yaw ([`ModelBox`]).
+    fn from_model(world: &World, entity: &Entity) -> Option<Solid> {
+        if !entity.model()?.solid || entity.character().is_some() {
+            return None;
+        }
+        let ModelBox {
+            center,
+            half,
+            yaw_deg,
+        } = world.model_box(entity)?;
+        let (sin, cos) = deg_to_rad(yaw_deg).psin_cos();
+        let [cx, cy, cz] = center;
+        let [hx, hy, hz] = half;
+        let solid = Solid {
+            centre: [cx, cz],
+            bottom: cy - hy,
+            top: cy + hy,
+            footprint: Footprint::Rect {
+                half_x: hx,
+                half_z: hz,
+                sin,
+                cos,
+            },
         };
         let finite = solid.centre.iter().all(|v| v.is_finite())
             && solid.bottom.is_finite()

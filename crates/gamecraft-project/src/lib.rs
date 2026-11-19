@@ -22,12 +22,19 @@
 //! editing a game you depend on makes a mod and never edits the game. Output is pretty and
 //! stable, and saving an unchanged world writes nothing.
 //!
+//! A pack's **assets** live under `assets/`, each with a licence record beside it
+//! ([`assets`]: CC0 or CC-BY only); [`Project::assets`] gives the assets of all packs, a later
+//! pack's asset replacing an earlier one's of the same path. [`model::inspect`] reads a glTF
+//! model's triangle count and bounding box from its bytes.
+//!
 //! Pure: no files, no clock. The host reads and writes the files (`gamecraft-automation`).
 
+pub mod assets;
 mod error;
 mod fields;
 mod layer;
 mod manifest;
+pub mod model;
 mod pack;
 mod paths;
 mod project;
@@ -35,16 +42,21 @@ mod resolve;
 mod terrain;
 mod text;
 
+pub use assets::{
+    ASSETS_DIR, AssetRecord, License, PackAsset, RECORD_SUFFIX, check_assets, credits, record_path,
+};
 pub use error::ProjectError;
 pub use fields::WORLD_FORMAT;
 pub use layer::LAYER_FORMAT;
 pub use manifest::{Dependency, MAX_PACKS, Manifest, PACK_FORMAT, dependency_order};
+pub use model::{ModelSummary, inspect};
 pub use pack::{MAX_LAYERS, PackSource};
 pub use paths::{
     MAX_ENTITY_KEY_CHARS, MAX_PLAIN_NAME_CHARS, MAX_PREFAB_FILE_CHARS, is_entity_key,
     is_plain_name, is_prefab_file_id,
 };
 pub use project::{
-    DEFAULT_LAYER, EntitySource, PackInfo, Project, Provenance, SavePlan, Saving, manifests,
+    DEFAULT_LAYER, EntitySource, PackInfo, Project, ProjectAsset, Provenance, SavePlan, Saving,
+    manifests,
 };
 pub use terrain::TERRAIN_EDITS_FORMAT;

@@ -1,7 +1,8 @@
 //! Ray maths, one implementation for the engine's queries (`query.raycast`,
 //! `query.line_of_sight`) and the simulation (projectile hits, perception): a ray against a box
 //! turned about Y, a sphere, an upright capped cylinder and a capsule, and [`cast`] and
-//! [`line_of_sight`] against the terrain and every entity's `shape`. Pure `f64` functions,
+//! [`line_of_sight`] against the terrain, every entity's `shape` and every model's collider
+//! box. Pure `f64` functions,
 //! deterministic (sines through [`gamecraft_math::Portable`]), never panicking: every division
 //! and square root is guarded and a non-finite result is a miss.
 //!
@@ -313,8 +314,9 @@ pub struct Found {
 }
 
 /// The nearest hit within `max_m` of a ray with a unit `dir`: the terrain (the triangles of
-/// `heights`) and the `shape` of every entity, solid or not, except those `skip` names; on a
-/// tie the terrain, then the lowest id. A hit whose point is not finite is no hit.
+/// `heights`) and the `shape` and the model's collider box ([`World::model_box`]) of every
+/// entity, solid or not, except those `skip` names; on a tie the terrain, then the lowest id
+/// (an entity's shape before its model). A hit whose point is not finite is no hit.
 pub fn cast(
     world: &World,
     heights: Option<&HeightField>,
@@ -338,23 +340,23 @@ pub fn cast(
         });
     }
     for e in world.entities() {
-        let Some(shape) = e.shape() else {
-            continue;
-        };
-        if skip(e.id) {
+        if (e.shape().is_none() && e.model().is_none()) || skip(e.id) {
             continue;
         }
-        let Some(hit) = ray_shape(origin, dir, e, shape) else {
-            continue;
-        };
-        if hit.distance_m > max_m {
-            continue;
-        }
-        if best.is_none_or(|b| hit.distance_m < b.hit.distance_m) {
-            best = Some(Found {
-                hit,
-                entity: Some(e.id),
-            });
+        let shape_hit = e.shape().and_then(|shape| ray_shape(origin, dir, e, shape));
+        let model_hit = world
+            .model_box(e)
+            .and_then(|b| ray_box(origin, dir, b.center, b.half, b.yaw_deg));
+        for hit in [shape_hit, model_hit].into_iter().flatten() {
+            if hit.distance_m > max_m {
+                continue;
+            }
+            if best.is_none_or(|b| hit.distance_m < b.hit.distance_m) {
+                best = Some(Found {
+                    hit,
+                    entity: Some(e.id),
+                });
+            }
         }
     }
     best.filter(|f| {

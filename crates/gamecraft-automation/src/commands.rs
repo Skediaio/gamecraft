@@ -170,6 +170,7 @@ pub(crate) fn host_specs() -> Vec<CommandSpec> {
         let mut specs = specs;
         specs.extend(file_specs());
         specs.extend(crate::projects::project_specs());
+        specs.extend(crate::assets::asset_specs());
         specs
     };
     specs
@@ -453,6 +454,12 @@ impl Host {
             "pack.add_dependency" => self.add_dependency(p),
             #[cfg(not(target_arch = "wasm32"))]
             "project.query" => self.project_query(p),
+            #[cfg(not(target_arch = "wasm32"))]
+            "asset.import" => self.asset_import(p),
+            #[cfg(not(target_arch = "wasm32"))]
+            "asset.list" => self.asset_list(),
+            #[cfg(not(target_arch = "wasm32"))]
+            "asset.credits" => self.asset_credits(),
             #[cfg(target_arch = "wasm32")]
             "project.query" => Err(
                 "the project index is native only: the browser has no files and no database; \
@@ -516,6 +523,8 @@ impl Host {
             camera,
             time_s,
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        self.provide_assets();
         let Some(pictures) = self.pictures.as_mut() else {
             return Err(
                 "this host has no renderer, and a renderer is needed to draw a picture; run \

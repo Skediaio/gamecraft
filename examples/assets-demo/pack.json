@@ -1,0 +1,10 @@
+{
+  "gamecraft_pack": 1,
+  "id": "assets-demo",
+  "name": "Assets demo",
+  "version": "0.1.0",
+  "worlds": [
+    "yard"
+  ],
+  "license": "MIT"
+}

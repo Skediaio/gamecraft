@@ -3,18 +3,19 @@
 A small map, 384 m across, with rolling hills, a road ramped along x = 4 from the north edge
 through a small levelled village square to the wall line (painted, with dirt and rock by slope:
 terrain edits, `docs/design/projects.md`, *Terrain*), a few trees, a low wall line to the south,
-two block houses and a barn as cover, a light wind (5 m/s from the west) and some haze. You are the
-blue rifleman, with a rifle and 100 health. Four red enemies hold the map: two patrol routes,
-one guards the houses, one sits on the hill. Clear the village and stay alive.
+two block houses, a barn and three wooden crates (glTF models) as cover, a light wind (5 m/s from
+the west) and some haze. You are the blue rifleman, with a rifle and 100 health. Four red enemies
+hold the map: two patrol routes, one guards the houses, one sits on the hill. Clear the village and
+stay alive.
 
 Everything here was made with engine commands only, nothing else.
 
 | File | What it is |
 |---|---|
 | `build.json` | The `gamecraft-cli run` script that builds the whole world: terrain (its layers, paint rules and the sculpt and paint edits of the road and the square), environment, trees, cover, player, enemies with their behaviour, objectives, variables and triggers. The enemies are placed from one prefab, `enemy-soldier` (the patrols override its `behaviour`), and the houses from a prefab `house` (House 2 overrides its `shape`) |
-| `world.gamecraft` | The result of that script (a test checks that building it again gives the same world) |
-| `project/` | The same world as a project (`docs/design/projects.md`): `pack.json`, the prefabs `house` and `enemy-soldier` as files, and the world `village` in three layers, `terrain-features` (trees and walls), `village` (houses, barn, player) and `enemies`, one entity per line, with its terrain edits in `worlds/village/terrain/edits.json` (the tile cache `terrain/cache/` is built on open and ignored by git). A test checks that it resolves to `world.gamecraft`, entity for entity. `../skirmish-night-mod` is a mod over it |
-| `playthrough.json` | A `gamecraft-cli play` script: a scripted player that moves from cover to cover, keeps each enemy in its sights with `face_entity`, and wins at 53.3 s with 43 health left |
+| `world.gamecraft` | The result of that script (a test checks that building it again gives the same world). On its own a `.gamecraft` file has no pack and so no assets: its crates are drawn as magenta boxes and do not collide; open `project/` to have them |
+| `project/` | The same world as a project (`docs/design/projects.md`): `pack.json`, the prefabs `house` and `enemy-soldier` as files, and the world `village` in three layers, `terrain-features` (trees and walls), `village` (houses, barn, player, crates) and `enemies`, one entity per line, the crate model in `assets/models/crate.glb` with its licence record (CC0, made by `../assets-demo/tools/make_models.py`), with its terrain edits in `worlds/village/terrain/edits.json` (the tile cache `terrain/cache/` is built on open and ignored by git). A test checks that it resolves to `world.gamecraft`, entity for entity. `../skirmish-night-mod` is a mod over it |
+| `playthrough.json` | A `gamecraft-cli play` script: a scripted player that moves from cover to cover, keeps each enemy in its sights with `face_entity`, and wins with 69 health left |
 | `directed.journal.json` | The journal of the same playthrough directed by a scripted game master (`apps/gamecraft-cli/tests/game_master.rs`): reinforcements behind the village after two enemies are down, fog when the player is below half health, the wind turned when the player reaches the houses. This time the player goes down and both objectives fail. `gamecraft-cli replay examples/skirmish/directed.journal.json --check` |
 
 ## The weapons

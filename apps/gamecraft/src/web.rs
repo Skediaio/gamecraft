@@ -109,6 +109,98 @@ async fn fetch_text(url: &str) -> Result<String, String> {
         .ok_or_else(|| format!("the world {url} is not text"))
 }
 
+/// Fetches `url` as bytes.
+async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let window = web_sys::window().ok_or("the page has no window")?;
+    let response = JsFuture::from(window.fetch_with_str(url))
+        .await
+        .map_err(|e| format!("{url} could not be fetched: {}", describe(&e)))?;
+    let response: web_sys::Response = response
+        .dyn_into()
+        .map_err(|_| format!("fetching {url} gave no response"))?;
+    if !response.ok() {
+        return Err(format!(
+            "fetching {url} answered {} {}",
+            response.status(),
+            response.status_text()
+        ));
+    }
+    let buffer = response
+        .array_buffer()
+        .map_err(|e| format!("{url} could not be read: {}", describe(&e)))?;
+    let buffer = JsFuture::from(buffer)
+        .await
+        .map_err(|e| format!("{url} could not be read: {}", describe(&e)))?;
+    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
+}
+
+/// Where the assets of the page's world are: `?assets=<url>`, else the `assets/` folder beside
+/// the file of `?world=<url>` (a world exported into its pack's folder), else none.
+fn assets_base() -> Option<String> {
+    if let Some(base) = query("assets") {
+        return Some(if base.ends_with('/') {
+            base
+        } else {
+            format!("{base}/")
+        });
+    }
+    let world = query("world")?;
+    let folder = world.rsplit_once('/').map_or("", |(folder, _)| folder);
+    Some(if folder.is_empty() {
+        "assets/".to_string()
+    } else {
+        format!("{folder}/assets/")
+    })
+}
+
+/// Fetches the files of every model `world` shows (a `.gltf` with the files it refers to) from
+/// [`assets_base`], measures each model and gives `world` their bounding boxes, as a native
+/// host does from a project (so solid models collide in the browser too). A model that cannot
+/// be fetched or read is told on the console and left out: the renderer draws its stand-in.
+pub async fn load_assets(world: &mut World) -> Vec<(String, Vec<u8>)> {
+    let used: std::collections::BTreeSet<String> = world
+        .entities()
+        .filter_map(|e| e.model().map(|m| m.asset.clone()))
+        .collect();
+    let Some(base) = assets_base().filter(|_| !used.is_empty()) else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    let mut bounds = std::collections::BTreeMap::new();
+    for asset in used {
+        let fetched = async {
+            let bytes = fetch_bytes(&format!("{base}{asset}")).await?;
+            let folder = gamecraft_project::model::folder_of(&asset);
+            let mut parts = Vec::new();
+            if asset.ends_with(".gltf") {
+                for r in gamecraft_project::model::references(&bytes)? {
+                    let path = format!("{folder}{r}");
+                    let data = fetch_bytes(&format!("{base}{path}")).await?;
+                    parts.push((r, path, data));
+                }
+            }
+            let summary = gamecraft_project::inspect(&bytes, &|r: &str| {
+                parts
+                    .iter()
+                    .find(|(name, _, _)| name == r)
+                    .map(|(_, _, d)| d.clone())
+            })?;
+            Ok::<_, String>((bytes, parts, summary))
+        }
+        .await;
+        match fetched {
+            Ok((bytes, parts, summary)) => {
+                bounds.insert(asset.clone(), summary.bounds);
+                files.push((asset, bytes));
+                files.extend(parts.into_iter().map(|(_, path, data)| (path, data)));
+            }
+            Err(e) => console(&format!("The model {asset} is not loaded: {e}")),
+        }
+    }
+    world.set_model_bounds(bounds);
+    files
+}
+
 /// The world of `?world=<url>`, else the example world.
 pub async fn load_world() -> Result<World, String> {
     let Some(url) = query("world") else {

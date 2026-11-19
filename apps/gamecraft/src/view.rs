@@ -30,6 +30,13 @@ impl GameView {
         }
     }
 
+    /// Hands asset files to the renderer ([`Game::take_assets`]).
+    pub fn provide_assets(&mut self, files: Vec<(String, Vec<u8>)>) {
+        for (path, bytes) in files {
+            self.renderer.provide_asset(&path, bytes);
+        }
+    }
+
     /// The frames' size changed (the window was resized).
     pub fn resize(&mut self, width: u32, height: u32) {
         self.renderer.resize(width, height);

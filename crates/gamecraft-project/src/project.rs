@@ -2,6 +2,7 @@
 //! came from, so that a changed world is written back to the files it belongs to.
 
 use crate::ProjectError;
+use crate::assets::PackAsset;
 use crate::fields::{PROJECT_KEYS, WORLD_FORMAT, WORLD_KEYS, diff, world_fields};
 use crate::layer::{Entry, Layer, LayerEntity};
 use crate::manifest::{Manifest, dependency_order};
@@ -48,6 +49,18 @@ pub struct PackInfo {
     pub manifest: Manifest,
     /// Where it is, as the host named it.
     pub location: String,
+}
+
+/// An asset of the project: the pack that gives it (the last one in load order with that path)
+/// and the asset with its record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectAsset {
+    /// The id of the pack it comes from.
+    pub pack: String,
+    /// Where that pack is, as the host named it.
+    pub location: String,
+    /// The asset, its record and its files.
+    pub asset: PackAsset,
 }
 
 /// What a save writes, paths relative to the root pack's folder.
@@ -121,6 +134,7 @@ pub struct Project {
     saved: World,
     saved_fields: Map<String, Value>,
     warnings: Vec<String>,
+    assets: BTreeMap<String, ProjectAsset>,
 }
 
 /// The manifests of `packs`, by id; each key must be its pack's id.
@@ -229,6 +243,21 @@ impl Project {
             saved_fields: world_fields(&world)?,
             saved: world.clone(),
             warnings: resolved.warnings.clone(),
+            assets: parsed
+                .iter()
+                .flat_map(|p| {
+                    p.assets.iter().map(|a| {
+                        (
+                            a.path.clone(),
+                            ProjectAsset {
+                                pack: p.manifest.id.clone(),
+                                location: p.location.clone(),
+                                asset: a.clone(),
+                            },
+                        )
+                    })
+                })
+                .collect(),
         };
         project.own = project.own_of(root_pack, &world);
         Ok((project, world))
@@ -271,6 +300,7 @@ impl Project {
             saved: World::new("", 0),
             saved_fields: Map::new(),
             warnings: Vec::new(),
+            assets: BTreeMap::new(),
         };
         let mut saving = project.plan_save(world)?;
         saving
@@ -293,6 +323,12 @@ impl Project {
     /// The worlds the packs list, in load order.
     pub fn worlds(&self) -> &[String] {
         &self.worlds
+    }
+
+    /// The assets of every pack by path inside `assets/`: a later pack's asset replaces an
+    /// earlier one's of the same path.
+    pub fn assets(&self) -> &BTreeMap<String, ProjectAsset> {
+        &self.assets
     }
 
     /// The packs, in load order (the root pack last).

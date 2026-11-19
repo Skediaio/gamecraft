@@ -8,6 +8,7 @@ use crate::limits::{
     MAX_SLOPE_MAX_DEG, MAX_SLOPE_MIN_DEG, MAX_TAGS, MAX_TEXT_CHARS, SHAPE_SIZE_MAX_M,
     SHAPE_SIZE_MIN_M,
 };
+use crate::model::Model;
 use serde::{Deserialize, Serialize};
 
 /// One component of an entity. An entity has at most one component of each type.
@@ -37,11 +38,13 @@ pub enum Component {
     Health(Health),
     /// A small state machine that patrols, reacts and fires.
     Behaviour(Behaviour),
+    /// A glTF model of a pack.
+    Model(Model),
 }
 
 impl Component {
     /// Every component type name, in the order the engine lists them.
-    pub const KINDS: [&'static str; 10] = [
+    pub const KINDS: [&'static str; 11] = [
         "shape",
         "plant",
         "character",
@@ -52,10 +55,12 @@ impl Component {
         "launcher",
         "health",
         "behaviour",
+        "model",
     ];
 
     /// The type name of this component (`shape`, `plant`, `character`, `zone`,
-    /// `interactable`, `light`, `tags`, `launcher`, `health` or `behaviour`), as in JSON.
+    /// `interactable`, `light`, `tags`, `launcher`, `health`, `behaviour` or `model`), as in
+    /// JSON.
     pub fn kind(&self) -> &'static str {
         match self {
             Component::Shape(_) => "shape",
@@ -68,6 +73,7 @@ impl Component {
             Component::Launcher(_) => "launcher",
             Component::Health(_) => "health",
             Component::Behaviour(_) => "behaviour",
+            Component::Model(_) => "model",
         }
     }
 
@@ -84,6 +90,7 @@ impl Component {
             Component::Launcher(l) => l.validate(ctx),
             Component::Health(h) => h.validate(ctx),
             Component::Behaviour(b) => b.validate(ctx),
+            Component::Model(m) => m.validate(ctx),
         }
     }
 }

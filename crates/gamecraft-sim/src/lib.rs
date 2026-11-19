@@ -71,7 +71,10 @@
 //!    over which the terrain rises more than `tan(max_slope_deg)` per metre; it stays where it
 //!    is that tick. Downhill is always allowed, and there is no sliding: a character without
 //!    input stands still on any slope.
-//! 5. **Solids block.** A solid box, sphere or cylinder (rotated by its entity's
+//! 5. **Solids block.** A solid model with a `box` collider counts as a solid box: its asset's
+//!    bounding box ([`gamecraft_world::ModelBox`], derived by the host), scaled and turned by
+//!    its entity. A model whose asset has no bounds does not collide. A solid box, sphere or
+//!    cylinder (rotated by its entity's
 //!    `rotation_y_deg`, sized by `size * scale`, standing on its entity's position) whose
 //!    vertical span overlaps the character's (feet to feet + `height_m`) and whose top is more
 //!    than [`STEP_HEIGHT_M`] above the feet pushes the character's circle (`radius_m`) out of
@@ -150,6 +153,8 @@ const HASH_MARK_COMBAT: u64 = 0xC0BA_7C0B_A7C0_BA7C;
 const HASH_MARK_INSIDE: u64 = 0x5A0E_5A0E_5A0E_5A0E;
 /// Marks the held interactions in the state hash.
 const HASH_MARK_HELD: u64 = 0x1A7E_1A7E_1A7E_1A7E;
+/// Marks the bounds of the model assets in the static hash.
+const HASH_MARK_MODELS: u64 = 0x30DE_130D_E130_DE13;
 /// Marks the held facings in the state hash.
 const HASH_MARK_FACE: u64 = 0xFACE_FACE_FACE_FACE;
 
@@ -1124,7 +1129,8 @@ impl Sim {
 }
 
 /// The hash of a world's static content: its JSON text with every character's position and
-/// rotation set to zero, since those move and are hashed per tick by [`Sim::state_hash`].
+/// rotation set to zero, since those move and are hashed per tick by [`Sim::state_hash`], and
+/// the derived bounds of the model assets that collide.
 fn static_hash(world: &World) -> Result<u64, SimError> {
     let mut still = world.clone();
     let characters: Vec<EntityId> = world
@@ -1143,5 +1149,27 @@ fn static_hash(world: &World) -> Result<u64, SimError> {
         .map_err(|e| SimError::World(e.to_string()))?;
     let mut hasher = StateHasher::new();
     hasher.write_str(&text);
+    // The derived bounds of the assets that collide (written only when there are any, so a
+    // world without models hashes as before): another asset under the same path is another
+    // world.
+    let used: BTreeSet<&str> = world
+        .entities()
+        .filter_map(|e| e.model())
+        .filter(|m| m.collider == gamecraft_world::ModelCollider::Box)
+        .map(|m| m.asset.as_str())
+        .collect();
+    let bounded: Vec<(&str, &gamecraft_world::ModelBounds)> = used
+        .into_iter()
+        .filter_map(|a| world.model_bounds(a).map(|b| (a, b)))
+        .collect();
+    if !bounded.is_empty() {
+        hasher.write_u64(HASH_MARK_MODELS);
+        for (asset, b) in bounded {
+            hasher.write_str(asset);
+            for v in b.min.iter().chain(&b.max) {
+                hasher.write_f64(*v);
+            }
+        }
+    }
     Ok(hasher.finish())
 }

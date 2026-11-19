@@ -147,6 +147,15 @@ fn lantern_is_lost_by_standing_still() {
 /// The state hash after the Skirmish playthrough and 60 s in all (the last enemy falls at
 /// about 53 s). A change means the simulation, the triggers or the example changed.
 ///
+/// Moved on 2026-11-19 from cce705014879f043: three crates (`model` components of the crate
+/// asset, solid) stand as cover west of House 1, added after the player in `build.json`, so the
+/// world's text, which the static part of the hash covers, holds three more entities and the
+/// four enemies' ids are three higher (the bodies are hashed by id). Played from this file the
+/// crates have no asset bounds (a lone `.gamecraft` has no pack), so they do not collide; they
+/// stand off the player's route. Everybody moves as before, but the enemies' aim errors are
+/// drawn from random streams forked by their ids, so other shots hit: the player ends with 69
+/// health instead of 43, and still wins.
+///
 /// Moved on 2026-11-19 from 66424923297bb357: `face` became a held facing (part of the state
 /// hash), the playthrough aims with `face_entity` instead of computed yaws and pitches (the
 /// shots leave a few ticks apart from before), and the world changed (trees kept clear of the
@@ -166,7 +175,7 @@ fn lantern_is_lost_by_standing_still() {
 /// static part of the hash covers, now holds the layers, rules and edits, and the player's and
 /// the enemies' feet follow the sculpted ground where they cross the road. Every entity stands
 /// where it stood (the square stops short of the houses) and the playthrough wins as before.
-const SKIRMISH_HASH: &str = "cce705014879f043";
+const SKIRMISH_HASH: &str = "d6ea8fda4b83e06d";
 
 #[test]
 fn skirmish_is_won_by_the_playthrough_and_replays_to_the_same_hash() {

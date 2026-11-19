@@ -1,0 +1,447 @@
+//! What a host needs to know of a model asset without drawing it: its triangle count and its
+//! local bounding box (for a solid model in the simulation), and the files a `.gltf` refers to.
+//!
+//! Read with the `gltf` crate's parser (no import feature: the bytes are given). The bounding box
+//! is computed in `f64` with plain multiplications and additions over the node transforms the
+//! file gives, so it is the same bits on every platform: the simulation's state hash depends on
+//! it.
+
+use gamecraft_world::ModelBounds;
+
+/// Deepest chain of nodes followed below a scene's roots.
+pub const MAX_NODE_DEPTH: usize = 64;
+/// Most node visits while walking a scene (a node used by many parents counts each time).
+pub const MAX_NODE_VISITS: usize = 100_000;
+/// Most vertex positions read from one model.
+pub const MAX_MODEL_VERTICES: u64 = 20_000_000;
+
+/// What [`inspect`] found.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelSummary {
+    /// Triangles drawn (of the triangle, strip and fan primitives of the scene's nodes).
+    pub triangles: u64,
+    /// The local bounding box of those triangles' vertices, node transforms applied.
+    pub bounds: ModelBounds,
+    /// Meshes in the file.
+    pub meshes: usize,
+    /// Materials in the file.
+    pub materials: usize,
+    /// Images in the file.
+    pub images: usize,
+}
+
+/// The files a glTF document refers to by relative URI (its buffers and images), in order, as
+/// paths relative to the document's folder; `data:` URIs are left out. An error when the text
+/// is not a glTF document or a URI is absolute, has a scheme, or leaves the folder.
+pub fn references(gltf_json: &[u8]) -> Result<Vec<String>, String> {
+    let root = gltf::json::Root::from_slice(gltf_json)
+        .map_err(|e| format!("not a valid glTF document: {e}"))?;
+    let mut out = Vec::new();
+    let uris = root
+        .buffers
+        .iter()
+        .filter_map(|b| b.uri.as_deref())
+        .chain(root.images.iter().filter_map(|i| i.uri.as_deref()));
+    for uri in uris {
+        if uri.starts_with("data:") {
+            continue;
+        }
+        let path = decode_uri(uri)?;
+        if !out.contains(&path) {
+            out.push(path);
+        }
+    }
+    Ok(out)
+}
+
+/// A relative URI as a path: percent escapes decoded, no scheme, no `..`, no leading `/`.
+pub fn decode_uri(uri: &str) -> Result<String, String> {
+    let bad = || {
+        format!(
+            "the URI {uri:?} is not a plain relative path; a model refers to files beside it \
+             (\"crate.bin\", \"textures/wood.png\")"
+        )
+    };
+    let mut bytes = Vec::with_capacity(uri.len());
+    let mut it = uri.bytes();
+    while let Some(b) = it.next() {
+        if b == b'%' {
+            let hex = [it.next().ok_or_else(bad)?, it.next().ok_or_else(bad)?];
+            let text = std::str::from_utf8(&hex).map_err(|_| bad())?;
+            bytes.push(u8::from_str_radix(text, 16).map_err(|_| bad())?);
+        } else {
+            bytes.push(b);
+        }
+    }
+    let path = String::from_utf8(bytes).map_err(|_| bad())?;
+    let plain = !path.is_empty()
+        && !path.contains(':')
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|p| !p.is_empty() && p != "." && p != "..");
+    if plain { Ok(path) } else { Err(bad()) }
+}
+
+/// The folder part of an asset path (`models/crate.gltf` -> `models/`), empty at the top.
+pub fn folder_of(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(i) => path.get(..=i).unwrap_or(""),
+        None => "",
+    }
+}
+
+/// Reads a `.glb` or `.gltf` model: `resource(path)` gives the bytes of a file it refers to
+/// (a path relative to the model's folder, from [`references`]). Counts its triangles and
+/// measures its bounding box over the default scene (else the first). An error, never a
+/// panic, for a file that is not glTF, a buffer that is missing or too short, an index past
+/// the vertices, a scene without triangles or a model past the limits.
+pub fn inspect(
+    bytes: &[u8],
+    resource: &dyn Fn(&str) -> Option<Vec<u8>>,
+) -> Result<ModelSummary, String> {
+    let (document, blob) = open(bytes)?;
+    let doc = &document;
+    let mut buffers: Vec<Option<Vec<u8>>> = Vec::new();
+    for buffer in doc.buffers() {
+        let data =
+            match buffer.source() {
+                gltf::buffer::Source::Bin => blob.clone(),
+                gltf::buffer::Source::Uri(uri) if uri.starts_with("data:") => {
+                    return Err(
+                        "a buffer is embedded as a data: URI, which is not supported; save the \
+                     model as .glb or with its buffers as files"
+                            .into(),
+                    );
+                }
+                gltf::buffer::Source::Uri(uri) => {
+                    let path = decode_uri(uri)?;
+                    Some(resource(&path).ok_or_else(|| {
+                        format!("the buffer file {path:?} it refers to is missing")
+                    })?)
+                }
+            };
+        if let Some(d) = &data
+            && (d.len() as u64) < buffer.length() as u64
+        {
+            return Err(format!(
+                "buffer {} holds {} bytes, but the file says {}",
+                buffer.index(),
+                d.len(),
+                buffer.length()
+            ));
+        }
+        buffers.push(data);
+    }
+    let data = |b: gltf::Buffer| buffers.get(b.index()).and_then(|d| d.as_deref());
+    let scene = doc
+        .default_scene()
+        .or_else(|| doc.scenes().next())
+        .ok_or("the model has no scene")?;
+    let mut triangles: u64 = 0;
+    let mut vertices: u64 = 0;
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    let mut visits = 0usize;
+    let mut stack: Vec<(gltf::Node, [f64; 16], usize)> =
+        scene.nodes().map(|n| (n, IDENTITY, 0)).collect();
+    while let Some((node, parent, depth)) = stack.pop() {
+        visits += 1;
+        if visits > MAX_NODE_VISITS || depth > MAX_NODE_DEPTH {
+            return Err(format!(
+                "the scene's node tree is deeper than {MAX_NODE_DEPTH} or has more than \
+                 {MAX_NODE_VISITS} node visits (a loop?)"
+            ));
+        }
+        let local = node.transform().matrix();
+        let xf = mul(&parent, &to_f64(&local));
+        stack.extend(node.children().map(|c| (c, xf, depth + 1)));
+        let Some(mesh) = node.mesh() else { continue };
+        for p in mesh.primitives() {
+            check_primitive(&p)?;
+            let count_of = |n: u64| match p.mode() {
+                gltf::mesh::Mode::Triangles => n / 3,
+                gltf::mesh::Mode::TriangleStrip | gltf::mesh::Mode::TriangleFan => {
+                    n.saturating_sub(2)
+                }
+                _ => 0,
+            };
+            let r = p.reader(data);
+            let Some(positions) = r.read_positions() else {
+                continue;
+            };
+            let positions: Vec<[f32; 3]> = positions.collect();
+            let n = positions.len() as u64;
+            vertices = vertices.saturating_add(n);
+            if vertices > MAX_MODEL_VERTICES {
+                return Err(format!(
+                    "the model has more than {MAX_MODEL_VERTICES} vertices to read"
+                ));
+            }
+            let drawn = match r.read_indices() {
+                Some(indices) => {
+                    let mut count = 0u64;
+                    for i in indices.into_u32() {
+                        if u64::from(i) >= n {
+                            return Err(format!(
+                                "an index {i} points past the {n} vertices of a primitive"
+                            ));
+                        }
+                        count += 1;
+                    }
+                    count_of(count)
+                }
+                None => count_of(n),
+            };
+            if drawn == 0 {
+                continue;
+            }
+            triangles = triangles.saturating_add(drawn);
+            for q in &positions {
+                let w = apply(&xf, q.map(f64::from));
+                for (axis, v) in w.iter().enumerate() {
+                    if let (Some(l), Some(h)) = (lo.get_mut(axis), hi.get_mut(axis)) {
+                        *l = l.min(*v);
+                        *h = h.max(*v);
+                    }
+                }
+            }
+        }
+    }
+    let bounds = ModelBounds { min: lo, max: hi };
+    if triangles == 0 {
+        return Err("the model's scene has no triangles".into());
+    }
+    if !bounds.is_valid() {
+        return Err("the model's vertices are not finite numbers".into());
+    }
+    Ok(ModelSummary {
+        triangles,
+        bounds,
+        meshes: doc.meshes().len(),
+        materials: doc.materials().len(),
+        images: doc.images().len(),
+    })
+}
+
+/// The JSON chunk and the binary chunk of a GLB file, or the whole of a `.gltf` document (no
+/// binary chunk). Every length is checked against the bytes there are.
+pub fn split_glb(bytes: &[u8]) -> Result<(&[u8], Option<&[u8]>), String> {
+    if !bytes.starts_with(b"glTF") {
+        return Ok((bytes, None));
+    }
+    let word = |at: usize| -> Option<u32> {
+        let b = bytes.get(at..at.checked_add(4)?)?;
+        Some(u32::from_le_bytes([
+            *b.first()?,
+            *b.get(1)?,
+            *b.get(2)?,
+            *b.get(3)?,
+        ]))
+    };
+    let short = || "the GLB file is cut short or its lengths are wrong".to_string();
+    if word(4) != Some(2) {
+        return Err("the GLB file is not glTF version 2".into());
+    }
+    let total = word(8).ok_or_else(short)? as usize;
+    let bytes = bytes.get(..total).ok_or_else(short)?;
+    let json_len = word(12).ok_or_else(short)? as usize;
+    if bytes.get(16..20) != Some(b"JSON".as_slice()) {
+        return Err("the GLB file's first chunk is not JSON".into());
+    }
+    let json_end = 20usize.checked_add(json_len).ok_or_else(short)?;
+    let json = bytes.get(20..json_end).ok_or_else(short)?;
+    if json_end >= bytes.len() {
+        return Ok((json, None));
+    }
+    let bin_len = word(json_end).ok_or_else(short)? as usize;
+    let tag_end = json_end.checked_add(8).ok_or_else(short)?;
+    if bytes.get(json_end + 4..tag_end) != Some(b"BIN\0".as_slice()) {
+        return Err("the GLB file's second chunk is not BIN".into());
+    }
+    let bin_end = tag_end.checked_add(bin_len).ok_or_else(short)?;
+    let bin = bytes.get(tag_end..bin_end).ok_or_else(short)?;
+    Ok((json, Some(bin)))
+}
+
+/// Reads and validates a `.glb` or `.gltf` file into its document and its binary chunk.
+///
+/// The `gltf` crate's own reader can panic on hostile files (a GLB header shorter than its
+/// length field, a `POSITION` index past the accessors during validation), so the GLB is split
+/// here and those indices are checked before the crate validates the rest.
+pub fn open(bytes: &[u8]) -> Result<(gltf::Document, Option<Vec<u8>>), String> {
+    let (json, bin) = split_glb(bytes)?;
+    let root = gltf::json::Root::from_slice(json).map_err(|e| format!("not a glTF model: {e}"))?;
+    for mesh in &root.meshes {
+        for p in &mesh.primitives {
+            let attributes = p.attributes.values().chain(
+                p.targets
+                    .iter()
+                    .flatten()
+                    .flat_map(|t| [&t.positions, &t.normals, &t.tangents])
+                    .flatten(),
+            );
+            for index in attributes.chain(p.indices.iter()) {
+                if root.accessors.get(index.value()).is_none() {
+                    return Err(format!(
+                        "a primitive refers to accessor {}, but the file has {}",
+                        index.value(),
+                        root.accessors.len()
+                    ));
+                }
+            }
+        }
+    }
+    let document =
+        gltf::Document::from_json(root).map_err(|e| format!("not a valid glTF model: {e}"))?;
+    Ok((document, bin.map(<[u8]>::to_vec)))
+}
+
+/// Checks an accessor before the `gltf` crate's reader reads it (its reader can panic on an
+/// empty accessor, a stride shorter than an element or a sparse accessor): one of the
+/// `dimensions` and `types`, not sparse, at least one element, a buffer view, a stride of at
+/// least an element, and every element inside the view.
+pub fn check_accessor(
+    accessor: &gltf::Accessor,
+    what: &str,
+    dimensions: &[gltf::accessor::Dimensions],
+    types: &[gltf::accessor::DataType],
+) -> Result<(), String> {
+    let bad = |why: String| Err(format!("the {what} accessor {} {why}", accessor.index()));
+    if !dimensions.contains(&accessor.dimensions()) || !types.contains(&accessor.data_type()) {
+        return bad(format!(
+            "is {:?} of {:?}, which is not allowed here",
+            accessor.dimensions(),
+            accessor.data_type()
+        ));
+    }
+    if accessor.sparse().is_some() {
+        return bad("is sparse, which is not supported".into());
+    }
+    if accessor.count() == 0 {
+        return bad("is empty".into());
+    }
+    let Some(view) = accessor.view() else {
+        return bad("has no buffer view".into());
+    };
+    let size = accessor.size();
+    let stride = view.stride().unwrap_or(size);
+    if size == 0 || stride < size {
+        return bad(format!(
+            "has a stride of {stride} for elements of {size} bytes"
+        ));
+    }
+    let end = (accessor.count() - 1)
+        .checked_mul(stride)
+        .and_then(|n| n.checked_add(size))
+        .and_then(|n| n.checked_add(accessor.offset()));
+    if end.is_none_or(|e| e > view.length()) {
+        return bad("reaches past its buffer view".into());
+    }
+    let view_end = view.offset().checked_add(view.length());
+    if view_end.is_none_or(|e| e > view.buffer().length()) {
+        return bad("lies in a view that reaches past its buffer".into());
+    }
+    Ok(())
+}
+
+/// Checks the accessors of a primitive that a reader of positions, normals, the first texture
+/// coordinates and indices reads ([`check_accessor`]).
+pub fn check_primitive(p: &gltf::Primitive) -> Result<(), String> {
+    use gltf::Semantic;
+    use gltf::accessor::{DataType as D, Dimensions as V};
+    for (semantic, accessor) in p.attributes() {
+        match semantic {
+            Semantic::Positions => check_accessor(&accessor, "POSITION", &[V::Vec3], &[D::F32])?,
+            Semantic::Normals => check_accessor(&accessor, "NORMAL", &[V::Vec3], &[D::F32])?,
+            Semantic::TexCoords(0) => check_accessor(
+                &accessor,
+                "TEXCOORD_0",
+                &[V::Vec2],
+                &[D::F32, D::U8, D::U16],
+            )?,
+            _ => {}
+        }
+    }
+    if let Some(indices) = p.indices() {
+        check_accessor(&indices, "index", &[V::Scalar], &[D::U8, D::U16, D::U32])?;
+    }
+    Ok(())
+}
+
+/// A column-major 4 x 4 matrix, as glTF gives them.
+const IDENTITY: [f64; 16] = [
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+];
+
+fn to_f64(m: &[[f32; 4]; 4]) -> [f64; 16] {
+    let mut out = [0.0; 16];
+    for (dst, src) in out.iter_mut().zip(m.iter().flatten()) {
+        *dst = f64::from(*src);
+    }
+    out
+}
+
+/// The element at column `c`, row `r`.
+fn at(m: &[f64; 16], c: usize, r: usize) -> f64 {
+    m.get(c * 4 + r).copied().unwrap_or(0.0)
+}
+
+/// `a * b`, column-major, in a fixed order of operations.
+fn mul(a: &[f64; 16], b: &[f64; 16]) -> [f64; 16] {
+    let mut out = [0.0; 16];
+    for c in 0..4 {
+        for r in 0..4 {
+            let v = at(a, 0, r) * at(b, c, 0)
+                + at(a, 1, r) * at(b, c, 1)
+                + at(a, 2, r) * at(b, c, 2)
+                + at(a, 3, r) * at(b, c, 3);
+            if let Some(slot) = out.get_mut(c * 4 + r) {
+                *slot = v;
+            }
+        }
+    }
+    out
+}
+
+/// The point `p` transformed by `m` (an affine transform: the last row is ignored).
+fn apply(m: &[f64; 16], p: [f64; 3]) -> [f64; 3] {
+    let [x, y, z] = p;
+    let row = |r: usize| at(m, 0, r) * x + at(m, 1, r) * y + at(m, 2, r) * z + at(m, 3, r);
+    [row(0), row(1), row(2)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uris_are_plain_relative_paths() {
+        assert_eq!(decode_uri("a%20b.bin").unwrap(), "a b.bin");
+        assert_eq!(decode_uri("tex/wood.png").unwrap(), "tex/wood.png");
+        for bad in [
+            "../x.bin",
+            "/x.bin",
+            "http://x/y.bin",
+            "a//b",
+            "%zz",
+            "%2",
+            "c:\\x",
+        ] {
+            assert!(decode_uri(bad).is_err(), "{bad}");
+        }
+        assert_eq!(folder_of("models/a.gltf"), "models/");
+        assert_eq!(folder_of("a.gltf"), "");
+    }
+
+    #[test]
+    fn matrices_multiply_in_column_major_order() {
+        let mut t = IDENTITY;
+        t[12] = 2.0; // translate x by 2
+        let mut s = IDENTITY;
+        s[0] = 3.0; // scale x by 3
+        // Scale first, then translate.
+        assert_eq!(apply(&mul(&t, &s), [1.0, 0.0, 0.0]), [5.0, 0.0, 0.0]);
+    }
+}

@@ -4,8 +4,8 @@ use crate::error::Ctx;
 use crate::limits::{MAX_ENTITIES, MAX_HIERARCHY_DEPTH, MAX_PREFABS};
 use crate::prefab::{check_components, place_child, relative};
 use crate::{
-    Component, Entity, EntityDraft, EntityId, Environment, Objective, Prefab, Spawn, Spawned,
-    Terrain, Trigger, VarValue, WorldError,
+    Component, Entity, EntityDraft, EntityId, Environment, ModelBounds, ModelBox, Objective,
+    Prefab, Spawn, Spawned, Terrain, Trigger, VarValue, WorldError,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -47,6 +47,9 @@ pub struct World {
     pub prefabs: Vec<Prefab>,
     entities: BTreeMap<EntityId, Entity>,
     next_entity_id: EntityId,
+    /// The local bounding boxes of model assets, by asset path: derived from the assets by the
+    /// host, never written to the file.
+    model_bounds: BTreeMap<String, ModelBounds>,
 }
 
 /// The file layout, in the order the fields are written.
@@ -243,7 +246,33 @@ impl World {
             prefabs: Vec::new(),
             entities: BTreeMap::new(),
             next_entity_id: EntityId(1),
+            model_bounds: BTreeMap::new(),
         }
+    }
+
+    /// The bounding box of the model asset `asset` (a path inside a pack's `assets/` folder),
+    /// as the host derived it; `None` when the host gave none.
+    pub fn model_bounds(&self, asset: &str) -> Option<&ModelBounds> {
+        self.model_bounds.get(asset)
+    }
+
+    /// Every asset's bounding box the host gave, by path.
+    pub fn all_model_bounds(&self) -> &BTreeMap<String, ModelBounds> {
+        &self.model_bounds
+    }
+
+    /// Replaces the derived bounding boxes of the model assets (by asset path). Derived data:
+    /// it is not written to the file and does not change the document's text. Bounds with a
+    /// number that is not finite, or a minimum above the maximum, are left out.
+    pub fn set_model_bounds(&mut self, bounds: BTreeMap<String, ModelBounds>) {
+        self.model_bounds = bounds.into_iter().filter(|(_, b)| b.is_valid()).collect();
+    }
+
+    /// The collider box of `entity`'s model in this world: `None` without a model, with the
+    /// collider `none`, or when the asset has no bounds.
+    pub fn model_box(&self, entity: &Entity) -> Option<ModelBox> {
+        let model = entity.model()?;
+        ModelBox::of(entity, self.model_bounds.get(&model.asset)?)
     }
 
     /// The id the next [`World::add_entity`] will hand out.
@@ -806,6 +835,7 @@ impl World {
             prefabs: file.prefabs,
             entities,
             next_entity_id,
+            model_bounds: BTreeMap::new(),
         };
         world.validate()?;
         Ok(world)

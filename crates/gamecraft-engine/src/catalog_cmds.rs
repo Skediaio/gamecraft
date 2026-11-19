@@ -300,6 +300,36 @@ const TAGS_FIELDS: &[Field] = &[field(
      \"who\": \"tag:<tag>\" in triggers and by entity.find.",
 )];
 
+const MODEL_FIELDS: &[Field] = &[
+    field(
+        "asset",
+        "string",
+        None,
+        "Required. The glTF asset's path inside the pack's assets/ folder, ending in .glb or \
+         .gltf (`models/crate.glb`); asset.list lists them.",
+    ),
+    field(
+        "scale",
+        "number",
+        None,
+        "Uniform scale of the asset on top of the entity's scale, 0.001 to 1000.",
+    ),
+    field(
+        "solid",
+        "boolean",
+        None,
+        "Whether characters are blocked by its collider (the asset's bounding box, turned by \
+         the entity's yaw).",
+    ),
+    field(
+        "collider",
+        "string",
+        None,
+        "`box` (the asset's bounding box: rays hit it, and with `solid` characters are \
+         blocked) or `none`.",
+    ),
+];
+
 const LAUNCHER_FIELDS: &[Field] = &[
     field(
         "muzzle_velocity_mps",
@@ -538,6 +568,15 @@ const KINDS: &[Kind] = &[
         fields: BEHAVIOUR_FIELDS,
         minimal: || json!({"type": "behaviour"}),
         example: || json!({"type": "behaviour", "mode": "patrol", "route": [[0, -20], [15, -20]], "team": "red", "reaction_s": 0.8}),
+    },
+    Kind {
+        kind: "model",
+        summary: "A glTF model of a pack (`assets/<asset>`), drawn with its PBR materials and \
+                  textures, standing on the entity's position. With `solid` its bounding box \
+                  (from the asset, turned by the entity's yaw) blocks characters like a box.",
+        fields: MODEL_FIELDS,
+        minimal: || json!({"type": "model", "asset": "models/crate.glb"}),
+        example: || json!({"type": "model", "asset": "models/crate.glb", "scale": 1, "solid": true, "collider": "box"}),
     },
 ];
 

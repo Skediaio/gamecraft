@@ -43,6 +43,8 @@ pub struct Game {
     last_error: Option<String>,
     /// Where projectiles hit lately: (point, normal, simulation time of the hit).
     hits: Vec<([f64; 3], [f64; 3], f64)>,
+    /// Asset files waiting for the view ([`Game::take_assets`]): what the browser fetched.
+    assets: Vec<(String, Vec<u8>)>,
 }
 
 impl Game {
@@ -50,8 +52,35 @@ impl Game {
     /// character in id order is the player. Automation may not read or write files
     /// (`Access::default()`).
     pub fn new(world: World) -> Game {
+        Game::with_host(Host::new(world, Access::default()))
+    }
+
+    /// A game of the project in the folder `dir` (natively): its packs are read with
+    /// `project.open`, its models' files go to the view ([`Game::take_assets`]), and the
+    /// simulation starts. Automation may read the folder that holds the project (where a
+    /// dependency beside it lies) and write nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_project(dir: &std::path::Path) -> Result<Game, String> {
+        let dir = std::fs::canonicalize(dir)
+            .map_err(|e| format!("the project {} cannot be opened: {e}", dir.display()))?;
+        let read_root = dir
+            .parent()
+            .map_or_else(|| dir.clone(), std::path::Path::to_path_buf);
+        let mut host = Host::new(
+            World::new("Untitled", 0),
+            Access {
+                read_root: Some(read_root),
+                write_root: None,
+            },
+        );
+        host.execute("project.open", &json!({"path": dir.display().to_string()}))?;
+        Ok(Game::with_host(host))
+    }
+
+    /// A game on `host`'s document, the simulation started.
+    fn with_host(host: Host) -> Game {
         let mut game = Game {
-            host: Host::new(world, Access::default()),
+            host,
             controls: Controls::default(),
             pad: PadMapper::default(),
             step: FixedStep::new(DT),
@@ -64,9 +93,30 @@ impl Game {
             told: Vec::new(),
             last_error: None,
             hits: Vec::new(),
+            assets: Vec::new(),
         };
         game.start();
         game
+    }
+
+    /// Hands over asset files for the view (the browser fetched them), by their paths inside
+    /// a pack's `assets/` folder.
+    pub fn provide_assets(&mut self, files: Vec<(String, Vec<u8>)>) {
+        self.assets.extend(files);
+    }
+
+    /// The asset files the view has not been given yet: those handed over, and (natively) the
+    /// files of the models the world shows from the open project. Call it before every frame.
+    pub fn take_assets(&mut self) -> Vec<(String, Vec<u8>)> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut files = std::mem::take(&mut self.assets);
+            self.host
+                .hand_over_assets(&mut |path, bytes| files.push((path.to_string(), bytes)));
+            files
+        }
+        #[cfg(target_arch = "wasm32")]
+        std::mem::take(&mut self.assets)
     }
 
     /// The session (read only).
