@@ -16,6 +16,8 @@ gamecraft-sim = { path = "crates/gamecraft-sim" }
 gamecraft-engine = { path = "crates/gamecraft-engine" }
 gamecraft-render = { path = "crates/gamecraft-render" }
 gamecraft-automation = { path = "crates/gamecraft-automation" }
+gamecraft-project = { path = "crates/gamecraft-project" }
+gamecraft-index = { path = "crates/gamecraft-index" }
 
 # VisionCraft (MIT): the renderer and the plant generator. One rev for both, moved on purpose
 # (docs/development.md, Updating VisionCraft). Only the crates named in AGENTS.md rule 13 may
@@ -45,6 +47,9 @@ js-sys = "0.3.106"
 web-sys = "0.3.106"
 web-time = "1.1.0"
 console_error_panic_hook = "0.1"
+# The derived project index (crates/gamecraft-index, native only): Turso, the pure-Rust,
+# SQLite-compatible database (MIT; docs/decisions.md, Text files are the source).
+turso = "0.8.3"
 # Image encoding only (pictures for agents).
 png = "0.17"
 serde = { version = "1", features = ["derive"] }

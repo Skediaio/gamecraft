@@ -15,9 +15,11 @@ pub const LAYERS: &[(&str, u8)] = &[
     ("gamecraft-math", 0),
     ("gamecraft-world", 1),
     ("gamecraft-sim", 2),
+    ("gamecraft-project", 2),
     ("gamecraft-engine", 3),
     ("gamecraft-render", 4),
     ("gamecraft-automation", 4),
+    ("gamecraft-index", 4),
     ("gamecraft-cli", 5),
     ("gamecraft", 5),
 ];
