@@ -53,12 +53,35 @@ fn keys_become_an_input_record() {
     assert_eq!(
         params,
         json!({"entity": 3, "forward": 0.0, "right": 1.0, "yaw_deg": 30.0, "run": true,
-               "jump": false, "interact": true})
+               "jump": false, "interact": true, "pitch_deg": 0.0, "fire": false})
     );
 
     c.release_all();
     let r = c.record();
     assert!(r.forward == 0.0 && r.right == 0.0 && !r.run && !r.interact);
+}
+
+#[test]
+fn the_fire_button_and_the_camera_tilt_go_into_the_record() {
+    let mut c = Controls::new(0.0);
+    assert!(!c.record().fire);
+    c.look(0.0, -50.0);
+    c.set_fire(true);
+    let r = c.record();
+    assert!(r.fire);
+    assert!(close(r.pitch_deg, c.pitch_deg(), 1e-12) && r.pitch_deg > 0.0);
+    let params = r.params(EntityId(7));
+    assert_eq!(params["fire"], json!(true));
+    assert_eq!(params["pitch_deg"], json!(r.pitch_deg));
+    c.set_fire(false);
+    assert!(!c.record().fire);
+    c.set_fire(true);
+    c.release_all();
+    assert!(
+        !c.record().fire,
+        "letting go of everything lets go of the trigger"
+    );
+    assert!(c.pitch_deg() > 0.0, "the look is kept");
 }
 
 #[test]
@@ -595,4 +618,46 @@ fn a_player_far_from_the_terrain_still_gets_a_camera() {
     let game = Game::new(world);
     assert!(game.camera(1.5).validate_ok());
     let _ = pose::characters(game.session().current_world());
+}
+
+// ---- combat effects ----
+
+fn skirmish() -> World {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/skirmish/world.gamecraft");
+    crate::app::load_world_file(&path).unwrap()
+}
+
+#[test]
+fn firing_with_the_mouse_puts_tracers_in_the_air_and_puffs_where_they_hit() {
+    let mut game = Game::new(skirmish());
+    assert_eq!(game.effects(), gamecraft_render::Effects::default());
+    game.fire(true);
+    // Level, due north: the wall line 60 m ahead stops the shot.
+    let (mut tracers, mut impacts) = (0, 0);
+    for _ in 0..240 {
+        game.frame(DT);
+        let effects = game.effects();
+        tracers = tracers.max(effects.tracers.len());
+        impacts = impacts.max(effects.impacts.len());
+        for t in &effects.tracers {
+            let length = t
+                .from
+                .iter()
+                .zip(&t.to)
+                .map(|(a, b)| (b - a) * (b - a))
+                .sum::<f64>()
+                .sqrt();
+            assert!(length > 0.0 && length < 40.0, "a short streak: {length} m");
+        }
+    }
+    game.fire(false);
+    game.frame(DT);
+    let state = game.session_mut().run("sim.state", &json!({})).unwrap();
+    assert_eq!(state["inputs"][0]["fire"], json!(false));
+    assert!(tracers >= 1, "a tracer was in the air");
+    assert!(impacts >= 1, "a shot hit the wall or the ground");
+    // A second after the last hit the puffs are gone; a restart clears at once.
+    game.restart();
+    assert_eq!(game.effects(), gamecraft_render::Effects::default());
 }

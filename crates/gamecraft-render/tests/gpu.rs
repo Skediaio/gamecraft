@@ -3,7 +3,10 @@
 //!
 //! `pictures_of_a_valley_and_a_walker` writes `out/render-valley.png` and
 //! `out/render-walker.png`, `a_night_valley_is_lit_where_the_lights_are_on` writes
-//! `out/render-night.png`, at the workspace root for a person (or agent) to look at.
+//! `out/render-night.png`, at the workspace root for a person (or agent) to look at. The combat
+//! tests write `out/skirmish-fight.png` (the skirmish world mid-fight: two tracers in the air,
+//! one impact, one enemy down) and `out/lantern-night.png` (the Lantern world at night with
+//! three of five beacons lit).
 
 // Integration tests are compiled as their own crates, outside `cfg(test)`, so clippy.toml's
 // test allowances do not reach their helper functions. Picture statistics are not part of the
@@ -18,7 +21,8 @@
 
 use gamecraft_math::Rng;
 use gamecraft_render::{
-    Camera, Picture, PictureRequest, Quality, WorldRenderer, encode_png, headless_gpu,
+    Camera, Effects, Impact, Picture, PictureRequest, Quality, Tracer, WorldRenderer, encode_png,
+    headless_gpu,
 };
 use gamecraft_world::{
     Character, Component, EntityDraft, HeightField, Light, Plant, Shape, ShapeKind, Terrain,
@@ -729,4 +733,263 @@ fn a_walking_character_moves_without_a_rebuild() {
     world.entity_mut(block).unwrap().position = [6.0, 0.0, 0.0];
     r.sync(&world, Some(&hf));
     assert_eq!(r.rebuild_count(), rebuilds + 1, "a moved box is rebuilt");
+}
+
+// ---- combat ----
+
+fn orange_at(p: &Picture, camera: &Camera, point: [f64; 3]) -> bool {
+    let aspect = f64::from(p.width) / f64::from(p.height);
+    let Some([x, y]) = camera.project(point, aspect) else {
+        return false;
+    };
+    let px = ((x * 0.5 + 0.5) * f64::from(p.width)) as i64;
+    let py = ((0.5 - y * 0.5) * f64::from(p.height)) as i64;
+    let mut hits = 0;
+    for yy in py - 2..=py + 2 {
+        for xx in px - 2..=px + 2 {
+            let (xx, yy) = (
+                xx.clamp(0, i64::from(p.width) - 1),
+                yy.clamp(0, i64::from(p.height) - 1),
+            );
+            let i = (yy as usize * p.width as usize + xx as usize) * 4;
+            let [r, g, b] = [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2]].map(f64::from);
+            if r > 1.25 * g && r > 1.8 * b && r > 100.0 {
+                hits += 1;
+            }
+        }
+    }
+    hits >= 8
+}
+
+#[test]
+fn tracers_and_puffs_are_drawn_and_cleared() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let (mut world, hf) = flat(80.0);
+    world.environment.time_of_day_h = 14.0;
+    add(
+        &mut world,
+        [0.0, 0.0, -30.0],
+        0.0,
+        shape(ShapeKind::Box, [20.0, 8.0, 1.0], [0.5, 0.5, 0.5]),
+    );
+    r.sync(&world, Some(&hf));
+    let camera = Camera {
+        position: [12.0, 2.0, 8.0],
+        target: [0.0, 1.5, -10.0],
+        fov_y_deg: 60.0,
+    };
+    let req = request(640, 360, camera);
+    let plain = r.render(&req).unwrap();
+    r.set_effects(&Effects {
+        tracers: vec![Tracer {
+            from: [-3.0, 1.5, 5.0],
+            to: [-3.0, 1.5, -15.0],
+            age_s: 0.1,
+        }],
+        impacts: vec![Impact {
+            point: [3.0, 2.0, -29.5],
+            normal: [0.0, 0.0, 1.0],
+            age_s: 0.12,
+        }],
+    });
+    let with = r.render(&req).unwrap();
+    let (bbox, count) = difference(&plain, &with, 12).expect("the effects change the picture");
+    println!("effects: {count} pixels differ, {bbox:?}");
+    let aspect = 640.0 / 360.0;
+    let [tx, ty] = camera.project([-3.0, 1.5, -5.0], aspect).unwrap();
+    let (tpx, tpy) = (
+        ((tx * 0.5 + 0.5) * 640.0) as usize,
+        ((0.5 - ty * 0.5) * 360.0) as usize,
+    );
+    let lum_at = |p: &Picture, x: usize, y: usize| {
+        let i = (y * 640 + x) * 4;
+        luminance([p.rgba[i], p.rgba[i + 1], p.rgba[i + 2]].map(f64::from))
+    };
+    assert!(
+        lum_at(&with, tpx, tpy) > lum_at(&plain, tpx, tpy) + 40.0,
+        "the tracer is bright against what it crosses"
+    );
+    // The puff alone: the picture with and without the impact differs round the point hit.
+    let tracers_only = {
+        r.set_effects(&Effects {
+            tracers: vec![Tracer {
+                from: [-3.0, 1.5, 5.0],
+                to: [-3.0, 1.5, -15.0],
+                age_s: 0.1,
+            }],
+            impacts: Vec::new(),
+        });
+        r.render(&req).unwrap()
+    };
+    let [ix, iy] = camera.project([3.0, 2.0, -29.5], aspect).unwrap();
+    let (ipx, ipy) = (
+        ((ix * 0.5 + 0.5) * 640.0) as usize,
+        ((0.5 - iy * 0.5) * 360.0) as usize,
+    );
+    let (bbox, count) = difference(&tracers_only, &with, 20).expect("the puff is drawn");
+    println!("puff: {count} pixels differ, {bbox:?}, at ({ipx}, {ipy})");
+    assert!(
+        (bbox[0]..=bbox[2]).contains(&ipx) && (bbox[1]..=bbox[3]).contains(&ipy) && count > 30,
+        "the impact shows where it hit"
+    );
+    // An impact that is over draws nothing, and clearing the effects restores the picture.
+    r.set_effects(&Effects::default());
+    let cleared = r.render(&req).unwrap();
+    assert_eq!(difference(&plain, &cleared, 2), None);
+}
+
+#[test]
+fn a_downed_character_lies_on_its_side() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let (mut world, hf) = flat(60.0);
+    world.environment.time_of_day_h = 13.0;
+    add(
+        &mut world,
+        [0.0, 0.0, 0.0],
+        0.0,
+        Component::Character(Character::default()),
+    );
+    let id = world.entities().next().unwrap().id;
+    // Seen from the south, the character faces away from the camera, up the picture.
+    let camera = Camera {
+        position: [0.0, 1.2, 7.0],
+        target: [-0.5, 0.9, 0.0],
+        fov_y_deg: 50.0,
+    };
+    let standing_head = [0.0, 1.6, 0.0];
+    let lying_body = [-1.0, 0.3, 0.0];
+    r.sync(&world, Some(&hf));
+    let up = r.render(&request(640, 360, camera)).unwrap();
+    save("combat-standing.png", &up);
+    assert!(orange_at(&up, &camera, standing_head), "it stands");
+    assert!(!orange_at(&up, &camera, lying_body));
+    world
+        .entity_mut(id)
+        .unwrap()
+        .set_component(Component::Health(gamecraft_world::Health {
+            max: 100.0,
+            current: 0.0,
+            armor: 0.0,
+        }));
+    let rebuilds = r.rebuild_count();
+    r.sync(&world, Some(&hf));
+    assert_eq!(
+        rebuilds,
+        r.rebuild_count(),
+        "going down moves the instance, no rebuild"
+    );
+    let down = r.render(&request(640, 360, camera)).unwrap();
+    save("combat-down.png", &down);
+    assert!(
+        !orange_at(&down, &camera, standing_head),
+        "it no longer stands"
+    );
+    assert!(
+        orange_at(&down, &camera, lying_body),
+        "it lies to the left, low"
+    );
+}
+
+fn id_of(world: &World, name: &str) -> gamecraft_world::EntityId {
+    world.entities().find(|e| e.name == name).unwrap().id
+}
+
+fn example(name: &str) -> World {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples")
+        .join(name)
+        .join("world.gamecraft");
+    World::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[test]
+fn the_skirmish_mid_fight_and_the_lantern_at_night() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    // ---- the skirmish ----
+    let mut world = example("skirmish");
+    let hf = world.terrain.as_ref().unwrap().build().unwrap();
+    let ground = |x: f64, z: f64| hf.height_at(x, z).unwrap();
+    // Stage the fight round the wall line (z 48): the rifleman behind it, two enemies in front.
+    let stage = |world: &mut World, name: &str, x: f64, z: f64, yaw: f64| {
+        let e = world.entity_mut(id_of(world, name)).unwrap();
+        e.position = [x, ground(x, z), z];
+        e.rotation_y_deg = yaw;
+    };
+    stage(&mut world, "Player", -6.0, 55.0, 0.0);
+    stage(&mut world, "Patrol Alpha", -3.0, 34.0, 180.0);
+    stage(&mut world, "Patrol Bravo", 5.5, 38.0, 150.0);
+    let bravo = id_of(&world, "Patrol Bravo");
+    world
+        .entity_mut(bravo)
+        .unwrap()
+        .health_mut()
+        .unwrap()
+        .current = 0.0;
+    let problems = r.sync(&world, Some(&hf));
+    assert!(problems.is_empty(), "{problems:?}");
+    let g = ground(-4.0, 40.0);
+    // The top of the wall at x = -4.5: where the enemy's shot lands.
+    let top = ground(-4.5, 48.0) + 1.4;
+    // Muzzle and chest heights above the ground at the point.
+    let at = |x: f64, z: f64, h: f64| [x, ground(x, z) + h, z];
+    r.set_effects(&Effects {
+        tracers: vec![
+            // The rifleman's shot, going up the picture at the standing enemy.
+            Tracer {
+                from: at(-6.0, 53.5, 1.45),
+                to: at(-3.1, 36.0, 1.4),
+                age_s: 0.03,
+            },
+            // The enemy's answer, coming down on the wall.
+            Tracer {
+                from: at(-3.4, 37.0, 1.6),
+                to: [-4.5, top, 47.9],
+                age_s: 0.05,
+            },
+        ],
+        impacts: vec![Impact {
+            point: [-4.5, top, 47.9],
+            normal: [0.0, 1.0, 0.0],
+            age_s: 0.12,
+        }],
+    });
+    let camera = Camera {
+        position: [3.5, ground(3.5, 64.0) + 4.0, 64.0],
+        target: [-3.0, g + 0.8, 40.0],
+        fov_y_deg: 42.0,
+    };
+    let p = r.render(&request(1280, 720, camera)).unwrap();
+    assert!(p.problems.is_empty(), "{:?}", p.problems);
+    save("skirmish-fight.png", &p);
+
+    // ---- the lantern at night, three of five beacons lit ----
+    let mut world = example("lantern");
+    let lit = ["Beacon Meadow", "Beacon Pines", "Beacon Ridge"];
+    for name in lit {
+        let id = id_of(&world, name);
+        let e = world.entity_mut(id).unwrap();
+        let mut light = e.light().unwrap().clone();
+        light.on = true;
+        e.set_component(Component::Light(light));
+    }
+    let hf = world.terrain.as_ref().unwrap().build().unwrap();
+    let problems = r.sync(&world, Some(&hf));
+    assert!(problems.is_empty(), "{problems:?}");
+    r.set_effects(&Effects::default());
+    // From the east and high up, the lit beacons of the west side are three pools in the dark.
+    let camera = Camera {
+        position: [125.0, 55.0, 20.0],
+        target: [-20.0, -5.0, -10.0],
+        fov_y_deg: 75.0,
+    };
+    let p = r.render(&request(1280, 720, camera)).unwrap();
+    assert!(p.problems.is_empty(), "{:?}", p.problems);
+    save("lantern-night.png", &p);
+    assert!(luminance(mean_rgb(&p, 0..p.height)) < 90.0, "it is night");
 }

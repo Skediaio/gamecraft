@@ -230,6 +230,9 @@ impl App {
             window.set_cursor_visible(true);
         }
         self.captured = false;
+        if let Some(game) = &mut self.game {
+            game.fire(false);
+        }
     }
 
     /// One frame: control lines, the game's ticks, what it tells, the title and the picture.
@@ -399,17 +402,22 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseInput {
-                state: ElementState::Pressed,
+                state,
                 button: MouseButton::Left,
                 ..
             } => {
-                if !self.captured {
+                let pressed = state == ElementState::Pressed;
+                if pressed && !self.captured {
+                    // The click that locks the pointer does not fire.
                     self.capture();
+                } else if let Some(game) = &mut self.game {
+                    game.fire(pressed && self.captured);
                 }
             }
             WindowEvent::Focused(false) => {
                 if let Some(game) = &mut self.game {
                     game.release_keys();
+                    game.fire(false);
                 }
                 self.release();
             }

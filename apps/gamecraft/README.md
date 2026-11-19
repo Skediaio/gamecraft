@@ -23,7 +23,8 @@ The first character in id order is the player. Keys:
 | Shift | run |
 | Space | jump |
 | E | interact (`sim.input`'s `interact`) |
-| mouse | turn (the input's `yaw_deg`) and look up and down (the camera only); click the window to lock the pointer |
+| mouse | turn (the input's `yaw_deg`) and look up and down (the camera, and the input's `pitch_deg` for a launcher); click the window to lock the pointer |
+| left button | fire the character's launcher (`fire`) once the pointer is locked; tracers, impact puffs and, in first person, a crosshair are drawn |
 | Esc | release the pointer |
 | F1 | first or third person |
 | F5 | restart the simulation from the document |

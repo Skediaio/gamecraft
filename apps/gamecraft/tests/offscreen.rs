@@ -295,3 +295,55 @@ fn a_lantern_carried_at_night_lights_the_way() {
         "the lantern lights the ground round it"
     );
 }
+
+#[test]
+fn firing_in_first_person_shows_a_crosshair_and_tracers() {
+    let (device, queue) = match headless_gpu() {
+        Ok(gpu) => gpu,
+        Err(e) => {
+            if std::env::var("GAMECRAFT_REQUIRE_GPU").as_deref() == Ok("1") {
+                panic!("GAMECRAFT_REQUIRE_GPU=1 but there is no GPU: {e}");
+            }
+            println!("skipping GPU test: {e}");
+            return;
+        }
+    };
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/skirmish/world.gamecraft");
+    let world = gamecraft::app::load_world_file(&path).unwrap();
+    let texture = target(&device);
+    let surface = texture.create_view(&Default::default());
+    let mut view = GameView::new(
+        device.clone(),
+        queue.clone(),
+        Quality::Medium,
+        (WIDTH, HEIGHT),
+    );
+    let mut game = Game::new(world);
+    game.key(Key::ToggleView, true);
+    game.key(Key::ToggleView, false);
+    assert_eq!(game.view(), ViewMode::FirstPerson);
+    game.fire(true);
+    let mut flying = 0;
+    for _ in 0..4 {
+        game.frame(DT);
+        flying = flying.max(game.effects().tracers.len());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let problems = view.draw(&game, &surface, &mut encoder).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        queue.submit([encoder.finish()]);
+    }
+    assert!(flying >= 1, "the first shot is in the air");
+    let picture = read_back(&device, &queue, &texture);
+    save("window-fire.png", &picture);
+    let (cx, cy) = (WIDTH as usize / 2, HEIGHT as usize / 2);
+    for (dx, dy) in [(9, 0), (-9, 0), (0, 9), (0, -9)] {
+        let (x, y) = ((cx as i64 + dx) as usize, (cy as i64 + dy) as usize);
+        let i = (y * WIDTH as usize + x) * 4;
+        let [r, g, b] = [picture[i], picture[i + 1], picture[i + 2]];
+        assert!(
+            r.min(g).min(b) >= 225,
+            "an arm of the crosshair at ({dx}, {dy}) from the centre: {r} {g} {b}"
+        );
+    }
+}

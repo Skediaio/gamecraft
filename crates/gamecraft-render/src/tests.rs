@@ -798,3 +798,100 @@ fn quality_names_parse_and_a_wrong_one_names_the_choices() {
         "{e}"
     );
 }
+
+// ---- combat effects ----
+
+mod combat {
+    use crate::Camera;
+    use crate::effects::{
+        self, CROSSHAIR_INNER_PX, CROSSHAIR_OUTER_PX, IMPACT_LIFE_S, IMPACT_RADIUS_M, Impact,
+        Tracer,
+    };
+
+    fn tracer(age_s: f64) -> Tracer {
+        Tracer {
+            from: [0.0, 1.0, 0.0],
+            to: [0.0, 1.0, -20.0],
+            age_s,
+        }
+    }
+
+    #[test]
+    fn a_tracer_is_a_wide_dim_glow_under_a_thin_bright_core() {
+        let segments = effects::tracer_segments(&tracer(0.0));
+        assert_eq!(segments.len(), 2);
+        let (glow, core) = (segments[0], segments[1]);
+        assert!(glow.width_px > core.width_px, "the glow is wider");
+        assert!(glow.rgba[3] < core.rgba[3], "the glow is dimmer");
+        assert_eq!((core.from, core.to), ([0.0, 1.0, 0.0], [0.0, 1.0, -20.0]));
+        let old = effects::tracer_segments(&tracer(10.0));
+        assert!(old[1].rgba[3] < core.rgba[3], "an old tracer is dimmer");
+        assert!(old[1].rgba[3] > 0, "but still there");
+    }
+
+    #[test]
+    fn a_tracer_that_is_not_finite_is_left_out() {
+        let mut t = tracer(0.0);
+        t.to[1] = f64::NAN;
+        assert!(effects::tracer_segments(&t).is_empty());
+    }
+
+    fn impact(age_s: f64) -> Impact {
+        Impact {
+            point: [1.0, 2.0, 3.0],
+            normal: [0.0, 1.0, 0.0],
+            age_s,
+        }
+    }
+
+    #[test]
+    fn a_puff_swells_then_shrinks_and_is_gone_after_a_second() {
+        let radius = |age| effects::impact_puff(&impact(age)).map(|(_, r)| r);
+        assert_eq!(radius(0.0), Some(0.0));
+        let swelling = radius(0.06).unwrap();
+        let full = radius(0.12).unwrap();
+        let fading = radius(0.6).unwrap();
+        assert!(swelling < full && fading < full && fading > 0.0);
+        assert!((full - IMPACT_RADIUS_M).abs() < 1e-9);
+        assert_eq!(radius(IMPACT_LIFE_S), None);
+        assert_eq!(radius(-0.1), None);
+        assert_eq!(radius(f64::NAN), None);
+    }
+
+    #[test]
+    fn a_puff_rises_off_the_surface_along_its_normal() {
+        let (centre, radius) = effects::impact_puff(&impact(0.12)).unwrap();
+        assert_eq!((centre[0], centre[2]), (1.0, 3.0));
+        assert!((centre[1] - (2.0 + radius * 0.5)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_crosshair_is_four_arms_of_a_fixed_pixel_length_round_the_view_centre() {
+        let camera = Camera {
+            position: [0.0, 1.6, 0.0],
+            target: [0.0, 1.6, -10.0],
+            fov_y_deg: 70.0,
+        };
+        let height = 720;
+        let segments = effects::crosshair_segments(&camera, height);
+        assert_eq!(segments.len(), 8, "four outlines and four arms");
+        let metres_per_px = 2.0 * (35.0_f64).to_radians().tan() / f64::from(height);
+        for s in &segments[4..] {
+            // One metre ahead of the eye, along the view.
+            assert!((s.from[2] + 1.0).abs() < 1e-9 && (s.to[2] + 1.0).abs() < 1e-9);
+            let d = ((s.to[0] - s.from[0]).powi(2) + (s.to[1] - s.from[1]).powi(2)).sqrt();
+            let want = (CROSSHAIR_OUTER_PX - CROSSHAIR_INNER_PX) * metres_per_px;
+            assert!((d - want).abs() < 1e-9, "{d} against {want}");
+        }
+        assert!(
+            segments[..4].iter().all(|s| s.rgba[0] == 0),
+            "dark outlines first"
+        );
+        assert!(effects::crosshair_segments(&camera, 0).is_empty());
+        let degenerate = Camera {
+            target: camera.position,
+            ..camera
+        };
+        assert!(effects::crosshair_segments(&degenerate, height).is_empty());
+    }
+}

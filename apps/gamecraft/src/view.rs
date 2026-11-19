@@ -2,6 +2,7 @@
 //! draws into its surface, the offscreen test into a texture; both take this path.
 
 use crate::game::Game;
+use crate::rig::ViewMode;
 use gamecraft_render::{Quality, RenderError, WorldRenderer};
 
 /// The renderer of a game's frames on one device.
@@ -52,6 +53,9 @@ impl GameView {
             .cloned()
             .collect();
         self.problems = problems;
+        self.renderer.set_effects(&game.effects());
+        self.renderer
+            .set_crosshair(game.view() == ViewMode::FirstPerson && game.player().is_some());
         let (width, height) = self.renderer.size();
         let camera = game.camera(f64::from(width) / f64::from(height));
         self.renderer

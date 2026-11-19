@@ -2,6 +2,7 @@
 //! (`visioncraft-render`). A VisionCraft API change lands here.
 
 use crate::blit::Blit;
+use crate::effects::{self, Effects, Segment};
 use crate::light;
 use crate::mesh::{self, MeshData};
 use crate::plants::{self, PartKind, PlantImage};
@@ -46,6 +47,11 @@ const SHADOW_MAX_M: f64 = 3000.0;
 /// The share of the sun's glow in the haze by day (VisionCraft's `studio.rs`).
 const SUN_GLOW: f64 = 0.5;
 
+/// How bright an impact puff glows, cd/m2 per unit of its emissive colour.
+const PUFF_EMISSIVE_STRENGTH: f32 = 6_000.0;
+/// A character that is down lies on its side; the base of its body is turned about this.
+const LYING_DEG: f64 = 90.0;
+
 /// A device without a window (native), or an error that says why there is none.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn headless_gpu() -> Result<(wgpu::Device, wgpu::Queue), RenderError> {
@@ -86,6 +92,8 @@ struct CharacterGroup {
     item: vc::ItemId,
     ids: Vec<EntityId>,
     instances: Vec<Mat4>,
+    /// The body's radius, metres: a downed body lies this high above the ground.
+    radius_m: f64,
 }
 
 /// What of an entity the scene's geometry is built from. A character's position and rotation
@@ -196,6 +204,15 @@ pub struct WorldRenderer {
     /// Terrain chunks are shaded by the layers; the renderer still wants a material per item.
     terrain_material: vc::MaterialId,
     built: Built,
+    /// The item of impact puffs and its material (kept for the renderer's life), when the
+    /// sphere mesh could be uploaded.
+    puffs: Option<vc::ItemId>,
+    /// The puffs' instances now, so an unchanged frame uploads nothing.
+    puff_instances: Vec<Mat4>,
+    /// The effects' overlay lines now.
+    tracer_lines: Vec<vc::LineVertex>,
+    /// Whether the live frames carry a crosshair.
+    crosshair: bool,
     synced: Option<GeometryKey>,
     problems: Vec<String>,
     /// Problems of setting the renderer up, repeated with every sync.
@@ -245,6 +262,16 @@ impl WorldRenderer {
             }
         };
         let terrain_material = renderer.add_material(&vc::Material::default());
+        let puffs = units.map(|u| {
+            let material = renderer.add_material(&vc::Material {
+                base_color: [0.9, 0.4, 0.1, 1.0],
+                roughness: 1.0,
+                emissive: effects::IMPACT_EMISSIVE,
+                emissive_strength: PUFF_EMISSIVE_STRENGTH,
+                ..Default::default()
+            });
+            renderer.add_lod_item(&[(u.sphere, material, f32::INFINITY)], &[])
+        });
         // A camera sees the sun's glare and the air's own colour far off (VisionCraft's
         // studio sets both for every picture).
         renderer.set_sun_glare(1.0);
@@ -264,6 +291,10 @@ impl WorldRenderer {
             units,
             terrain_material,
             built: Built::default(),
+            puffs,
+            puff_instances: Vec::new(),
+            tracer_lines: Vec::new(),
+            crosshair: false,
             synced: None,
             problems: setup_problems.clone(),
             setup_problems,
@@ -331,6 +362,41 @@ impl WorldRenderer {
         self.hidden = id;
     }
 
+    /// Hands the renderer what is in flight and what just hit: tracers become thin bright
+    /// streaks (overlay lines, hidden behind terrain and shapes) and impacts small glowing puffs
+    /// that swell and shrink away. Replaces the last effects; empty ones clear them. Cheap
+    /// enough for every frame; no rebuild.
+    pub fn set_effects(&mut self, effects: &Effects) {
+        let lines: Vec<vc::LineVertex> = effects
+            .tracers
+            .iter()
+            .flat_map(effects::tracer_segments)
+            .flat_map(|s| line_pair(&s))
+            .collect();
+        if lines != self.tracer_lines {
+            self.renderer.set_overlay_lines(&lines);
+            self.tracer_lines = lines;
+        }
+        let instances: Vec<Mat4> = effects
+            .impacts
+            .iter()
+            .filter_map(effects::impact_puff)
+            .map(|(centre, radius)| effects::puff_matrix(centre, radius))
+            .collect();
+        if let Some(item) = self.puffs
+            && instances != self.puff_instances
+        {
+            self.renderer.set_instances(item, &instances);
+            self.puff_instances = instances;
+        }
+    }
+
+    /// Whether live frames ([`WorldRenderer::draw`]) carry a crosshair at the centre: a small
+    /// plus with a gap, drawn over everything. Off by default; pictures never carry one.
+    pub fn set_crosshair(&mut self, on: bool) {
+        self.crosshair = on;
+    }
+
     /// How many times [`WorldRenderer::sync`] built the scene's geometry: a count of work for
     /// tests and measurements.
     pub fn rebuild_count(&self) -> u64 {
@@ -396,6 +462,15 @@ impl WorldRenderer {
         let aspect = f64::from(self.size.0) / f64::from(self.size.1);
         let (view, proj, eye) = self.aim(camera, aspect, time_s);
         self.renderer.set_camera(view, proj, eye);
+        let sights: Vec<vc::LineVertex> = if self.crosshair {
+            effects::crosshair_segments(camera, self.size.1)
+                .iter()
+                .flat_map(line_pair)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.renderer.set_overlay_lines_on_top(&sights);
         let output = self.renderer.render(encoder);
         self.blit
             .record(&self.device, encoder, output, target, format);
@@ -421,7 +496,13 @@ impl WorldRenderer {
                 .iter()
                 .filter(|&&id| Some(id) != hidden)
                 .filter_map(|&id| world.entity(id))
-                .map(|e| placement(e.position, e.rotation_y_deg, [1.0; 3]))
+                .map(|e| {
+                    if e.is_down() {
+                        lying(e.position, e.rotation_y_deg, group.radius_m)
+                    } else {
+                        placement(e.position, e.rotation_y_deg, [1.0; 3])
+                    }
+                })
                 .collect();
             if instances != group.instances {
                 self.renderer.set_instances(group.item, &instances);
@@ -464,9 +545,11 @@ impl WorldRenderer {
     }
 
     /// How many draw items the renderer holds (terrain chunks, shape groups, characters,
-    /// plants): for tests that a sync leaves nothing behind.
+    /// plants, not the impact puffs' own): for tests that a sync leaves nothing behind.
     pub fn item_count(&self) -> usize {
-        self.renderer.item_count()
+        self.renderer
+            .item_count()
+            .saturating_sub(usize::from(self.puffs.is_some()))
     }
 
     /// Sun, sky, clouds, mist, rain, wind, haze and exposure from the environment; `lamps`
@@ -626,6 +709,26 @@ fn placement(position: [f64; 3], yaw_deg: f64, scale: [f64; 3]) -> Mat4 {
     .as_mat4()
 }
 
+/// A downed character's transform: the body lies on its side, its feet at `position`, its head
+/// to the left of where it faced, and its side resting on the ground.
+fn lying(position: [f64; 3], yaw_deg: f64, radius_m: f64) -> Mat4 {
+    glam::DMat4::from_rotation_translation(
+        DQuat::from_rotation_y(deg_to_rad(yaw_deg)) * DQuat::from_rotation_z(deg_to_rad(LYING_DEG)),
+        DVec3::from_array(position) + DVec3::new(0.0, radius_m, 0.0),
+    )
+    .as_mat4()
+}
+
+/// The two line vertices of a segment, as the renderer wants them.
+fn line_pair(s: &Segment) -> [vc::LineVertex; 2] {
+    let vertex = |p: [f64; 3]| vc::LineVertex {
+        position: [p[0] as f32, p[1] as f32, p[2] as f32],
+        color: s.rgba,
+        width: s.width_px,
+    };
+    [vertex(s.from), vertex(s.to)]
+}
+
 /// One rebuild in progress.
 struct Scene<'a> {
     r: &'a mut vc::Renderer,
@@ -772,6 +875,7 @@ impl Scene<'_> {
                     item,
                     ids,
                     instances,
+                    radius_m: character.radius_m,
                 });
             }
         }

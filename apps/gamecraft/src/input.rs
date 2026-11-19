@@ -1,8 +1,8 @@
 //! Keys and the mouse turned into an input record (`sim.input`), and the window's own keys.
 //!
 //! W and S walk forward and back, A and D strafe, Shift runs, Space jumps, E interacts; the
-//! mouse turns the character (the record's `yaw_deg`) and tilts the camera (the pitch is the
-//! camera's alone). F1 toggles first and third person, F5 restarts the simulation, P pauses
+//! mouse turns the character (the record's `yaw_deg`) and tilts the camera; the left button
+//! fires the character's launcher along that tilt (the record's `fire` and `pitch_deg`). F1 toggles first and third person, F5 restarts the simulation, P pauses
 //! and Esc releases the pointer: those are [`Action`]s for the window, not input.
 
 use gamecraft_engine::Session;
@@ -73,6 +73,10 @@ pub struct InputRecord {
     pub jump: bool,
     /// Interact once when it turns true.
     pub interact: bool,
+    /// The aim's tilt, degrees up from level (the camera's pitch), for a launcher.
+    pub pitch_deg: f64,
+    /// Fire the launcher while held.
+    pub fire: bool,
 }
 
 impl InputRecord {
@@ -86,6 +90,8 @@ impl InputRecord {
             "run": self.run,
             "jump": self.jump,
             "interact": self.interact,
+            "pitch_deg": self.pitch_deg,
+            "fire": self.fire,
         })
     }
 
@@ -111,6 +117,8 @@ pub struct Controls {
     /// reaches one.
     jump_tapped: bool,
     interact_tapped: bool,
+    /// The left mouse button is held.
+    fire: bool,
     yaw_deg: f64,
     pitch_deg: f64,
 }
@@ -168,6 +176,11 @@ impl Controls {
             .clamp(-PITCH_LIMIT_DEG, PITCH_LIMIT_DEG);
     }
 
+    /// The fire button (left mouse) went down or up.
+    pub fn set_fire(&mut self, held: bool) {
+        self.fire = held;
+    }
+
     /// Faces `yaw_deg` (a restart puts the character back as it stood).
     pub fn face(&mut self, yaw_deg: f64) {
         if yaw_deg.is_finite() {
@@ -195,6 +208,8 @@ impl Controls {
             run: self.run,
             jump: self.jump || self.jump_tapped,
             interact: self.interact || self.interact_tapped,
+            pitch_deg: self.pitch_deg,
+            fire: self.fire,
         }
     }
 

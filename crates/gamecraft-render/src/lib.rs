@@ -15,6 +15,10 @@
 //! - **Sky and light**: the physical sky, the sun from the environment, clouds, mist, rain, wind
 //!   and an exposure that follows the light, so day, dusk and night are all readable.
 //!
+//! - **Combat**: tracers (overlay streaks), impact puffs (small emissive spheres), downed
+//!   characters lying on their side and a first-person crosshair; the caller hands over plain
+//!   data ([`Effects`]), never the simulation.
+//!
 //! No VisionCraft type appears in this crate's public API: everything that touches the renderer
 //! lives in `renderer.rs`, everything that touches the plant generator in `plants.rs`. The
 //! GPU-free half (meshes, cameras, PNG encoding, the light and wind mappings) is public and
@@ -30,6 +34,7 @@
 
 mod blit;
 mod camera;
+pub mod effects;
 mod image;
 mod light;
 pub mod mesh;
@@ -42,6 +47,7 @@ mod tests;
 use std::fmt;
 
 pub use camera::{Camera, FOV_MAX_DEG, FOV_MIN_DEG};
+pub use effects::{Effects, Impact, Tracer};
 pub use image::encode_png;
 pub use light::wind_towards;
 pub use renderer::WorldRenderer;

@@ -57,7 +57,8 @@ of Lantern as its test (`crates/gamecraft-engine/tests/lantern.rs`). Lights are 
 The mechanisms of P2 (projectiles with G7 drag, air density and wind; health; sight reduced by
 night, mist and rain; hearing; patrol and engage behaviour; `docs/design/ballistics.md`) are done
 2026-11-18, with a miniature skirmish as their test (`crates/gamecraft-engine/tests/skirmish.rs`).
-Open for P2: tracers and impacts drawn, the full game as an example.
+Tracers, impacts, downed characters, a crosshair and firing with the mouse are drawn since
+2026-11-19 (live frames; not yet in `view.render` pictures).
 
 Both games exist as `examples/lantern` and `examples/skirmish` (2026-11-18): built only with
 commands (`build.json`), won by a scripted player (`playthrough.json`) with pinned hashes.

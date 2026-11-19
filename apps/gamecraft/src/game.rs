@@ -13,10 +13,14 @@ use crate::pose::{Pose, Poses};
 use crate::rig::{self, ViewMode};
 use gamecraft_automation::{Access, Host, rpc};
 use gamecraft_engine::Session;
-use gamecraft_render::Camera;
+use gamecraft_render::effects::IMPACT_LIFE_S;
+use gamecraft_render::{Camera, Effects, Impact, Tracer};
 use gamecraft_sim::DT;
 use gamecraft_world::{EntityId, HeightField, World};
 use serde_json::{Value, json};
+
+/// How much of its flight a tracer shows behind its head, seconds: at 800 m/s about 32 m.
+pub const TRACER_STREAK_S: f64 = 0.04;
 
 /// A world being played in a window.
 pub struct Game {
@@ -35,6 +39,8 @@ pub struct Game {
     told: Vec<String>,
     /// The last error told, so a failing command each frame is told once.
     last_error: Option<String>,
+    /// Where projectiles hit lately: (point, normal, simulation time of the hit).
+    hits: Vec<([f64; 3], [f64; 3], f64)>,
 }
 
 impl Game {
@@ -54,6 +60,7 @@ impl Game {
             noticed: false,
             told: Vec::new(),
             last_error: None,
+            hits: Vec::new(),
         };
         game.start();
         game
@@ -111,6 +118,11 @@ impl Game {
         self.controls.look(dx, dy);
     }
 
+    /// The fire button (left mouse) went down or up; the launcher fires while it is held.
+    pub fn fire(&mut self, held: bool) {
+        self.controls.set_fire(held);
+    }
+
     /// The window lost the keyboard: every key is let go.
     pub fn release_keys(&mut self) {
         self.controls.release_all();
@@ -130,9 +142,12 @@ impl Game {
         let ticks = self.step.advance(frame_s);
         let mut ran = 0;
         for _ in 0..ticks {
-            if let Err(e) = self.session_mut().run("sim.step", &json!({"ticks": 1})) {
-                self.error(e.to_string());
-                break;
+            match self.session_mut().run("sim.step", &json!({"ticks": 1})) {
+                Ok(answer) => self.note_hits(&answer),
+                Err(e) => {
+                    self.error(e.to_string());
+                    break;
+                }
             }
             ran += 1;
             let world = self.host.session().current_world();
@@ -199,6 +214,44 @@ impl Game {
         }
     }
 
+    /// What is in flight and what just hit, for the renderer: a streak behind the head of each
+    /// projectile (between its last two ticks, like the characters) and a puff for each hit of
+    /// the last second.
+    pub fn effects(&self) -> Effects {
+        let Some(sim) = self.session().live() else {
+            return Effects::default();
+        };
+        let ahead = self.step.alpha() * DT;
+        let tracers = sim
+            .projectiles()
+            .iter()
+            .filter_map(|p| {
+                let [vx, vy, vz] = p.velocity;
+                let [px, py, pz] = p.position;
+                let at = |t: f64| [px + vx * t, py + vy * t, pz + vz * t];
+                let head = at(ahead);
+                let shown = TRACER_STREAK_S.min(p.age_s + ahead);
+                let tail = at(ahead - shown);
+                (head != tail).then_some(Tracer {
+                    from: tail,
+                    to: head,
+                    age_s: p.age_s + ahead,
+                })
+            })
+            .collect();
+        let now = self.time_s();
+        let impacts = self
+            .hits
+            .iter()
+            .map(|&(point, normal, at)| Impact {
+                point,
+                normal,
+                age_s: (now - at).max(0.0),
+            })
+            .collect();
+        Effects { tracers, impacts }
+    }
+
     /// The world as shown: the running world (or the document) with every character between
     /// its last two ticks, the player turned as the mouse points. For display only.
     pub fn display_world(&self) -> World {
@@ -253,6 +306,31 @@ impl Game {
         std::mem::take(&mut self.told)
     }
 
+    /// Keeps the hits of a `sim.step` answer (its `hit` events) for the puffs, and forgets those
+    /// older than a puff lasts.
+    fn note_hits(&mut self, answer: &Value) {
+        let now = self
+            .session()
+            .live()
+            .map_or(0.0, gamecraft_sim::Sim::time_s);
+        let vec3 = |v: Option<&Value>| -> Option<[f64; 3]> {
+            let list = v?.as_array()?;
+            let mut it = list.iter().map(Value::as_f64);
+            let out = [it.next()??, it.next()??, it.next()??];
+            it.next().is_none().then_some(out)
+        };
+        let events = answer.get("events").and_then(Value::as_array);
+        for e in events.into_iter().flatten() {
+            if e.get("event").and_then(Value::as_str) != Some("hit") {
+                continue;
+            }
+            if let (Some(point), Some(normal)) = (vec3(e.get("point")), vec3(e.get("normal"))) {
+                self.hits.push((point, normal, now));
+            }
+        }
+        self.hits.retain(|&(_, _, at)| now - at < IMPACT_LIFE_S);
+    }
+
     /// Starts the simulation and puts the controls, the step and the poses at its start.
     fn start(&mut self) {
         if let Err(e) = self.session_mut().run("sim.start", &json!({})) {
@@ -269,6 +347,7 @@ impl Game {
         self.paused = false;
         self.notices.clear();
         self.noticed = false;
+        self.hits.clear();
         // A character's first input starts from standing still facing its rotation: that is
         // what the controls ask for now, so nothing is sent until they change (and an agent's
         // input is not overwritten meanwhile).
