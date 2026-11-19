@@ -158,13 +158,17 @@ Worlds of real size, made of reusable parts, by anyone.
   and the plant species moved out of the engine.
 - A second example game, a small puzzle of GameCraft's own design that loads no pack: the guard
   that the engine assumes no genre.
-- Generators as document entries: forests and scatter by area, density and slope; roads and
-  rivers along splines that shape the terrain.
+- Generators as document entries: forests and scatter by area, density and slope: done
+  2026-11-19 (`docs/design/generators.md`: `generator.*`, derived instances `<id>#<n>` that the
+  simulation, the rays and the queries see, trunks that block, instanced trees with levels of
+  detail and impostors, `generators.json` in projects; `examples/forest`, the Skirmish's trees).
+  Open: roads and rivers along splines that shape the terrain; the instances in the project
+  index.
 - Terrain: sculpting as edits over the source, painted material layers, tiles streamed and
   refined by distance, positions relative to the camera.
 - Water: sea level, lakes, rivers, through VisionCraft's water.
 - The renderer adapter updates only what changed; plants as instanced items with levels of
-  detail and impostors.
+  detail and impostors (done for the generators' plants, 2026-11-19).
 
 ## M4: Physics
 

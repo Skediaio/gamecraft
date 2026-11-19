@@ -5,7 +5,7 @@ use gamecraft_math::{Portable, deg_to_rad, yaw_forward};
 use gamecraft_world::limits::MAX_COORDINATE_M;
 use gamecraft_world::{Character, HeightField};
 
-use crate::solid::Solid;
+use crate::solid::{GeneratedSolids, Solid};
 use crate::{Body, DT, FALL_FLOOR_M, GRAVITY_MPS2, Input, MAX_PUSH_ITERATIONS, STEP_HEIGHT_M};
 
 /// How far above the terrain, metres, a character's feet may be and still count as standing
@@ -19,6 +19,8 @@ pub(crate) struct Surroundings<'a> {
     pub(crate) heights: Option<&'a HeightField>,
     /// The solid shapes, in id order.
     pub(crate) solids: &'a [Solid],
+    /// The solids of the generated instances, by grid cell.
+    pub(crate) generated: &'a GeneratedSolids,
 }
 
 /// Where a character is and how it moves.
@@ -78,7 +80,8 @@ impl Surroundings<'_> {
     /// `reach`; [`FALL_FLOOR_M`] when there is none.
     fn ground(&self, x: f64, z: f64, reach: f64) -> f64 {
         let mut best = self.terrain(x, z);
-        for solid in self.solids {
+        let near = self.generated.near(x, z, 0.0);
+        for solid in self.solids.iter().chain(&near) {
             if let Some(top) = solid.support_top(x, z)
                 && top <= reach
             {
@@ -135,9 +138,15 @@ impl Surroundings<'_> {
     /// [`MAX_PUSH_ITERATIONS`] rounds.
     fn push_out(&self, x: f64, z: f64, feet: f64, character: &Character) -> (f64, f64) {
         let mut p = [x, z];
+        // A push moves the circle by at most its radius plus a footprint's reach per round.
+        let near = self.generated.near(
+            x,
+            z,
+            character.radius_m * (1.0 + f64::from(MAX_PUSH_ITERATIONS)),
+        );
         for _ in 0..MAX_PUSH_ITERATIONS {
             let mut moved = false;
-            for solid in self.solids {
+            for solid in self.solids.iter().chain(&near) {
                 if let Some(q) = solid.push(p, character.radius_m, feet, character.height_m) {
                     p = q;
                     moved = true;

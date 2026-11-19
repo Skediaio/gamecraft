@@ -22,7 +22,7 @@ fn inspect_spec() -> CommandSpec {
         "world.inspect",
         "Inspect World",
         "Describes the current world (the running world while playing): name, seed, terrain, \
-         environment and sun, the prefabs, the scenario's variables, objectives and trigger count \
+         environment and sun, the prefabs, the generators with what they placed, the scenario's variables, objectives and trigger count \
          (scenario.inspect has the triggers), and its entities in id order, a page at a time.",
         vec![
             param(
@@ -39,7 +39,8 @@ fn inspect_spec() -> CommandSpec {
          lists them), cols, rows, min_height_m, max_height_m}, environment, sun: \
          {azimuth_deg, elevation_deg, direction, above_horizon}, entity_count, vars: {name: \
          value}, objectives: [{id, title, status, hidden}], trigger_count, prefabs: [{id, \
-         name, components, children, instances, instance_count}], entities: [{id, name, \
+         name, components, children, instances, instance_count}], generators: [{id, kind, \
+         placed}], generated_count, entities: [{id, name, \
          position, rotation_y_deg, scale, prefab?, parent?, layer? (left out: the default layer), \
          components (effective)}], \
          truncated, history: {can_undo, \
@@ -111,6 +112,19 @@ fn inspect(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
         .map(|prefab| crate::prefab_cmds::prefab_json(world, prefab))
         .collect::<Result<Vec<_>, _>>()?;
     out.insert("prefabs".into(), Value::Array(prefabs));
+    let generators: Vec<Value> = world
+        .generated()
+        .sets()
+        .map(|s| {
+            json!({
+                "id": s.generator().id,
+                "kind": s.generator().kind.name(),
+                "placed": s.instances().len(),
+            })
+        })
+        .collect();
+    out.insert("generators".into(), Value::Array(generators));
+    out.insert("generated_count".into(), json!(world.generated().count()));
     if list {
         let skip = usize::try_from(offset).unwrap_or(usize::MAX);
         let take = usize::try_from(limit).unwrap_or(0);

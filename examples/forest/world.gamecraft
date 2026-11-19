@@ -1,0 +1,544 @@
+{
+  "gamecraft": 1,
+  "name": "Forest",
+  "seed": 5,
+  "terrain": {
+    "size_m": 2048.0,
+    "cell_m": 4.0,
+    "source": {
+      "kind": "noise",
+      "seed": 5,
+      "relief_m": 110.0,
+      "feature_m": 650.0,
+      "octaves": 5,
+      "roughness": 0.5
+    },
+    "layers": [
+      {
+        "name": "grass",
+        "color": [
+          0.07,
+          0.12,
+          0.035
+        ],
+        "roughness": 0.9
+      },
+      {
+        "name": "earth",
+        "color": [
+          0.2,
+          0.15,
+          0.095
+        ],
+        "roughness": 0.9
+      },
+      {
+        "name": "rock",
+        "color": [
+          0.3,
+          0.29,
+          0.27
+        ],
+        "roughness": 0.8
+      }
+    ],
+    "paint_rules": [
+      {
+        "layer": "earth",
+        "slope_min_deg": 22.0
+      },
+      {
+        "layer": "rock",
+        "slope_min_deg": 34.0
+      }
+    ],
+    "edits": [
+      {
+        "op": "lower",
+        "center": [
+          0.0,
+          0.0
+        ],
+        "radius_m": 760.0,
+        "strength_m": 45.0,
+        "falloff": 0.9
+      },
+      {
+        "op": "ramp",
+        "from": [
+          -1000.0,
+          60.0
+        ],
+        "to": [
+          1000.0,
+          -40.0
+        ],
+        "width_m": 14.0,
+        "from_height_m": -27.960655212402344,
+        "to_height_m": 4.217703342437744,
+        "strength": 1.0,
+        "falloff": 0.6
+      }
+    ]
+  },
+  "environment": {
+    "time_of_day_h": 10.5,
+    "day_of_year": 160,
+    "latitude_deg": 50.85,
+    "wind_direction_deg": 250.0,
+    "wind_speed_mps": 3.0,
+    "cloud_cover": 0.35,
+    "mist": 0.1,
+    "rain": 0.0
+  },
+  "generators": [
+    {
+      "id": "spruce-slopes",
+      "kind": "forest",
+      "area": {
+        "polygon": [
+          [
+            -950.0,
+            -950.0
+          ],
+          [
+            950.0,
+            -950.0
+          ],
+          [
+            950.0,
+            -420.0
+          ],
+          [
+            300.0,
+            -300.0
+          ],
+          [
+            -300.0,
+            -330.0
+          ],
+          [
+            -950.0,
+            -420.0
+          ]
+        ]
+      },
+      "seed": 101,
+      "density_per_ha": 210.0,
+      "min_distance_m": 4.0,
+      "slope_max_deg": 32.0,
+      "exclude": [
+        {
+          "polygon": [
+            [
+              -1000.0,
+              35.0
+            ],
+            [
+              1000.0,
+              -65.0
+            ],
+            [
+              1000.0,
+              -15.0
+            ],
+            [
+              -1000.0,
+              85.0
+            ]
+          ]
+        }
+      ],
+      "items": [
+        {
+          "weight": 4.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "picea-abies",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.8,
+            1.15
+          ],
+          "growth_range": [
+            0.55,
+            1.0
+          ],
+          "trunk": {
+            "radius_m": 0.35000000000000003,
+            "height_m": 15.0
+          }
+        },
+        {
+          "weight": 2.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "abies-nordmanniana",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.8,
+            1.1
+          ],
+          "growth_range": [
+            0.6,
+            1.0
+          ],
+          "trunk": {
+            "radius_m": 0.28,
+            "height_m": 12.0
+          }
+        },
+        {
+          "weight": 1.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "pinus-sylvestris",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.85,
+            1.2
+          ],
+          "trunk": {
+            "radius_m": 0.28,
+            "height_m": 12.0
+          }
+        }
+      ]
+    },
+    {
+      "id": "beech-wood",
+      "kind": "forest",
+      "area": {
+        "circle": {
+          "center": [
+            420.0,
+            330.0
+          ],
+          "radius_m": 470.0
+        }
+      },
+      "seed": 202,
+      "density_per_ha": 220.0,
+      "min_distance_m": 4.0,
+      "slope_max_deg": 30.0,
+      "exclude": [
+        {
+          "circle": {
+            "center": [
+              300.0,
+              250.0
+            ],
+            "radius_m": 70.0
+          }
+        },
+        {
+          "polygon": [
+            [
+              -1000.0,
+              35.0
+            ],
+            [
+              1000.0,
+              -65.0
+            ],
+            [
+              1000.0,
+              -15.0
+            ],
+            [
+              -1000.0,
+              85.0
+            ]
+          ]
+        }
+      ],
+      "items": [
+        {
+          "weight": 4.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "fagus-sylvatica",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.8,
+            1.2
+          ],
+          "growth_range": [
+            0.6,
+            1.0
+          ],
+          "trunk": {
+            "radius_m": 0.35000000000000003,
+            "height_m": 15.0
+          }
+        },
+        {
+          "weight": 2.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "quercus-robur",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.85,
+            1.2
+          ],
+          "trunk": {
+            "radius_m": 0.308,
+            "height_m": 13.2
+          }
+        },
+        {
+          "weight": 2.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "carpinus-betulus",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.8,
+            1.1
+          ],
+          "trunk": {
+            "radius_m": 0.224,
+            "height_m": 9.6
+          }
+        }
+      ]
+    },
+    {
+      "id": "birch-meadow",
+      "kind": "forest",
+      "area": {
+        "circle": {
+          "center": [
+            -480.0,
+            380.0
+          ],
+          "radius_m": 440.0
+        }
+      },
+      "seed": 303,
+      "density_per_ha": 210.0,
+      "min_distance_m": 4.0,
+      "slope_max_deg": 30.0,
+      "exclude": [
+        {
+          "circle": {
+            "center": [
+              -420.0,
+              330.0
+            ],
+            "radius_m": 90.0
+          }
+        },
+        {
+          "polygon": [
+            [
+              -1000.0,
+              35.0
+            ],
+            [
+              1000.0,
+              -65.0
+            ],
+            [
+              1000.0,
+              -15.0
+            ],
+            [
+              -1000.0,
+              85.0
+            ]
+          ]
+        }
+      ],
+      "items": [
+        {
+          "weight": 4.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "betula-pendula",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.8,
+            1.15
+          ],
+          "growth_range": [
+            0.5,
+            1.0
+          ],
+          "trunk": {
+            "radius_m": 0.252,
+            "height_m": 10.799999999999999
+          }
+        },
+        {
+          "weight": 2.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "sorbus-aucuparia",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.8,
+            1.1
+          ],
+          "trunk": {
+            "radius_m": 0.14,
+            "height_m": 6.0
+          }
+        },
+        {
+          "weight": 1.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "pinus-sylvestris",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.85,
+            1.2
+          ],
+          "trunk": {
+            "radius_m": 0.28,
+            "height_m": 12.0
+          }
+        }
+      ]
+    },
+    {
+      "id": "boulders",
+      "kind": "scatter",
+      "area": {
+        "polygon": [
+          [
+            -1000.0,
+            -1000.0
+          ],
+          [
+            1000.0,
+            -1000.0
+          ],
+          [
+            1000.0,
+            1000.0
+          ],
+          [
+            -1000.0,
+            1000.0
+          ]
+        ]
+      },
+      "seed": 404,
+      "density_per_ha": 1.5,
+      "min_distance_m": 10.0,
+      "exclude": [
+        {
+          "polygon": [
+            [
+              -1000.0,
+              35.0
+            ],
+            [
+              1000.0,
+              -65.0
+            ],
+            [
+              1000.0,
+              -15.0
+            ],
+            [
+              -1000.0,
+              85.0
+            ]
+          ]
+        }
+      ],
+      "items": [
+        {
+          "weight": 1.0,
+          "components": [
+            {
+              "type": "shape",
+              "kind": "sphere",
+              "size": [
+                1.6,
+                1.6,
+                1.6
+              ],
+              "color": [
+                0.43,
+                0.42,
+                0.4
+              ],
+              "solid": true
+            }
+          ],
+          "scale_range": [
+            0.5,
+            1.6
+          ]
+        }
+      ]
+    }
+  ],
+  "next_entity_id": 2,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Ranger",
+      "position": [
+        -40.0,
+        -12.515043258666992,
+        12.0
+      ],
+      "rotation_y_deg": 90.0,
+      "scale": 1.0,
+      "components": [
+        {
+          "type": "character",
+          "height_m": 1.8,
+          "radius_m": 0.3,
+          "eye_height_m": 1.65,
+          "walk_speed_mps": 1.6,
+          "run_speed_mps": 5.0,
+          "jump_speed_mps": 4.5,
+          "max_slope_deg": 45.0
+        }
+      ]
+    }
+  ]
+}

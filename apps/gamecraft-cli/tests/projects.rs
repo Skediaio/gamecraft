@@ -125,8 +125,10 @@ fn the_skirmish_project_resolves_to_the_committed_world() {
             .clone()
             .unwrap()
     };
-    assert_eq!(layer_of("Oak 1"), "terrain-features");
     assert_eq!(layer_of("Wall 3"), "terrain-features");
+    // The trees and rocks are two generators of `generators.json`, not entities.
+    let ids: Vec<&str> = project.generators.iter().map(|g| g.id.as_str()).collect();
+    assert_eq!(ids, vec!["woods", "rocks"]);
     assert_eq!(layer_of("House 2"), "village");
     assert_eq!(layer_of("Patrol Alpha"), "enemies");
 }
@@ -190,14 +192,14 @@ fn an_edit_of_a_game_entity_is_saved_into_the_mod_never_the_game() {
     );
     // Opened and saved unchanged, neither project writes a file.
     let opened = server.ok("project.open", json!({"path": "skirmish/project"}));
-    assert_eq!(opened["entities"], json!(58));
+    assert_eq!(opened["entities"], json!(18));
     assert_eq!(
         server.ok("project.save", json!({}))["unchanged"],
         json!(true)
     );
     let opened = server.ok("project.open", json!({"path": "skirmish-night-mod"}));
     assert_eq!(opened["packs"], json!(["skirmish", "skirmish-night"]));
-    assert_eq!(opened["entities"], json!(59));
+    assert_eq!(opened["entities"], json!(19));
     assert_eq!(
         server.ok("project.save", json!({}))["unchanged"],
         json!(true)
@@ -227,7 +229,7 @@ fn an_edit_of_a_game_entity_is_saved_into_the_mod_never_the_game() {
     assert!(lines[0].contains("\"id\":\"village-guard\"") && lines[0].contains("-57.0"));
     // Opened again, the mod has the moved guard and the game has it where it was.
     let reopened = server.ok("project.open", json!({"path": "skirmish-night-mod"}));
-    assert_eq!(reopened["entities"], json!(59));
+    assert_eq!(reopened["entities"], json!(19));
     let guard = server.ok("entity.get", json!({"id": "Village Guard"}));
     assert_eq!(guard["position"], json!([-6.0, 3.6, -57.0]));
     server.ok("project.open", json!({"path": "skirmish/project"}));
@@ -300,7 +302,7 @@ fn a_query_finds_the_four_enemies_near_the_village() {
     ]);
     assert_eq!(
         by_layer["rows"],
-        json!([["enemies", 4], ["terrain-features", 47], ["village", 7]])
+        json!([["enemies", 4], ["terrain-features", 7], ["village", 7]])
     );
     // The mod's index knows the packs.
     let packs = json_of(&[
@@ -311,7 +313,7 @@ fn a_query_finds_the_four_enemies_near_the_village() {
     ]);
     assert_eq!(
         packs["rows"],
-        json!([["skirmish", 58], ["skirmish-night", 1]])
+        json!([["skirmish", 18], ["skirmish-night", 1]])
     );
     let refused = run(&["project", "query", &text(&project), "DELETE FROM entities"]);
     assert_eq!(refused.code, 1, "{}", refused.out);
@@ -323,7 +325,7 @@ fn run_info_and_project_new_take_projects() {
     let temp = Temp::new("project-cli");
     let project = examples().join("skirmish/project");
     let info = json_of(&["info", &text(&project)]);
-    assert_eq!(info["entity_count"], json!(58));
+    assert_eq!(info["entity_count"], json!(18));
     let ran = run(&[
         "run",
         &text(&project),
@@ -349,7 +351,7 @@ fn run_info_and_project_new_take_projects() {
     ]);
     assert_eq!(made["id"], json!("copy"));
     let info = json_of(&["project", "info", &text(&temp.path("copy"))]);
-    assert_eq!(info["entities"], json!(58));
+    assert_eq!(info["entities"], json!(18));
     assert_eq!(info["changes"]["files"], json!([]));
     let bad = run(&["project", "frobnicate"]);
     assert_eq!(bad.code, 2);

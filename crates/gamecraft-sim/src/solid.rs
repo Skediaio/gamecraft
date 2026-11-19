@@ -2,7 +2,8 @@
 //! out of them.
 
 use gamecraft_math::{Portable, deg_to_rad};
-use gamecraft_world::{Entity, ModelBox, ShapeKind, World};
+use gamecraft_world::{Entity, GRID_CELL_M, ModelBox, ShapeKind, TrunkAt, World};
+use std::collections::BTreeMap;
 
 use crate::STEP_HEIGHT_M;
 
@@ -49,7 +50,117 @@ pub(crate) fn solids_of(world: &World) -> Vec<Solid> {
         .collect()
 }
 
+/// The solids of what the generators placed (trunks, and the solid shapes and models of
+/// scattered things), in a grid of [`GRID_CELL_M`] cells by the cell of their centre, so a
+/// character meets only those near it in a forest of tens of thousands.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct GeneratedSolids {
+    cells: BTreeMap<(i64, i64), Vec<Solid>>,
+    /// The farthest any solid's footprint reaches from its centre, metres.
+    reach_m: f64,
+    /// What they were built from: the generated stamp and a hash of the model bounds.
+    key: Option<(u64, u64)>,
+}
+
+fn cell_of(x: f64, z: f64) -> Option<(i64, i64)> {
+    (x.is_finite() && z.is_finite()).then(|| {
+        (
+            (x / GRID_CELL_M).floor() as i64,
+            (z / GRID_CELL_M).floor() as i64,
+        )
+    })
+}
+
+impl GeneratedSolids {
+    /// The solids of `world`'s generated instances, in set order then by number (an
+    /// instance's trunk, then its shape, then its model). `previous` is kept when it was built
+    /// from the same instances and bounds.
+    pub(crate) fn of(world: &World, previous: &GeneratedSolids) -> GeneratedSolids {
+        let mut bounds = gamecraft_math::StateHasher::new();
+        for (asset, b) in world.all_model_bounds() {
+            bounds.write_str(asset);
+            for v in b.min.iter().chain(&b.max) {
+                bounds.write_f64(*v);
+            }
+        }
+        let key = Some((world.generated().stamp(), bounds.finish()));
+        if previous.key == key {
+            return previous.clone();
+        }
+        let mut out = GeneratedSolids {
+            key,
+            ..GeneratedSolids::default()
+        };
+        for set in world.generated().sets() {
+            for instance in set.instances() {
+                let mut found: Vec<Solid> = Vec::new();
+                if let Some(t) = set.trunk(instance) {
+                    found.extend(Solid::trunk(t));
+                }
+                if set.has_body(instance) {
+                    let e = set.entity(instance);
+                    found.extend(Solid::from_entity(&e));
+                    found.extend(Solid::from_model(world, &e));
+                }
+                for solid in found {
+                    let [x, z] = solid.centre;
+                    let Some(cell) = cell_of(x, z) else { continue };
+                    out.reach_m = out.reach_m.max(solid.extent());
+                    out.cells.entry(cell).or_default().push(solid);
+                }
+            }
+        }
+        out
+    }
+
+    /// The solids whose footprint can reach within `r` of `[x, z]`, in a fixed order.
+    pub(crate) fn near(&self, x: f64, z: f64, r: f64) -> Vec<Solid> {
+        let reach = r.max(0.0) + self.reach_m;
+        if self.cells.is_empty() || !reach.is_finite() {
+            return Vec::new();
+        }
+        let (Some((c0, r0)), Some((c1, r1))) =
+            (cell_of(x - reach, z - reach), cell_of(x + reach, z + reach))
+        else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for cx in c0..=c1 {
+            for cz in r0..=r1 {
+                if let Some(v) = self.cells.get(&(cx, cz)) {
+                    out.extend(v.iter().copied());
+                }
+            }
+        }
+        out
+    }
+}
+
 impl Solid {
+    /// The solid of a tree's trunk: an upright cylinder.
+    fn trunk(t: TrunkAt) -> Option<Solid> {
+        let [px, py, pz] = t.base;
+        let solid = Solid {
+            centre: [px, pz],
+            bottom: py,
+            top: py + t.height_m,
+            footprint: Footprint::Circle { radius: t.radius_m },
+        };
+        let finite = solid.centre.iter().all(|v| v.is_finite())
+            && solid.bottom.is_finite()
+            && solid.top.is_finite();
+        finite.then_some(solid)
+    }
+
+    /// The farthest the footprint reaches from its centre, metres.
+    fn extent(&self) -> f64 {
+        let e = match self.footprint {
+            Footprint::Rect { half_x, half_z, .. } => (half_x * half_x + half_z * half_z).sqrt(),
+            Footprint::Circle { radius } | Footprint::Ball { radius } => radius,
+        };
+        if e.is_finite() { e } else { 0.0 }
+    }
+
     /// The solid of an entity: a solid shape on an entity that is not a character.
     fn from_entity(entity: &Entity) -> Option<Solid> {
         let shape = entity.shape()?;

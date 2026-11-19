@@ -3,6 +3,7 @@
 mod combat;
 mod document;
 mod fuzz;
+mod generator;
 mod layer;
 mod model;
 mod prefab;

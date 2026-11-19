@@ -12,7 +12,8 @@
 //! removes it); an entity in a later layer with an id that exists replaces that entity (in
 //! the later layer) and `{"id", "removed": true}` removes it; a layer file with
 //! `"replace": true` first drops the layer of the same name of earlier packs; a new layer
-//! name adds a layer; `world.json` fields merge field by field (a JSON merge patch).
+//! name adds a layer; `world.json` fields merge field by field (a JSON merge patch); the
+//! generators of `worlds/<world>/generators.json` layer by id like prefabs.
 //!
 //! [`Project::load`] turns the packs' files (maps of path to text, [`PackSource`]) into one
 //! [`gamecraft_world::World`] and remembers where every entity, prefab and world field came
@@ -32,6 +33,7 @@
 pub mod assets;
 mod error;
 mod fields;
+mod generators;
 mod layer;
 mod manifest;
 pub mod model;
@@ -47,6 +49,7 @@ pub use assets::{
 };
 pub use error::ProjectError;
 pub use fields::WORLD_FORMAT;
+pub use generators::GENERATORS_FORMAT;
 pub use layer::LAYER_FORMAT;
 pub use manifest::{Dependency, MAX_PACKS, Manifest, PACK_FORMAT, dependency_order};
 pub use model::{ModelSummary, inspect};

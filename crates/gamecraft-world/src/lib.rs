@@ -14,6 +14,10 @@
 //! triangles the renderer draws, with the painted layers' weights; [`Terrain::rebuild`] redoes
 //! only the tiles a change touches and [`tiles`] keeps resolved tiles as binary files.
 //!
+//! Generators ([`Generator`]: a forest or a scatter as one entry with an area, a seed and a
+//! density) are recipes too: what they place is derived ([`World::regenerate`],
+//! [`World::generated`]) and never written to the file.
+//!
 //! A `model` component names a glTF asset of a pack; the asset's bounding box is derived data
 //! that the host computes and hands over with [`World::set_model_bounds`] ([`ModelBounds`]).
 //!
@@ -25,6 +29,8 @@ mod component;
 mod entity;
 mod environment;
 mod error;
+mod generated;
+pub mod generator;
 pub mod limits;
 mod model;
 mod prefab;
@@ -44,6 +50,10 @@ pub use component::{
 pub use entity::{Entity, EntityDraft, EntityId, MAX_LAYER_CHARS, is_layer_name};
 pub use environment::{Environment, STANDARD_TEMPERATURE_C, SunPosition};
 pub use error::WorldError;
+pub use generated::{Footprint, GRID_CELL_M, Generated, GeneratedSet, Instance, TrunkAt};
+pub use generator::{
+    Area, Circle, Generator, GeneratorItem, GeneratorKind, Trunk, is_generator_id,
+};
 pub use model::{
     MAX_ASSET_PATH_CHARS, MODEL_EXTENSIONS, Model, ModelBounds, ModelBox, ModelCollider,
     is_asset_path, is_model_path,

@@ -624,770 +624,226 @@
       ]
     }
   ],
-  "next_entity_id": 59,
+  "generators": [
+    {
+      "id": "woods",
+      "kind": "forest",
+      "area": {
+        "circle": {
+          "center": [
+            0.0,
+            0.0
+          ],
+          "radius_m": 170.0
+        }
+      },
+      "seed": 23,
+      "density_per_ha": 4.5,
+      "min_distance_m": 14.0,
+      "slope_max_deg": 25.0,
+      "exclude": [
+        {
+          "circle": {
+            "center": [
+              0.0,
+              48.0
+            ],
+            "radius_m": 16.0
+          }
+        },
+        {
+          "circle": {
+            "center": [
+              4.0,
+              -54.0
+            ],
+            "radius_m": 22.0
+          }
+        },
+        {
+          "circle": {
+            "center": [
+              40.0,
+              -10.0
+            ],
+            "radius_m": 10.0
+          }
+        },
+        {
+          "circle": {
+            "center": [
+              0.0,
+              110.0
+            ],
+            "radius_m": 6.0
+          }
+        }
+      ],
+      "items": [
+        {
+          "weight": 3.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "quercus-robur",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.8,
+            1.2
+          ],
+          "trunk": {
+            "radius_m": 0.308,
+            "height_m": 13.2
+          }
+        },
+        {
+          "weight": 2.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "fagus-sylvatica",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.8,
+            1.2
+          ],
+          "trunk": {
+            "radius_m": 0.35000000000000003,
+            "height_m": 15.0
+          }
+        },
+        {
+          "weight": 3.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "pinus-sylvestris",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.8,
+            1.2
+          ],
+          "trunk": {
+            "radius_m": 0.28,
+            "height_m": 12.0
+          }
+        },
+        {
+          "weight": 2.0,
+          "components": [
+            {
+              "type": "plant",
+              "species": "betula-pendula",
+              "seed": 0,
+              "growth": 1.0
+            }
+          ],
+          "scale_range": [
+            0.8,
+            1.2
+          ],
+          "trunk": {
+            "radius_m": 0.252,
+            "height_m": 10.799999999999999
+          }
+        }
+      ]
+    },
+    {
+      "id": "rocks",
+      "kind": "scatter",
+      "area": {
+        "circle": {
+          "center": [
+            0.0,
+            0.0
+          ],
+          "radius_m": 170.0
+        }
+      },
+      "seed": 22,
+      "density_per_ha": 10.0,
+      "min_distance_m": 5.0,
+      "slope_max_deg": 35.0,
+      "exclude": [
+        {
+          "circle": {
+            "center": [
+              0.0,
+              48.0
+            ],
+            "radius_m": 16.0
+          }
+        },
+        {
+          "circle": {
+            "center": [
+              4.0,
+              -54.0
+            ],
+            "radius_m": 22.0
+          }
+        },
+        {
+          "circle": {
+            "center": [
+              40.0,
+              -10.0
+            ],
+            "radius_m": 10.0
+          }
+        },
+        {
+          "circle": {
+            "center": [
+              0.0,
+              110.0
+            ],
+            "radius_m": 6.0
+          }
+        }
+      ],
+      "items": [
+        {
+          "weight": 1.0,
+          "components": [
+            {
+              "type": "shape",
+              "kind": "box",
+              "size": [
+                1.2,
+                0.3,
+                0.9
+              ],
+              "color": [
+                0.42,
+                0.41,
+                0.38
+              ],
+              "solid": true
+            }
+          ],
+          "scale_range": [
+            0.5,
+            1.1
+          ]
+        }
+      ]
+    }
+  ],
+  "next_entity_id": 19,
   "entities": [
     {
       "id": 1,
-      "name": "Oak 1",
-      "position": [
-        -3.3910412170171287,
-        0.5768238771240339,
-        -127.91454319952602
-      ],
-      "rotation_y_deg": 159.96931814007795,
-      "scale": 1.1884011014347184,
-      "components": [
-        {
-          "type": "plant",
-          "species": "quercus-robur",
-          "seed": 1908102360,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "name": "Oak 2",
-      "position": [
-        106.53233795936144,
-        1.16369080590422,
-        -103.43359654948819
-      ],
-      "rotation_y_deg": 102.783126382908,
-      "scale": 1.0092268719403925,
-      "components": [
-        {
-          "type": "plant",
-          "species": "quercus-robur",
-          "seed": 3410189454,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "name": "Oak 3",
-      "position": [
-        -85.21893577527212,
-        -1.0853547629357674,
-        -66.46383731685654
-      ],
-      "rotation_y_deg": 190.828439100572,
-      "scale": 0.9819751629881158,
-      "components": [
-        {
-          "type": "plant",
-          "species": "quercus-robur",
-          "seed": 1872457134,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "name": "Oak 4",
-      "position": [
-        -42.46855466453711,
-        1.8137567131327887,
-        -54.988481074377276
-      ],
-      "rotation_y_deg": 245.41379041701188,
-      "scale": 1.12614023334724,
-      "components": [
-        {
-          "type": "plant",
-          "species": "quercus-robur",
-          "seed": 3798145079,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "name": "Oak 5",
-      "position": [
-        38.071624054435404,
-        2.299820878285392,
-        21.37290396190687
-      ],
-      "rotation_y_deg": 44.31919929769876,
-      "scale": 0.9983519806356818,
-      "components": [
-        {
-          "type": "plant",
-          "species": "quercus-robur",
-          "seed": 1232274885,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 6,
-      "name": "Oak 6",
-      "position": [
-        -37.03001554207058,
-        -2.6628872874588256,
-        -3.622448502406094
-      ],
-      "rotation_y_deg": 15.749379241869125,
-      "scale": 1.0855083211373056,
-      "components": [
-        {
-          "type": "plant",
-          "species": "quercus-robur",
-          "seed": 4285294568,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 7,
-      "name": "Oak 7",
-      "position": [
-        -112.46439940185694,
-        -3.2763196883702776,
-        -68.04180088884387
-      ],
-      "rotation_y_deg": 158.0352226790188,
-      "scale": 0.9588677026658945,
-      "components": [
-        {
-          "type": "plant",
-          "species": "quercus-robur",
-          "seed": 1087799886,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 8,
-      "name": "Oak 8",
-      "position": [
-        -119.10469293452572,
-        -8.026563334526998,
-        -33.527013706417655
-      ],
-      "rotation_y_deg": 294.4920594180542,
-      "scale": 1.099294131528662,
-      "components": [
-        {
-          "type": "plant",
-          "species": "quercus-robur",
-          "seed": 2871501169,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 9,
-      "name": "Oak 9",
-      "position": [
-        -40.994127568074795,
-        -3.228548476932399,
-        -152.40183375395796
-      ],
-      "rotation_y_deg": 236.24479052358876,
-      "scale": 0.8945442139495079,
-      "components": [
-        {
-          "type": "plant",
-          "species": "quercus-robur",
-          "seed": 3731935489,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 10,
-      "name": "Oak 10",
-      "position": [
-        -70.21237320546994,
-        -8.011654088034046,
-        139.02121316723807
-      ],
-      "rotation_y_deg": 321.8180507716512,
-      "scale": 0.8636717299175155,
-      "components": [
-        {
-          "type": "plant",
-          "species": "quercus-robur",
-          "seed": 3919974404,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 11,
-      "name": "Oak 11",
-      "position": [
-        63.25582374382697,
-        -1.548473735840036,
-        68.71933588977502
-      ],
-      "rotation_y_deg": 338.46261029568643,
-      "scale": 0.9302734602931806,
-      "components": [
-        {
-          "type": "plant",
-          "species": "quercus-robur",
-          "seed": 1690766091,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 12,
-      "name": "Oak 12",
-      "position": [
-        -39.38589582013345,
-        -0.6389009195401452,
-        -31.371520761371073
-      ],
-      "rotation_y_deg": 344.99955721896004,
-      "scale": 0.8621910004675649,
-      "components": [
-        {
-          "type": "plant",
-          "species": "quercus-robur",
-          "seed": 3760738962,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 13,
-      "name": "Beech 1",
-      "position": [
-        -0.6983458894481223,
-        0.23056850708276083,
-        -130.70920255032996
-      ],
-      "rotation_y_deg": 275.55089551021064,
-      "scale": 1.038255232560002,
-      "components": [
-        {
-          "type": "plant",
-          "species": "fagus-sylvatica",
-          "seed": 1338263221,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 14,
-      "name": "Beech 2",
-      "position": [
-        -14.815721618923664,
-        2.8869214518388624,
-        -98.98423110682155
-      ],
-      "rotation_y_deg": 90.11245398886871,
-      "scale": 1.0956349297390315,
-      "components": [
-        {
-          "type": "plant",
-          "species": "fagus-sylvatica",
-          "seed": 3125086771,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 15,
-      "name": "Beech 3",
-      "position": [
-        -91.58830740956368,
-        -8.060355209028183,
-        37.717383110444125
-      ],
-      "rotation_y_deg": 134.56921700850833,
-      "scale": 1.0223165681009747,
-      "components": [
-        {
-          "type": "plant",
-          "species": "fagus-sylvatica",
-          "seed": 4002914087,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 16,
-      "name": "Beech 4",
-      "position": [
-        23.630089529665522,
-        -5.270446346204465,
-        72.93571275896916
-      ],
-      "rotation_y_deg": 136.01720450178476,
-      "scale": 0.9456926327829691,
-      "components": [
-        {
-          "type": "plant",
-          "species": "fagus-sylvatica",
-          "seed": 902753706,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 17,
-      "name": "Beech 5",
-      "position": [
-        -36.770240921145735,
-        -2.6133596955922545,
-        -6.3964939813548085
-      ],
-      "rotation_y_deg": 119.04791211707467,
-      "scale": 0.9524027796977154,
-      "components": [
-        {
-          "type": "plant",
-          "species": "fagus-sylvatica",
-          "seed": 3935026512,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 18,
-      "name": "Beech 6",
-      "position": [
-        -144.42895780020777,
-        -11.167032851916437,
-        -23.09461012410084
-      ],
-      "rotation_y_deg": 4.197442369120852,
-      "scale": 1.0479085548032585,
-      "components": [
-        {
-          "type": "plant",
-          "species": "fagus-sylvatica",
-          "seed": 1292292613,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 19,
-      "name": "Beech 7",
-      "position": [
-        -126.0337222733534,
-        -2.640089546717539,
-        -95.79055156889045
-      ],
-      "rotation_y_deg": 123.44519689997644,
-      "scale": 0.9067125970624083,
-      "components": [
-        {
-          "type": "plant",
-          "species": "fagus-sylvatica",
-          "seed": 3794869075,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 20,
-      "name": "Beech 8",
-      "position": [
-        -18.077106586955058,
-        -9.07250621895826,
-        98.7660685417821
-      ],
-      "rotation_y_deg": 324.7539706045067,
-      "scale": 0.8042838720161327,
-      "components": [
-        {
-          "type": "plant",
-          "species": "fagus-sylvatica",
-          "seed": 958197968,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 21,
-      "name": "Pine 1",
-      "position": [
-        119.39006195323594,
-        5.003937585852696,
-        58.83010651358645
-      ],
-      "rotation_y_deg": 229.0400336619532,
-      "scale": 0.886575643512594,
-      "components": [
-        {
-          "type": "plant",
-          "species": "pinus-sylvestris",
-          "seed": 580447042,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 22,
-      "name": "Pine 2",
-      "position": [
-        -160.0095398511505,
-        -10.581428309503478,
-        8.994993187697107
-      ],
-      "rotation_y_deg": 251.43701234448488,
-      "scale": 1.1554117606610865,
-      "components": [
-        {
-          "type": "plant",
-          "species": "pinus-sylvestris",
-          "seed": 3057528207,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 23,
-      "name": "Pine 3",
-      "position": [
-        -60.601168286630504,
-        -6.6207517238703355,
-        101.0161005457368
-      ],
-      "rotation_y_deg": 287.60049281109207,
-      "scale": 1.0869536472855317,
-      "components": [
-        {
-          "type": "plant",
-          "species": "pinus-sylvestris",
-          "seed": 1314492666,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 24,
-      "name": "Pine 4",
-      "position": [
-        25.48188716575512,
-        -1.2369341795820132,
-        48.51329802246336
-      ],
-      "rotation_y_deg": 294.99305611088147,
-      "scale": 1.035197284716109,
-      "components": [
-        {
-          "type": "plant",
-          "species": "pinus-sylvestris",
-          "seed": 4018801964,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 25,
-      "name": "Pine 5",
-      "position": [
-        50.312938136611294,
-        -7.388231656124631,
-        129.6971104945274
-      ],
-      "rotation_y_deg": 320.4500383004062,
-      "scale": 1.04897409407945,
-      "components": [
-        {
-          "type": "plant",
-          "species": "pinus-sylvestris",
-          "seed": 926805194,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 26,
-      "name": "Pine 6",
-      "position": [
-        -37.333786400684524,
-        1.4980246217789392,
-        -45.838738089473125
-      ],
-      "rotation_y_deg": 250.25834193024315,
-      "scale": 1.1487723198597801,
-      "components": [
-        {
-          "type": "plant",
-          "species": "pinus-sylvestris",
-          "seed": 3112150917,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 27,
-      "name": "Pine 7",
-      "position": [
-        59.465546129565354,
-        8.452117886745643,
-        -43.88964680906877
-      ],
-      "rotation_y_deg": 76.32158047689227,
-      "scale": 0.9713277366636508,
-      "components": [
-        {
-          "type": "plant",
-          "species": "pinus-sylvestris",
-          "seed": 2033357118,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 28,
-      "name": "Pine 8",
-      "position": [
-        -100.42355940492159,
-        -4.459574206285868,
-        96.2642004073955
-      ],
-      "rotation_y_deg": 56.598838832225965,
-      "scale": 0.9478756679058581,
-      "components": [
-        {
-          "type": "plant",
-          "species": "pinus-sylvestris",
-          "seed": 2181849679,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 29,
-      "name": "Pine 9",
-      "position": [
-        88.5230498843245,
-        -0.05821530112828632,
-        -112.19973458600064
-      ],
-      "rotation_y_deg": 206.3027251567728,
-      "scale": 0.9269415752975804,
-      "components": [
-        {
-          "type": "plant",
-          "species": "pinus-sylvestris",
-          "seed": 3842005179,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 30,
-      "name": "Pine 10",
-      "position": [
-        -21.50067849889758,
-        -2.1806766022550295,
-        -6.234307829202088
-      ],
-      "rotation_y_deg": 246.35274862967154,
-      "scale": 0.862050372905888,
-      "components": [
-        {
-          "type": "plant",
-          "species": "pinus-sylvestris",
-          "seed": 2992915354,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 31,
-      "name": "Pine 11",
-      "position": [
-        -120.2583978760184,
-        -8.573931741916246,
-        -31.26932958733935
-      ],
-      "rotation_y_deg": 153.91497787951198,
-      "scale": 0.9662103065060423,
-      "components": [
-        {
-          "type": "plant",
-          "species": "pinus-sylvestris",
-          "seed": 631530091,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 32,
-      "name": "Pine 12",
-      "position": [
-        -113.76188764815807,
-        -2.725868052813409,
-        -79.86689237809578
-      ],
-      "rotation_y_deg": 122.52705975497283,
-      "scale": 0.9480332135733521,
-      "components": [
-        {
-          "type": "plant",
-          "species": "pinus-sylvestris",
-          "seed": 840543764,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 33,
-      "name": "Birch 1",
-      "position": [
-        87.10588510057153,
-        7.6570188511883135,
-        -69.86871913578902
-      ],
-      "rotation_y_deg": 177.0387349777803,
-      "scale": 1.1436468598019864,
-      "components": [
-        {
-          "type": "plant",
-          "species": "betula-pendula",
-          "seed": 1694710296,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 34,
-      "name": "Birch 2",
-      "position": [
-        114.37595299139024,
-        5.407130750433367,
-        -62.243887241093695
-      ],
-      "rotation_y_deg": 65.44287533170127,
-      "scale": 0.9794957124016995,
-      "components": [
-        {
-          "type": "plant",
-          "species": "betula-pendula",
-          "seed": 2309280659,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 35,
-      "name": "Birch 3",
-      "position": [
-        -49.69175373134899,
-        -2.9249521279107413,
-        -143.10385440977743
-      ],
-      "rotation_y_deg": 244.87900500020544,
-      "scale": 1.0172888705145589,
-      "components": [
-        {
-          "type": "plant",
-          "species": "betula-pendula",
-          "seed": 3655981821,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 36,
-      "name": "Birch 4",
-      "position": [
-        -118.04559876643461,
-        -2.4695328591309766,
-        -95.0040177941396
-      ],
-      "rotation_y_deg": 274.13773655313577,
-      "scale": 0.8675962667551027,
-      "components": [
-        {
-          "type": "plant",
-          "species": "betula-pendula",
-          "seed": 577261305,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 37,
-      "name": "Birch 5",
-      "position": [
-        102.61098462453596,
-        9.174394239896563,
-        7.043152633547482
-      ],
-      "rotation_y_deg": 47.76974800419894,
-      "scale": 1.0454838959588793,
-      "components": [
-        {
-          "type": "plant",
-          "species": "betula-pendula",
-          "seed": 2306377038,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 38,
-      "name": "Birch 6",
-      "position": [
-        -148.92483367902486,
-        -4.883404089049567,
-        -63.54428262118197
-      ],
-      "rotation_y_deg": 89.9027585021074,
-      "scale": 1.1479099910514239,
-      "components": [
-        {
-          "type": "plant",
-          "species": "betula-pendula",
-          "seed": 2848042809,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 39,
-      "name": "Birch 7",
-      "position": [
-        155.33204255498717,
-        6.736646776587715,
-        54.062056347237196
-      ],
-      "rotation_y_deg": 65.97214130727507,
-      "scale": 0.9324808132261408,
-      "components": [
-        {
-          "type": "plant",
-          "species": "betula-pendula",
-          "seed": 3809469030,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 40,
-      "name": "Birch 8",
-      "position": [
-        89.9174177875376,
-        -2.6603588271703438,
-        -142.80356138271114
-      ],
-      "rotation_y_deg": 268.52390549791573,
-      "scale": 0.879684828048382,
-      "components": [
-        {
-          "type": "plant",
-          "species": "betula-pendula",
-          "seed": 4201642180,
-          "growth": 1.0
-        }
-      ]
-    },
-    {
-      "id": 41,
       "name": "Wall 1",
       "position": [
         -12.0,
@@ -1415,7 +871,7 @@
       ]
     },
     {
-      "id": 42,
+      "id": 2,
       "name": "Wall 2",
       "position": [
         -8.0,
@@ -1443,7 +899,7 @@
       ]
     },
     {
-      "id": 43,
+      "id": 3,
       "name": "Wall 3",
       "position": [
         -4.0,
@@ -1471,7 +927,7 @@
       ]
     },
     {
-      "id": 44,
+      "id": 4,
       "name": "Wall 4",
       "position": [
         0.0,
@@ -1499,7 +955,7 @@
       ]
     },
     {
-      "id": 45,
+      "id": 5,
       "name": "Wall 5",
       "position": [
         4.0,
@@ -1527,7 +983,7 @@
       ]
     },
     {
-      "id": 46,
+      "id": 6,
       "name": "Wall 6",
       "position": [
         8.0,
@@ -1555,7 +1011,7 @@
       ]
     },
     {
-      "id": 47,
+      "id": 7,
       "name": "Wall 7",
       "position": [
         12.0,
@@ -1583,7 +1039,7 @@
       ]
     },
     {
-      "id": 48,
+      "id": 8,
       "name": "House 1",
       "position": [
         -8.0,
@@ -1595,7 +1051,7 @@
       "prefab": "house"
     },
     {
-      "id": 49,
+      "id": 9,
       "name": "House 2",
       "position": [
         16.0,
@@ -1624,7 +1080,7 @@
       ]
     },
     {
-      "id": 50,
+      "id": 10,
       "name": "Barn",
       "position": [
         40.0,
@@ -1652,7 +1108,7 @@
       ]
     },
     {
-      "id": 51,
+      "id": 11,
       "name": "Player",
       "position": [
         0.0,
@@ -1702,7 +1158,7 @@
       ]
     },
     {
-      "id": 52,
+      "id": 12,
       "name": "Crate 1",
       "position": [
         -14.0,
@@ -1722,7 +1178,7 @@
       ]
     },
     {
-      "id": 53,
+      "id": 13,
       "name": "Crate 2",
       "position": [
         -12.9,
@@ -1742,7 +1198,7 @@
       ]
     },
     {
-      "id": 54,
+      "id": 14,
       "name": "Crate 3",
       "position": [
         -13.7,
@@ -1762,7 +1218,7 @@
       ]
     },
     {
-      "id": 55,
+      "id": 15,
       "name": "Patrol Alpha",
       "position": [
         -45.0,
@@ -1797,7 +1253,7 @@
       ]
     },
     {
-      "id": 56,
+      "id": 16,
       "name": "Patrol Bravo",
       "position": [
         60.0,
@@ -1832,7 +1288,7 @@
       ]
     },
     {
-      "id": 57,
+      "id": 17,
       "name": "Village Guard",
       "position": [
         -8.0,
@@ -1844,7 +1300,7 @@
       "prefab": "enemy-soldier"
     },
     {
-      "id": 58,
+      "id": 18,
       "name": "Hill Sentry",
       "position": [
         90.0,

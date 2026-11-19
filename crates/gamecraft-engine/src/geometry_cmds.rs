@@ -3,7 +3,8 @@
 //! A ray hits the terrain (the triangle surface of [`gamecraft_world::HeightField`]) and the
 //! `shape` component of every entity, solid or not: a box turned by the entity's
 //! `rotation_y_deg`, a sphere or a capped cylinder, sized by `size * scale` and standing on the
-//! entity's position. Plants and characters are not hit yet. A ray that starts inside a shape
+//! entity's position, and the generated instances (a tree's trunk, a scattered thing's shape
+//! or model). Plants placed as entities and characters are not hit yet. A ray that starts inside a shape
 //! hits it at distance 0. The ray maths is [`gamecraft_sim::ray`], the very code the simulation
 //! uses for projectiles and perception.
 
@@ -38,7 +39,8 @@ const RAY_MAX_M: f64 = 100_000.0;
 /// `max_m` when left out, metres.
 const RAY_DEFAULT_M: f64 = 1000.0;
 
-const NOT_HIT: &str = "Plants and characters are not hit yet.";
+const NOT_HIT: &str = "Plants placed as entities and characters are not hit yet (a generated \
+    tree's trunk is).";
 
 fn ground_height_spec() -> CommandSpec {
     spec(
@@ -91,6 +93,24 @@ fn describe(
     dir: [f64; 3],
 ) -> Map<String, Value> {
     let mut v = Map::new();
+    let world = session.current_world();
+    if let Some(g) = found.generated
+        && let Some(set) = world.generated().set_at(g.set)
+    {
+        v.insert("kind".into(), json!("generated"));
+        v.insert(
+            "instance".into(),
+            json!(format!("{}#{}", set.generator().id, g.number)),
+        );
+        v.insert("generator".into(), json!(set.generator().id));
+        v.insert(
+            "point".into(),
+            json!(along(origin, dir, found.hit.distance_m)),
+        );
+        v.insert("normal".into(), json!(found.hit.normal));
+        v.insert("distance_m".into(), json!(found.hit.distance_m));
+        return v;
+    }
     match found.entity {
         Some(id) => {
             let name = session
@@ -119,9 +139,10 @@ fn raycast_spec() -> CommandSpec {
         "query.raycast",
         "Raycast",
         &format!(
-            "Casts a ray in the current world and reports the nearest hit: the terrain or the \
+            "Casts a ray in the current world and reports the nearest hit: the terrain, the \
              shape of an entity (solid or not; a box turned by the entity's rotation, a sphere \
-             or a capped cylinder, sized by size times scale). A ray that starts inside a \
+             or a capped cylinder, sized by size times scale), or a generated instance (a \
+             tree's trunk, a scattered shape or model). A ray that starts inside a \
              shape hits it at distance 0. {NOT_HIT}"
         ),
         vec![
@@ -138,8 +159,9 @@ fn raycast_spec() -> CommandSpec {
                 .unit("m")
                 .default(json!(1000)),
         ],
-        "{hit: false} or {hit: true, kind: \"terrain\" | \"entity\", entity (id, for an \
-         entity), name (for an entity), point: [x, y, z], normal: [x, y, z], distance_m}",
+        "{hit: false} or {hit: true, kind: \"terrain\" | \"entity\" | \"generated\", entity \
+         (id, for an entity), name (for an entity), instance (`<generator>#<n>`) and generator \
+         (for a generated instance), point: [x, y, z], normal: [x, y, z], distance_m}",
         json!({"origin": [0, 30, 0], "direction": [0, -1, 0.2]}),
     )
     .query()

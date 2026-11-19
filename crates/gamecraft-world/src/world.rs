@@ -1,11 +1,13 @@
 //! The world document and its `.gamecraft` JSON format.
 
 use crate::error::Ctx;
+use crate::generator::{MAX_GENERATED_TOTAL, MAX_GENERATORS};
 use crate::limits::{MAX_ENTITIES, MAX_HIERARCHY_DEPTH, MAX_PREFABS};
 use crate::prefab::{check_components, place_child, relative};
 use crate::{
-    Component, Entity, EntityDraft, EntityId, Environment, ModelBounds, ModelBox, Objective,
-    Prefab, Spawn, Spawned, Terrain, Trigger, VarValue, WorldError,
+    Component, Entity, EntityDraft, EntityId, Environment, Generated, Generator, HeightField,
+    ModelBounds, ModelBox, Objective, Prefab, Spawn, Spawned, Terrain, Trigger, VarValue,
+    WorldError,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -45,11 +47,16 @@ pub struct World {
     /// with [`World::put_prefab`] and [`World::remove_prefab`], which keep the instances in
     /// step.
     pub prefabs: Vec<Prefab>,
+    /// The generators (forests, scatters), in the order given; ids unique. What they place is
+    /// derived: [`World::generated`], rebuilt by [`World::regenerate`].
+    pub generators: Vec<Generator>,
     entities: BTreeMap<EntityId, Entity>,
     next_entity_id: EntityId,
     /// The local bounding boxes of model assets, by asset path: derived from the assets by the
     /// host, never written to the file.
     model_bounds: BTreeMap<String, ModelBounds>,
+    /// What the generators place: derived, never written to the file.
+    generated: Generated,
 }
 
 /// The file layout, in the order the fields are written.
@@ -67,6 +74,8 @@ struct WorldFile {
     environment: Environment,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     prefabs: Vec<Prefab>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    generators: Vec<Generator>,
     /// Absent: one more than the highest entity id.
     #[serde(default)]
     next_entity_id: Option<EntityId>,
@@ -244,9 +253,11 @@ impl World {
             objectives: Vec::new(),
             triggers: Vec::new(),
             prefabs: Vec::new(),
+            generators: Vec::new(),
             entities: BTreeMap::new(),
             next_entity_id: EntityId(1),
             model_bounds: BTreeMap::new(),
+            generated: Generated::default(),
         }
     }
 
@@ -273,6 +284,38 @@ impl World {
     pub fn model_box(&self, entity: &Entity) -> Option<ModelBox> {
         let model = entity.model()?;
         ModelBox::of(entity, self.model_bounds.get(&model.asset)?)
+    }
+
+    /// What the generators place, as last derived by [`World::regenerate`] (empty before).
+    pub fn generated(&self) -> &Generated {
+        &self.generated
+    }
+
+    /// Whether [`World::generated`] was derived from the current generators and terrain.
+    pub fn generated_is_current(&self) -> bool {
+        self.generated
+            .is_current(&self.generators, self.terrain.as_ref())
+    }
+
+    /// Derives what the generators place over the terrain's field `heights` (`None` without
+    /// terrain: nothing is placed). Derived data: the document's text does not change. A
+    /// generator whose recipe and terrain are unchanged keeps its instances; one whose terrain
+    /// changed keeps its candidates and is placed on the new ground.
+    pub fn regenerate(&mut self, heights: Option<&HeightField>) {
+        let terrain = self.terrain.as_ref();
+        let heights = terrain.and(heights);
+        self.generated = self.generated.derive(
+            &self.generators,
+            &self.prefabs,
+            terrain,
+            heights,
+            &self.model_bounds,
+        );
+    }
+
+    /// The generator with this id.
+    pub fn generator(&self, id: &str) -> Option<&Generator> {
+        self.generators.iter().find(|g| g.id == id)
     }
 
     /// The id the next [`World::add_entity`] will hand out.
@@ -648,6 +691,37 @@ impl World {
                 format!("a world holds at most {MAX_PREFABS} prefabs"),
             ));
         }
+        if self.generators.len() > MAX_GENERATORS {
+            return Err(ctx.invalid(
+                "generators",
+                format!("a list of {}", self.generators.len()),
+                format!("a world holds at most {MAX_GENERATORS} generators"),
+            ));
+        }
+        let mut generator_ids = std::collections::BTreeSet::new();
+        let mut requested: u64 = 0;
+        for g in &self.generators {
+            g.validate(&self.prefabs)?;
+            if !generator_ids.insert(g.id.as_str()) {
+                return Err(WorldError::Generator {
+                    generator: g.id.clone(),
+                    message: "the id is used by more than one generator; every generator \
+                              needs its own id"
+                        .to_string(),
+                });
+            }
+            requested = requested.saturating_add(g.requested());
+        }
+        if requested > MAX_GENERATED_TOTAL {
+            return Err(ctx.invalid(
+                "generators",
+                format!("asking for {requested} instances together"),
+                format!(
+                    "the generators of a world place at most {MAX_GENERATED_TOTAL} instances \
+                     together; lower some densities or areas"
+                ),
+            ));
+        }
         let mut prefabs: BTreeMap<&str, &Prefab> = BTreeMap::new();
         for prefab in &self.prefabs {
             prefab.validate()?;
@@ -760,6 +834,7 @@ impl World {
             terrain: self.terrain.clone(),
             environment: self.environment.clone(),
             prefabs: self.prefabs.clone(),
+            generators: self.generators.clone(),
             next_entity_id: Some(self.next_entity_id),
             entities: self
                 .entities
@@ -833,9 +908,11 @@ impl World {
             objectives: file.objectives,
             triggers: file.triggers,
             prefabs: file.prefabs,
+            generators: file.generators,
             entities,
             next_entity_id,
             model_bounds: BTreeMap::new(),
+            generated: Generated::default(),
         };
         world.validate()?;
         Ok(world)

@@ -65,6 +65,9 @@ const MISSING_MODEL_SIZE_M: f64 = 0.5;
 /// Most entities a problem line about one model names.
 const MAX_NAMED_ENTITIES: usize = 8;
 
+/// The views an impostor of a generated tree is baked from (VisionCraft's demo forest).
+const IMPOSTOR_VIEWS: u32 = 12;
+
 /// A character that is down lies on its side; the base of its body is turned about this.
 const LYING_DEG: f64 = 90.0;
 
@@ -173,6 +176,8 @@ struct GeometryKey {
     entities: Vec<DrawnEntity>,
     /// [`WorldRenderer::provide_asset`] calls so far: a new file rebuilds.
     assets: u64,
+    /// The stamp of what the generators placed ([`gamecraft_world::Generated::stamp`]).
+    generated: u64,
 }
 
 /// The grid of a height field, without its samples.
@@ -204,6 +209,7 @@ impl GeometryKey {
             heights: heights.map(FieldShape::of),
             entities: world.entities().filter_map(DrawnEntity::of).collect(),
             assets,
+            generated: world.generated().stamp(),
         }
     }
 
@@ -211,6 +217,7 @@ impl GeometryKey {
         if self.terrain != world.terrain
             || self.heights != heights.map(FieldShape::of)
             || self.assets != assets
+            || self.generated != world.generated().stamp()
         {
             return false;
         }
@@ -281,6 +288,76 @@ pub struct WorldRenderer {
     models: BTreeMap<String, Result<ResidentModel, String>>,
     /// Model uploads so far: one per asset (and again after its files change).
     model_uploads: u64,
+    /// The generators' plants on the GPU, kept from one rebuild to the next.
+    plant_cache: PlantCache,
+}
+
+/// A species' textures and materials for the generators' plants.
+struct CachedSpecies {
+    textures: PlantTextures,
+    texture_ids: Vec<vc::TextureId>,
+    materials: BTreeMap<(PartKind, [u32; 3]), vc::MaterialId>,
+}
+
+/// One plant variant of the generators (a species, seed and growth class) on the GPU: its
+/// three levels of detail and, for a tree, its impostor.
+struct CachedPlant {
+    /// (mesh, material, the level's end distance) of every part of every level.
+    parts: Vec<(vc::MeshId, vc::MaterialId, f32)>,
+    /// The impostor beyond the last level and how far it draws.
+    impostor: Option<(vc::ImpostorId, f32)>,
+}
+
+/// The generators' plants on the GPU, by (species, seed, growth bits); kept while a build uses
+/// them, so a change elsewhere in the world does not grow and bake them again.
+#[derive(Default)]
+struct PlantCache {
+    species: BTreeMap<String, Result<CachedSpecies, String>>,
+    variants: BTreeMap<(String, u64, u64), Result<CachedPlant, String>>,
+    /// Variants grown so far (a test counts them).
+    grown: u64,
+}
+
+impl PlantCache {
+    /// Frees every variant not in `used` and every species none of them needs.
+    fn keep_only(
+        &mut self,
+        used: &std::collections::BTreeSet<(String, u64, u64)>,
+        r: &mut vc::Renderer,
+    ) {
+        let gone: Vec<(String, u64, u64)> = self
+            .variants
+            .keys()
+            .filter(|k| !used.contains(*k))
+            .cloned()
+            .collect();
+        for key in gone {
+            if let Some(Ok(plant)) = self.variants.remove(&key) {
+                for (mesh, _, _) in plant.parts {
+                    r.remove_mesh(mesh);
+                }
+                if let Some((id, _)) = plant.impostor {
+                    r.remove_impostor(id);
+                }
+            }
+        }
+        let species: Vec<String> = self
+            .species
+            .keys()
+            .filter(|s| !used.iter().any(|(u, _, _)| u == *s))
+            .cloned()
+            .collect();
+        for s in species {
+            if let Some(Ok(c)) = self.species.remove(&s) {
+                for id in c.materials.into_values() {
+                    r.remove_material(id);
+                }
+                for id in c.texture_ids {
+                    r.remove_texture(id);
+                }
+            }
+        }
+    }
 }
 
 /// A model on the GPU: its parts (one per material) and everything to free with it.
@@ -387,6 +464,7 @@ impl WorldRenderer {
             assets_revision: 0,
             models: BTreeMap::new(),
             model_uploads: 0,
+            plant_cache: PlantCache::default(),
         };
         world_renderer.apply_environment(&Environment::default(), false);
         world_renderer
@@ -402,6 +480,21 @@ impl WorldRenderer {
     /// what an entity draws changed, and everything the previous build added is freed first;
     /// a character that only walks or turns moves its instance, cheap enough for every frame.
     pub fn sync(&mut self, world: &World, heights: Option<&HeightField>) -> Vec<String> {
+        // A world handed over without its generated instances derived (a host that built it
+        // outside a session) is derived here, over the same ground.
+        let derived;
+        let world = if world.generated_is_current() {
+            world
+        } else {
+            let mut w = world.clone();
+            let built = match (heights, &w.terrain) {
+                (None, Some(t)) => t.build().ok(),
+                _ => None,
+            };
+            w.regenerate(heights.or(built.as_ref()));
+            derived = w;
+            &derived
+        };
         let spots = light::spots(world);
         if spots != self.spots {
             let lights: Vec<vc::Light> = spots.iter().map(vc_light).collect();
@@ -778,7 +871,15 @@ impl WorldRenderer {
         );
         scene.characters(world);
         scene.plants(world);
+        let used = scene.generated_plants(world, &mut self.plant_cache);
+        self.plant_cache.keep_only(&used, &mut self.renderer);
         self.problems = problems;
+    }
+
+    /// How many plant variants of the generators were grown (and their impostors baked) so
+    /// far: kept from one rebuild to the next, so a test can see a rebuild reuse them.
+    pub fn generated_plants_grown(&self) -> u64 {
+        self.plant_cache.grown
     }
 }
 
@@ -832,6 +933,22 @@ fn free(r: &mut vc::Renderer, built: &mut Built) {
     for id in built.textures.drain(..) {
         r.remove_texture(id);
     }
+}
+
+/// The generated instances that have a shape or a model, as entities (id 0), in set order and
+/// by number: drawn with the entities' shapes and models.
+fn generated_bodies(world: &World) -> Vec<Entity> {
+    world
+        .generated()
+        .sets()
+        .flat_map(|set| {
+            set.instances()
+                .iter()
+                .filter(|i| set.has_body(i))
+                .map(|i| set.entity(i))
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// Uploads a plain mesh.
@@ -1189,7 +1306,8 @@ impl Scene<'_> {
     /// Shapes: one item per (kind, colour), an instance per entity.
     fn shapes(&mut self, world: &World, units: UnitMeshes) {
         let mut groups: BTreeMap<(u8, [u32; 3]), (ShapeKind, Vec<Mat4>)> = BTreeMap::new();
-        for e in world.entities() {
+        let generated = generated_bodies(world);
+        for e in world.entities().chain(&generated) {
             let Some(s) = e.shape() else { continue };
             let order = match s.kind {
                 ShapeKind::Box => 0,
@@ -1224,7 +1342,8 @@ impl Scene<'_> {
         units: Option<UnitMeshes>,
     ) {
         let mut groups: BTreeMap<String, Vec<&Entity>> = BTreeMap::new();
-        for e in world.entities() {
+        let generated = generated_bodies(world);
+        for e in world.entities().chain(&generated) {
             if let Some(m) = e.model() {
                 groups.entry(m.asset.clone()).or_default().push(e);
             }
@@ -1407,6 +1526,198 @@ impl Scene<'_> {
                 self.add_item(&parts, &instances);
             }
         }
+    }
+
+    /// The generators' plants: one item per (species, seed, growth class) with an instance
+    /// per tree, its meshes at three levels of detail and, for a tree, an impostor beyond them
+    /// (VisionCraft's instancing and levels of detail), grown once and kept in `cache` while
+    /// a build uses them. Returns the variants this build used.
+    fn generated_plants(
+        &mut self,
+        world: &World,
+        cache: &mut PlantCache,
+    ) -> std::collections::BTreeSet<(String, u64, u64)> {
+        let mut groups: BTreeMap<(String, u64, u64), Vec<Mat4>> = BTreeMap::new();
+        let mut unknown: BTreeMap<String, String> = BTreeMap::new();
+        for set in world.generated().sets() {
+            // The plant of each item, before the instance's seed and growth.
+            let items: Vec<Option<Plant>> = set
+                .generator()
+                .items
+                .iter()
+                .map(|item| {
+                    item.base_components(&world.prefabs)
+                        .into_iter()
+                        .find_map(|c| match c {
+                            gamecraft_world::Component::Plant(p) => Some(p),
+                            _ => None,
+                        })
+                })
+                .collect();
+            for instance in set.instances() {
+                let Some(Some(base)) = items.get(usize::from(instance.item)) else {
+                    continue;
+                };
+                if !plants::known(&base.species) {
+                    unknown
+                        .entry(base.species.clone())
+                        .or_insert_with(|| set.generator().id.clone());
+                    continue;
+                }
+                let seed = base.seed.wrapping_add(u64::from(instance.variant));
+                let growth = set
+                    .generator()
+                    .items
+                    .get(usize::from(instance.item))
+                    .and_then(|i| i.class_growth(u32::from(instance.growth_class)))
+                    .unwrap_or(base.growth);
+                groups
+                    .entry((base.species.clone(), seed, growth.to_bits()))
+                    .or_default()
+                    .push(placement(
+                        instance.position,
+                        instance.rotation_y_deg,
+                        [instance.scale; 3],
+                    ));
+            }
+        }
+        for (species, generator) in unknown {
+            let nearest = plants::nearest_species(&species).map_or_else(String::new, |id| {
+                format!(" The nearest known id is \"{id}\".")
+            });
+            self.problems.push(format!(
+                "Generator \"{generator}\" has plant species \"{species}\", which the plant \
+                 library does not know, so it is not drawn.{nearest}"
+            ));
+        }
+        let mut used = std::collections::BTreeSet::new();
+        for (key, instances) in groups {
+            if !cache.variants.contains_key(&key) {
+                let grown = self.grow(&key, cache);
+                cache.grown += 1;
+                cache.variants.insert(key.clone(), grown);
+            }
+            used.insert(key.clone());
+            match cache.variants.get(&key) {
+                Some(Ok(plant)) => {
+                    let id = self.r.add_lod_item(&plant.parts, &instances);
+                    self.built.items.push(id);
+                    if let Some((impostor, far)) = plant.impostor
+                        && let Err(e) = self.r.set_item_impostor(id, impostor, far)
+                    {
+                        self.problems.push(format!(
+                            "The far trees of species \"{}\" are not drawn: {e}.",
+                            key.0
+                        ));
+                    }
+                }
+                Some(Err(why)) => self.problems.push(why.clone()),
+                None => {}
+            }
+        }
+        used
+    }
+
+    /// Grows one variant of the generators' plants: its three levels, uploaded, and its
+    /// impostor baked from the middle level when it is a tree.
+    fn grow(
+        &mut self,
+        key: &(String, u64, u64),
+        cache: &mut PlantCache,
+    ) -> Result<CachedPlant, String> {
+        let (species, seed, growth_bits) = key;
+        let growth = f64::from_bits(*growth_bits);
+        if !cache.species.contains_key(species) {
+            let made = match self.plant_textures(species) {
+                Some(textures) => {
+                    // The textures now belong to the cache, not to this build.
+                    let ids: Vec<vc::TextureId> = [
+                        Some(textures.atlas),
+                        textures.atlas_normal,
+                        Some(textures.bark),
+                        Some(textures.bark_normal),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                    self.built.textures.retain(|t| !ids.contains(t));
+                    Ok(CachedSpecies {
+                        textures,
+                        texture_ids: ids,
+                        materials: BTreeMap::new(),
+                    })
+                }
+                None => Err(format!(
+                    "The textures of plant species \"{species}\" could not be made, so its \
+                     generated plants are not drawn."
+                )),
+            };
+            cache.species.insert(species.clone(), made);
+        }
+        let Some(Ok(sp)) = cache.species.get_mut(species) else {
+            return Err(format!(
+                "The textures of plant species \"{species}\" could not be made, so its generated \
+                 plants are not drawn."
+            ));
+        };
+        let levels: Vec<plants::GeneratedPlant> = (0..3u8)
+            .filter_map(|l| plants::generate_level(species, *seed, growth, l))
+            .collect();
+        let h = levels.get(1).map_or(0.0, plants::height_m);
+        let (ends, far) = plants::level_ends(h);
+        let mut parts = Vec::new();
+        let mut middle = Vec::new();
+        for (level, (plant, end)) in levels.iter().zip(ends).enumerate() {
+            for part in &plant.parts {
+                let tint = match part.kind {
+                    PartKind::Foliage => plant.foliage_tint,
+                    _ => [1.0; 3],
+                };
+                let mkey = (part.kind, tint.map(f32::to_bits));
+                let material = match sp.materials.get(&mkey) {
+                    Some(&m) => m,
+                    None => {
+                        let m = self
+                            .r
+                            .add_material(&plant_material(part.kind, sp.textures, tint));
+                        sp.materials.insert(mkey, m);
+                        m
+                    }
+                };
+                let mesh = self
+                    .r
+                    .add_mesh(&vc::Mesh {
+                        positions: &part.positions,
+                        normals: &part.normals,
+                        indices: &part.indices,
+                        face_ids: None,
+                        uvs: Some(&part.uvs),
+                        wind: Some(&part.wind),
+                    })
+                    .map_err(|e| {
+                        format!("A part of plant species \"{species}\" could not be uploaded: {e}.")
+                    })?;
+                parts.push((mesh, material, end));
+                if level == 1 {
+                    middle.push((mesh, material));
+                }
+            }
+        }
+        if parts.is_empty() {
+            return Err(format!(
+                "Plant species \"{species}\" with seed {seed} and growth {growth} produced no \
+                 geometry, so it is not drawn; try a larger growth."
+            ));
+        }
+        let impostor = match far {
+            Some(far) if !middle.is_empty() => self
+                .r
+                .bake_impostor(&middle, None, IMPOSTOR_VIEWS)
+                .ok()
+                .map(|id| (id, far)),
+            _ => None,
+        };
+        Ok(CachedPlant { parts, impostor })
     }
 
     /// Generates and uploads a species' textures; a problem line when that fails.

@@ -99,6 +99,29 @@ fn skirmish_world_is_what_its_build_script_builds() {
     assert_build_matches("skirmish", r#"{"name": "Skirmish", "seed": 21}"#);
 }
 
+#[test]
+fn forest_world_is_what_its_build_script_builds() {
+    assert_build_matches("forest", r#"{"name": "Forest", "seed": 5}"#);
+}
+
+#[test]
+fn the_forest_holds_about_fifty_thousand_trees_as_four_recipes() {
+    let world = text(&game("forest").join("world.gamecraft"));
+    let listed = json_of(&[
+        "run",
+        &world,
+        "--cmd",
+        "generator.list",
+        "--params",
+        r#"{"recipes": false}"#,
+    ]);
+    let total = listed["total_placed"].as_u64().unwrap();
+    assert!((45_000..=55_000).contains(&total), "{listed}");
+    assert_eq!(listed["generators"].as_array().unwrap().len(), 4);
+    let info = json_of(&["info", &world]);
+    assert_eq!(info["entity_count"], 1, "the ranger; the trees are derived");
+}
+
 /// The state hash after the Lantern playthrough and 125 s in all (the mist has risen once, at
 /// 120 s). A change means the simulation, the triggers or the world of the example changed.
 ///
@@ -175,7 +198,17 @@ fn lantern_is_lost_by_standing_still() {
 /// static part of the hash covers, now holds the layers, rules and edits, and the player's and
 /// the enemies' feet follow the sculpted ground where they cross the road. Every entity stands
 /// where it stood (the square stops short of the houses) and the playthrough wins as before.
-const SKIRMISH_HASH: &str = "d6ea8fda4b83e06d";
+///
+/// Moved on 2026-11-19 from d6ea8fda4b83e06d: the 40 trees placed by `entity.scatter` became
+/// a forest generator (`woods`, 41 trees, seed 23) and a scatter of low rocks (`rocks`, 90,
+/// steps a walker crosses), derived and not entities (`docs/design/generators.md`). The world's
+/// text, which the static part of the hash covers, holds the two entries instead of 40
+/// entities, every other entity's id is 40 lower (the bodies are hashed by id, and the enemies'
+/// aim errors are drawn from streams forked by their ids, so other shots hit), and the trunks
+/// now block walkers and bullets. With the forest's seed 21 a trunk stood in the player's way
+/// and the playthrough lost; seeds 22 to 31 all win, 23 is kept. The player ends with 75
+/// health instead of 69.
+const SKIRMISH_HASH: &str = "a954a9455911506d";
 
 #[test]
 fn skirmish_is_won_by_the_playthrough_and_replays_to_the_same_hash() {

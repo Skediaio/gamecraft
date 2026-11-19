@@ -106,10 +106,26 @@ pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
 /// Generates `species` with `seed` at `growth` (0 to 1] at the middle level of detail, at its
 /// peak display (full foliage, in flower when it flowers). `None` for an unknown species.
 pub(crate) fn generate(species: &str, seed: u64, growth: f64) -> Option<GeneratedPlant> {
+    generate_level(species, seed, growth, 1)
+}
+
+/// [`generate`] at level of detail `level`: 0 close up, 1 mid distance, 2 far (few large
+/// cards and a simplified trunk); a higher level is the far one.
+pub(crate) fn generate_level(
+    species: &str,
+    seed: u64,
+    growth: f64,
+    level: u8,
+) -> Option<GeneratedPlant> {
     let s = flora::Species::by_id(species)?;
     let mut params = s.params.clone();
     params.age = growth.clamp(f64::MIN_POSITIVE, 1.0) as f32;
-    let mesh = flora::generate(&params, seed, flora::Lod::Lod1);
+    let lod = match level {
+        0 => flora::Lod::Lod0,
+        1 => flora::Lod::Lod1,
+        _ => flora::Lod::Lod2,
+    };
+    let mesh = flora::generate(&params, seed, lod);
     let parts = mesh
         .split_parts()
         .into_iter()
@@ -131,6 +147,37 @@ pub(crate) fn generate(species: &str, seed: u64, growth: f64) -> Option<Generate
         parts,
         foliage_tint: mesh.foliage_tint,
     })
+}
+
+/// A plant at least this tall, metres, is a tree: its far level hands over to an impostor
+/// (VisionCraft's `apps/visioncraft/src/plants.rs`, `TREE_M`).
+pub(crate) const TREE_M: f32 = 3.0;
+/// Impostors draw up to here at most, metres.
+pub(crate) const IMPOSTOR_MAX_M: f32 = 2500.0;
+
+/// The ends of a generated plant's three mesh levels and of its impostor (`None`: no
+/// impostor, the far level is culled at its end), for a plant `h` metres tall. Ported from
+/// VisionCraft's `apps/visioncraft/src/plants.rs` (`impostor_distances`, `lod_distances`,
+/// `impostor_max`, MIT): a tree is a mesh up close and an impostor from `25 + 3 h` metres out
+/// to where it is about 1.5 pixels tall; a shrub or ground plant has no impostor.
+pub(crate) fn level_ends(h: f32) -> ([f32; 3], Option<f32>) {
+    if h >= TREE_M {
+        (
+            [4.0 + h, 10.0 + 2.0 * h, 25.0 + 3.0 * h],
+            Some((1540.0 * h).clamp(60.0, IMPOSTOR_MAX_M)),
+        )
+    } else {
+        ([3.0 + 2.0 * h, 8.0 + 4.0 * h, 15.0 + 12.0 * h], None)
+    }
+}
+
+/// The height of a generated plant: the top of its highest part, metres.
+pub(crate) fn height_m(plant: &GeneratedPlant) -> f32 {
+    plant
+        .parts
+        .iter()
+        .flat_map(|p| p.positions.iter().map(|v| v[1]))
+        .fold(0.0, f32::max)
 }
 
 /// The textures of `species`. `None` for an unknown species.

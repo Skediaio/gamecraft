@@ -5,7 +5,7 @@ use crate::fields::{PROJECT_KEYS, merge};
 use crate::layer::{Entry, LayerEntity};
 use crate::pack::{Pack, PrefabEntry};
 use crate::paths::layer_path;
-use gamecraft_world::{EntityId, Prefab, TerrainEdit, World, WorldError};
+use gamecraft_world::{EntityId, Generator, Prefab, TerrainEdit, World, WorldError};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
@@ -36,6 +36,10 @@ pub(crate) struct Resolved {
     pub warnings: Vec<String>,
     /// The terrain edits of the last pack with a `terrain/edits.json`, and that file.
     pub edits: Option<(Vec<TerrainEdit>, String)>,
+    /// The generators, layered by id, with the file that gave each last.
+    pub generators: Vec<Generator>,
+    /// The file of each of `generators`.
+    pub generator_files: Vec<String>,
 }
 
 impl Resolved {
@@ -120,6 +124,20 @@ pub(crate) fn resolve(packs: &[&Pack], world: &str) -> Result<Resolved, ProjectE
             }
         }
     }
+    let files: Vec<(&[crate::generators::GeneratorEntry], String)> = packs
+        .iter()
+        .filter_map(|pack| {
+            let entries = pack.worlds.get(world)?.generators.as_deref()?;
+            Some((
+                entries,
+                pack.file(&crate::generators::generators_path(world)),
+            ))
+        })
+        .collect();
+    let (generators, generator_files) =
+        crate::generators::layered(files.into_iter(), &mut r.warnings);
+    r.generators = generators;
+    r.generator_files = generator_files;
     let order = r.layer_order();
     let mut slots: Vec<Option<Slot>> = Vec::new();
     let mut index: BTreeMap<String, usize> = BTreeMap::new();
@@ -247,6 +265,9 @@ pub(crate) fn build_world(r: &Resolved, world_name: &str) -> Result<World, Proje
     doc.insert("gamecraft".into(), json!(gamecraft_world::FORMAT_VERSION));
     let prefabs: Vec<&Prefab> = r.prefabs.values().map(|(p, _)| p).collect();
     doc.insert("prefabs".into(), json!(prefabs));
+    if !r.generators.is_empty() {
+        doc.insert("generators".into(), json!(r.generators));
+    }
     doc.insert("next_entity_id".into(), json!(r.slots.len() as u64 + 1));
     doc.insert("entities".into(), Value::Array(entities));
     let text = Value::Object(doc).to_string();
@@ -257,6 +278,17 @@ pub(crate) fn build_world(r: &Resolved, world_name: &str) -> Result<World, Proje
             .as_ref()
             .filter(|_| is_edit_error(&e))
             .map(|(_, f)| f);
+        let generator_file = match &e {
+            WorldError::Generator { generator, .. } => r
+                .generators
+                .iter()
+                .position(|g| g.id == *generator)
+                .and_then(|i| r.generator_files.get(i)),
+            _ => None,
+        };
+        if let Some(file) = generator_file {
+            return ProjectError::in_file(file, format!("the world `{world_name}`: {e}"));
+        }
         match entity_of(&e).and_then(|id| r.slots.get(id.0.saturating_sub(1) as usize)) {
             Some(slot) => {
                 ProjectError::in_file(&slot.file, format!("the entity `{}`: {e}", slot.key))

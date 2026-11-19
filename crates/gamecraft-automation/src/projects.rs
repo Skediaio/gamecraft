@@ -110,7 +110,8 @@ pub(crate) fn project_specs() -> Vec<CommandSpec> {
             "Writes what changed in the document (never the running world) since the project \
              was opened or saved, each change to the file it belongs to in the root pack: one \
              line of a layer file for an edited entity, a prefab file, world.json as a patch \
-             over the dependencies, terrain/edits.json for the terrain's edits. A change to \
+             over the dependencies, terrain/edits.json for the terrain's edits, generators.json \
+             for the generators (as overrides by id over the dependencies). A change to \
              something a dependency brought is written to the root pack as an override or a \
              removal, never to the dependency. Nothing changed: nothing is written. The terrain \
              tiles whose recipe changed are written to the tile cache. Needs the project folder \
@@ -258,8 +259,8 @@ pub(crate) fn writable(access: &Access, dir: &Path) -> bool {
 }
 
 /// Reads the files of the pack in `dir` (resolved, inside `real_root`). Only `pack.json`,
-/// `prefabs/*.json`, `worlds/*/world.json`, `worlds/*/layers/*.json` and
-/// `worlds/*/terrain/edits.json` are read (the terrain's tile cache is read when the world is
+/// `prefabs/*.json`, `worlds/*/world.json`, `worlds/*/layers/*.json`,
+/// `worlds/*/terrain/edits.json` and `worlds/*/generators.json` are read (the terrain's tile cache is read when the world is
 /// built); a file or folder that is a link leading out of the pack is refused.
 fn read_pack(dir: &Path, budget: &mut u64) -> Result<PackSource, String> {
     let mut source = PackSource {
@@ -324,6 +325,9 @@ fn read_pack(dir: &Path, budget: &mut u64) -> Result<PackSource, String> {
         }
         if dir.join(&base).join("terrain").join("edits.json").exists() {
             read(&format!("{base}/terrain/edits.json"), &mut source)?;
+        }
+        if dir.join(&base).join("generators.json").exists() {
+            read(&format!("{base}/generators.json"), &mut source)?;
         }
     }
     let mut listed = Vec::new();

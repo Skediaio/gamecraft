@@ -67,6 +67,12 @@ impl Edit<'_> {
     pub fn heights(&self) -> Option<&HeightField> {
         self.heights
     }
+
+    /// Derives again what the copy's generators place, over the ground of the world before
+    /// the command (a handler that changed generators and reads their instances).
+    pub fn regenerate(&mut self) {
+        self.world.regenerate(self.heights);
+    }
 }
 
 /// A World handler: changes the copy in `edit`.
@@ -123,6 +129,7 @@ const MODULES: &[&[Registration]] = &[
     crate::journal_cmds::SPECS,
     crate::gm_cmds::SPECS,
     crate::terrain_cmds::SPECS,
+    crate::generator_cmds::SPECS,
 ];
 
 /// The spec and scope of the built-in command `name`, without a session (for checking the
@@ -207,7 +214,7 @@ type JournalMark = Option<(usize, Option<JournalEnd>, bool)>;
 
 impl Session {
     /// A session editing `world`, with the built-in commands registered.
-    pub fn new(world: World) -> Session {
+    pub fn new(mut world: World) -> Session {
         let mut commands = BTreeMap::new();
         for module in MODULES {
             for registration in module.iter() {
@@ -223,8 +230,10 @@ impl Session {
                 );
             }
         }
+        let heights = HeightCache::for_world(&world);
+        world.regenerate(heights.field.as_deref());
         Session {
-            heights: HeightCache::for_world(&world),
+            heights,
             document: world,
             live: None,
             commands,
@@ -414,6 +423,14 @@ impl Session {
         self.revision += 1;
         self.view_revision += 1;
         self.refresh_heights(built);
+        self.regenerate_document();
+    }
+
+    /// Derives what the document's generators place, when its generators, terrain or model
+    /// bounds changed (cheap otherwise: unchanged sets are kept).
+    fn regenerate_document(&mut self) {
+        let field = self.heights.field.clone();
+        self.document.regenerate(field.as_deref());
     }
 
     fn push_undo(&mut self, world: World) {
@@ -561,6 +578,7 @@ impl Session {
         self.revision += 1;
         self.view_revision += 1;
         self.refresh_heights(None);
+        self.regenerate_document();
         Ok(())
     }
 
@@ -576,6 +594,7 @@ impl Session {
         self.revision += 1;
         self.view_revision += 1;
         self.refresh_heights(None);
+        self.regenerate_document();
         Ok(())
     }
 
@@ -596,6 +615,7 @@ impl Session {
     /// the next tick. Derived data: neither revision changes and nothing is undone by it.
     pub fn set_model_bounds(&mut self, bounds: BTreeMap<String, ModelBounds>) {
         self.document.set_model_bounds(bounds.clone());
+        self.regenerate_document();
         for world in self.undo.iter_mut().chain(self.redo.iter_mut()) {
             world.set_model_bounds(bounds.clone());
         }
@@ -623,6 +643,7 @@ impl Session {
         self.revision += 1;
         self.view_revision += 1;
         self.refresh_heights(None);
+        self.regenerate_document();
     }
 
     /// Runs `f`, which may run any commands; all or nothing.

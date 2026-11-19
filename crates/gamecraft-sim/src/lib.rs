@@ -81,6 +81,11 @@
 //!    its footprint: circle against rotated rectangle for a box, circle against circle for a
 //!    cylinder or a sphere (the sphere's widest circle within the overlap). Up to
 //!    [`MAX_PUSH_ITERATIONS`] rounds; two coinciding centres push along +X.
+//!    The generators' instances ([`gamecraft_world::World::generated`]) block the same way:
+//!    a tree's trunk is a solid upright cylinder (radius and height times the instance's scale
+//!    and growth), a scattered thing's solid shape or solid model is one. They are kept in a
+//!    grid of [`gamecraft_world::GRID_CELL_M`] cells, and a character meets only those near
+//!    it, after the entities' solids.
 //! 6. **Ground.** The ground under the character's centre is the highest of the terrain and
 //!    the tops of the solid boxes and cylinders whose footprint contains the centre and whose
 //!    top is at most [`STEP_HEIGHT_M`] above the feet (so a low box is a step to stand on). A
@@ -94,7 +99,8 @@
 //!
 //! What M0 leaves out: characters do not collide with each other (a shape on a character's
 //! own entity is ignored as an obstacle); a character's entity `scale` does not change its
-//! size or speed; spheres block but are not ground to stand on; plants are no obstacles;
+//! size or speed; spheres block but are not ground to stand on; plants placed as entities are
+//! no obstacles (a generated tree's trunk is, below);
 //! there are no rigid bodies, inertia or friction.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -120,7 +126,7 @@ pub use combat::{Magazine, Projectile};
 pub use events::{Event, EventKind};
 
 use motion::{State, Surroundings, clamp_to_disc};
-use solid::Solid;
+use solid::{GeneratedSolids, Solid};
 
 /// Simulation ticks per second.
 pub const TICK_HZ: u32 = 60;
@@ -262,6 +268,8 @@ pub struct Sim {
     inputs: BTreeMap<EntityId, Input>,
     /// The solid shapes of `world`, derived by [`Sim::replace_world`].
     solids: Vec<Solid>,
+    /// The solids of `world`'s generated instances (trunks, scattered solids), by grid cell.
+    generated_solids: GeneratedSolids,
     /// The hash of `world` without its characters' positions and rotations.
     static_hash: u64,
     /// The zones, interactables and trigger times of `world`, derived by
@@ -307,6 +315,7 @@ impl Sim {
             bodies: BTreeMap::new(),
             inputs: BTreeMap::new(),
             solids: Vec::new(),
+            generated_solids: GeneratedSolids::default(),
             static_hash: 0,
             watch: events::Watch::default(),
             inside: BTreeSet::new(),
@@ -756,6 +765,7 @@ impl Sim {
             let around = Surroundings {
                 heights: self.heights.as_deref(),
                 solids: &self.solids,
+                generated: &self.generated_solids,
             };
             for &id in &ids {
                 let Some(entity) = self.world.entity(id) else {
@@ -853,7 +863,7 @@ impl Sim {
     /// and a behaviour that exist in both keep their state, new ones start fresh (a full
     /// magazine; the base state, with the entity's place as its post); a behaviour whose route
     /// changed walks to the new route's first point next. On an error nothing changes.
-    pub fn replace_world(&mut self, world: World) -> Result<(), SimError> {
+    pub fn replace_world(&mut self, mut world: World) -> Result<(), SimError> {
         world
             .validate()
             .map_err(|e| SimError::World(e.to_string()))?;
@@ -869,6 +879,11 @@ impl Sim {
             (Some(terrain), _, _) => Some(Some(Arc::new(terrain.build().map_err(to_sim)?))),
             (None, _, _) => Some(None),
         };
+        // What the generators place, over the ground the simulation will stand on.
+        match &rebuilt {
+            Some(field) => world.regenerate(field.as_deref()),
+            None => world.regenerate(self.heights.as_deref()),
+        }
         let mut bodies = BTreeMap::new();
         let mut inputs = BTreeMap::new();
         for entity in world.entities() {
@@ -916,6 +931,7 @@ impl Sim {
         self.magazines = magazines;
         self.brains = brains;
         self.solids = solid::solids_of(&world);
+        self.generated_solids = GeneratedSolids::of(&world, &self.generated_solids);
         self.watch = events::Watch::of(&world);
         let zone_ids: BTreeSet<EntityId> = self.watch.zones.iter().copied().collect();
         self.inside

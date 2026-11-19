@@ -108,6 +108,13 @@ pub enum WorldError {
         /// The ids of the world's prefabs (at most 10).
         known: Vec<String>,
     },
+    /// A generator entry breaks a rule.
+    Generator {
+        /// The generator's id.
+        generator: String,
+        /// What is wrong and what is allowed, as a sentence.
+        message: String,
+    },
     /// A prefab cannot be removed while entities are placed from it.
     PrefabInUse {
         /// The prefab's id.
@@ -215,6 +222,9 @@ impl fmt::Display for WorldError {
                 } else {
                     write!(f, "; the prefabs are: {}", known.join(", "))
                 }
+            }
+            WorldError::Generator { generator, message } => {
+                write!(f, "generator \"{generator}\": {message}")
             }
             WorldError::PrefabInUse {
                 prefab,

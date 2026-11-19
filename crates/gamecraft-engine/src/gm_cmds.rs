@@ -90,7 +90,8 @@ fn overview_spec() -> CommandSpec {
              agent took it over; every team with its characters alive and down; the \
              objectives; the last 50 events (enter, leave, interact, hit, down, heard, time, \
              var, start) with their ticks; the messages showing; the weather with how far one \
-             sees; the variables. Numbers are rounded to centimetres, entities named by id \
+             sees; the variables; the generators (forests, scatters) with how many instances \
+             they placed (within `near` too, when given). Numbers are rounded to centimetres, entities named by id \
              (`names` gives the name of every id an event mentions). `near` and `team` narrow \
              the characters listed (at most {MAX_OVERVIEW_CHARACTERS}); the teams always \
              count everyone. While editing it describes the document, without states or \
@@ -124,7 +125,8 @@ fn overview_spec() -> CommandSpec {
          ...}], names: {id: name}, messages: [{text, to, recipients, shown_at_s, until_s}], \
          weather: {time_of_day_h, sun_elevation_deg, cloud_cover, mist, rain, \
          wind_direction_deg, wind_speed_mps, temperature_c, light, visibility_m (null in clear \
-         air)}, vars: {name: value}, projectiles (in flight)}",
+         air)}, vars: {name: value}, projectiles (in flight), generated: [{id, kind, placed, \
+         near? (within `near` and `radius_m`)}]}",
         json!({"near": [0, 0], "radius_m": 50}),
     )
     .query()
@@ -314,6 +316,26 @@ fn overview(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
         "projectiles".into(),
         json!(sim.map_or(0, |s| s.projectiles().len())),
     );
+    let generated: Vec<Value> = world
+        .generated()
+        .sets()
+        .map(|set| {
+            let mut m = Map::new();
+            m.insert("id".into(), json!(set.generator().id));
+            m.insert("kind".into(), json!(set.generator().kind.name()));
+            m.insert("placed".into(), json!(set.instances().len()));
+            if let Some(([x, z], r)) = area {
+                let n = set
+                    .near([x, z], r)
+                    .into_iter()
+                    .filter(|i| horizontal([x, 0.0, z], i.position) <= r)
+                    .count();
+                m.insert("near".into(), json!(n));
+            }
+            Value::Object(m)
+        })
+        .collect();
+    out.insert("generated".into(), Value::Array(generated));
     Ok(round_cm(Value::Object(out)))
 }
 

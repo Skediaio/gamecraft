@@ -304,19 +304,76 @@ pub fn ray_shape(origin: [f64; 3], dir: [f64; 3], e: &Entity, shape: &Shape) -> 
     }
 }
 
+/// A generated instance a [`cast`] hit: its set's place in [`World::generated`] and its number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GeneratedHit {
+    /// The index of the generator (and its set) in the world's list.
+    pub set: usize,
+    /// The instance's number `n` (`<generator id>#<n>`).
+    pub number: u32,
+}
+
 /// What a [`cast`] hit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Found {
     /// Where along the ray, and the surface's normal.
     pub hit: RayHit,
-    /// The entity whose shape was hit, `None` for the terrain.
+    /// The entity whose shape was hit, `None` for the terrain or a generated instance.
     pub entity: Option<EntityId>,
+    /// The generated instance hit (a tree's trunk, a scattered rock), `None` otherwise.
+    pub generated: Option<GeneratedHit>,
+}
+
+/// The nearest hit of a ray on the generated instances of `world` within `max_m`: a tree's
+/// trunk (an upright cylinder), an instance's shape and its model's collider box; in set
+/// order, then by number, the trunk first.
+fn cast_generated(
+    world: &World,
+    origin: [f64; 3],
+    dir: [f64; 3],
+    max_m: f64,
+) -> Option<(RayHit, GeneratedHit)> {
+    let mut best: Option<(RayHit, GeneratedHit)> = None;
+    for (index, set) in world.generated().sets().enumerate() {
+        for instance in set.along(origin, dir, max_m) {
+            let mut hits: Vec<RayHit> = Vec::new();
+            if let Some(t) = set.trunk(instance) {
+                hits.extend(ray_cylinder(origin, dir, t.base, t.radius_m, t.height_m));
+            }
+            if set.has_body(instance) {
+                let e = set.entity(instance);
+                if let Some(shape) = e.shape() {
+                    hits.extend(ray_shape(origin, dir, &e, shape));
+                }
+                if let Some(b) = world.model_box(&e) {
+                    hits.extend(ray_box(origin, dir, b.center, b.half, b.yaw_deg));
+                }
+            }
+            for hit in hits {
+                if hit.distance_m > max_m {
+                    continue;
+                }
+                if best.is_none_or(|(b, _)| hit.distance_m < b.distance_m) {
+                    best = Some((
+                        hit,
+                        GeneratedHit {
+                            set: index,
+                            number: instance.number,
+                        },
+                    ));
+                }
+            }
+        }
+    }
+    best
 }
 
 /// The nearest hit within `max_m` of a ray with a unit `dir`: the terrain (the triangles of
 /// `heights`) and the `shape` and the model's collider box ([`World::model_box`]) of every
-/// entity, solid or not, except those `skip` names; on a tie the terrain, then the lowest id
-/// (an entity's shape before its model). A hit whose point is not finite is no hit.
+/// entity, solid or not, except those `skip` names, and the generated instances (trunks,
+/// shapes and models; [`World::generated`]); on a tie the terrain, then the lowest id (an
+/// entity's shape before its model), then the generated instances. A hit whose point is not
+/// finite is no hit.
 pub fn cast(
     world: &World,
     heights: Option<&HeightField>,
@@ -337,6 +394,7 @@ pub fn cast(
                 normal,
             },
             entity: None,
+            generated: None,
         });
     }
     for e in world.entities() {
@@ -355,9 +413,19 @@ pub fn cast(
                 best = Some(Found {
                     hit,
                     entity: Some(e.id),
+                    generated: None,
                 });
             }
         }
+    }
+    if let Some((hit, g)) = cast_generated(world, origin, dir, max_m)
+        && best.is_none_or(|b| hit.distance_m < b.hit.distance_m)
+    {
+        best = Some(Found {
+            hit,
+            entity: None,
+            generated: Some(g),
+        });
     }
     best.filter(|f| {
         along(origin, dir, f.hit.distance_m)
@@ -420,7 +488,7 @@ pub fn line_of_sight(
             LINE_OF_SIGHT_END_TOLERANCE_M,
             skip,
         )
-        .filter(|f| f.hit.distance_m == 0.0 && f.entity.is_some())
+        .filter(|f| f.hit.distance_m == 0.0 && (f.entity.is_some() || f.generated.is_some()))
     };
     Some(Sight {
         distance_m: distance,

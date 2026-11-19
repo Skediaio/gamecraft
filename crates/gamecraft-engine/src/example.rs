@@ -1,9 +1,10 @@
 //! The example world every spec's `example` runs on.
 
 use gamecraft_world::{
-    Character, CompareOp, Component, Condition, EntityDraft, Health, Launcher, Objective,
-    ObjectiveStatus, PaintRule, Plant, Prefab, Shape, ShapeKind, Step, Tags, Terrain, TerrainEdit,
-    TerrainLayer, TerrainSource, Trigger, VarValue, When, World, WorldError,
+    Area, Character, Circle, CompareOp, Component, Condition, EntityDraft, Generator,
+    GeneratorItem, GeneratorKind, Health, Launcher, Objective, ObjectiveStatus, PaintRule, Plant,
+    Prefab, Shape, ShapeKind, Step, Tags, Terrain, TerrainEdit, TerrainLayer, TerrainSource,
+    Trigger, VarValue, When, World, WorldError,
 };
 
 /// The plant library species of the example oak.
@@ -16,7 +17,9 @@ pub const EXAMPLE_SPECIES: &str = "quercus-robur";
 /// entity 2 a plant `Oak` (`quercus-robur`) on the ground at x 8, z -10,
 /// entity 3 a character named `Scout` on the ground at (0, 0), facing north, with a default
 /// `launcher` and `health`. One prefab, `marker` ("Marker": a cylinder 0.4 m wide and 1.5 m
-/// high, tagged `marker`), placed nowhere. Its scenario: a
+/// high, tagged `marker`), placed nowhere. One generator, `pines`: a forest of Scots pines
+/// (`pinus-sylvestris`, 400 per hectare, 3 m apart) in a circle of 15 m around x -30, z 30.
+/// Its scenario: a
 /// variable `score` = 0, an objective `find-oak` ("Find the oak") and a trigger `oak-found`
 /// that marks it done when `score` changes to 3 or more.
 pub fn example_world() -> World {
@@ -115,6 +118,33 @@ fn build() -> Result<World, WorldError> {
         ],
         children: Vec::new(),
     })?;
+    let (radius_m, height_m) = crate::plants::trunk_of("pinus-sylvestris").unwrap_or((0.3, 10.0));
+    world.generators.push(Generator {
+        id: "pines".into(),
+        kind: GeneratorKind::Forest,
+        area: Area::Circle(Circle {
+            center: [-30.0, 30.0],
+            radius_m: 15.0,
+        }),
+        seed: 3,
+        density_per_ha: 400.0,
+        min_distance_m: Some(3.0),
+        slope_max_deg: None,
+        height_range_m: None,
+        exclude: Vec::new(),
+        items: vec![GeneratorItem {
+            growth_range: Some([0.5, 1.0]),
+            trunk: Some(gamecraft_world::Trunk { radius_m, height_m }),
+            ..GeneratorItem::of(
+                1.0,
+                vec![Component::Plant(Plant {
+                    species: "pinus-sylvestris".into(),
+                    seed: 1,
+                    growth: 1.0,
+                })],
+            )
+        }],
+    });
     world.vars.insert("score".into(), VarValue::Number(0.0));
     world.objectives.push(Objective {
         id: "find-oak".into(),

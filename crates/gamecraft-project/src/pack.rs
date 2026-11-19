@@ -20,7 +20,8 @@ pub struct PackSource {
     /// Where the pack is, for people (a folder path); errors name files as `location/path`.
     pub location: String,
     /// Path to text: `pack.json`, `prefabs/<id>.json`, `worlds/<world>/world.json`,
-    /// `worlds/<world>/layers/<layer>.json`, `worlds/<world>/terrain/edits.json`. Other paths
+    /// `worlds/<world>/layers/<layer>.json`, `worlds/<world>/terrain/edits.json`,
+    /// `worlds/<world>/generators.json`. Other paths
     /// are not read. Also the licence records (`assets/**.license.json`) and the `.gltf`
     /// documents under `assets/`, which [`crate::check_assets`] reads.
     pub files: BTreeMap<String, String>,
@@ -45,6 +46,8 @@ pub(crate) struct WorldDir {
     pub layers: BTreeMap<String, Layer>,
     /// `terrain/edits.json`, if the pack has one.
     pub edits: Option<Vec<TerrainEdit>>,
+    /// `generators.json`, if the pack has one.
+    pub generators: Option<Vec<crate::generators::GeneratorEntry>>,
 }
 
 /// A parsed pack.
@@ -111,6 +114,10 @@ pub(crate) fn parse_pack(source: &PackSource) -> Result<Pack, ProjectError> {
             FileKind::World(world) => {
                 let fields = parse_world(text, &file)?;
                 pack.worlds.entry(world).or_default().fields = Some(fields);
+            }
+            FileKind::Generators(world) => {
+                let entries = crate::generators::parse_generators(text, &file)?;
+                pack.worlds.entry(world).or_default().generators = Some(entries);
             }
             FileKind::TerrainEdits(world) => {
                 let edits = crate::terrain::parse_edits(text, &file)?;

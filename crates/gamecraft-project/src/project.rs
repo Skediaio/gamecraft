@@ -4,6 +4,7 @@
 use crate::ProjectError;
 use crate::assets::PackAsset;
 use crate::fields::{PROJECT_KEYS, WORLD_FORMAT, WORLD_KEYS, diff, world_fields};
+use crate::generators::{GeneratorEntry, difference, generators_path, generators_text, layered};
 use crate::layer::{Entry, Layer, LayerEntity};
 use crate::manifest::{Manifest, dependency_order};
 use crate::pack::{Pack, PackSource, manifest_of, parse_pack};
@@ -11,7 +12,7 @@ use crate::paths::{is_plain_name, is_prefab_file_id, layer_path, prefab_path, wo
 use crate::resolve::{Resolved, Slot, build_world, ordered, resolve};
 use crate::terrain::{edits_path, edits_text};
 use crate::text::{pretty_ordered, pretty_typed};
-use gamecraft_world::{Entity, EntityId, TerrainEdit, World};
+use gamecraft_world::{Entity, EntityId, Generator, TerrainEdit, World};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -103,6 +104,8 @@ struct Base {
     fields: Map<String, Value>,
     /// The terrain edits the dependencies give.
     edits: Vec<TerrainEdit>,
+    /// The generators the dependencies give.
+    generators: Vec<Generator>,
     entities: BTreeMap<String, (String, LayerEntity)>,
     prefabs: BTreeSet<String>,
 }
@@ -116,6 +119,8 @@ struct Own {
     prefab_files: BTreeSet<String>,
     /// `terrain/edits.json`; `None` when the root pack has none.
     edits: Option<Vec<TerrainEdit>>,
+    /// `generators.json`; `None` when the root pack has none.
+    generators: Option<Vec<GeneratorEntry>>,
 }
 
 /// An open project: the root pack, its dependencies in load order, the world being edited and
@@ -373,6 +378,7 @@ impl Project {
             layers: BTreeMap::new(),
             prefab_files: root.prefabs.keys().cloned().collect(),
             edits: None,
+            generators: None,
         };
         let by_key: BTreeMap<&str, EntityId> = self
             .provenance
@@ -386,6 +392,7 @@ impl Project {
         };
         own.fields.clone_from(&dir.fields);
         own.edits.clone_from(&dir.edits);
+        own.generators.clone_from(&dir.generators);
         for (name, layer) in &dir.layers {
             let entries = layer
                 .entries
@@ -581,6 +588,37 @@ impl Project {
             own.edits = Some(edits);
         }
 
+        // Generators: the root pack's file holds what differs from the dependencies; it is
+        // written when the world's generators differ from what the files give.
+        let given = match &own.generators {
+            Some(lines) => {
+                let mut ignored = Vec::new();
+                let base_lines: Vec<GeneratorEntry> = self
+                    .base
+                    .generators
+                    .iter()
+                    .cloned()
+                    .map(GeneratorEntry::Entry)
+                    .collect();
+                layered(
+                    [
+                        (base_lines.as_slice(), String::new()),
+                        (lines.as_slice(), String::new()),
+                    ]
+                    .into_iter(),
+                    &mut ignored,
+                )
+                .0
+            }
+            None => self.base.generators.clone(),
+        };
+        if world.generators != given {
+            let lines = difference(&self.base.generators, &world.generators);
+            plan.writes
+                .insert(generators_path(&self.world), generators_text(&lines)?);
+            own.generators = Some(lines);
+        }
+
         // Prefabs: a changed or new one is written whole; a removed one is deleted, or
         // removed by a marker when a dependency brings it.
         for prefab in &world.prefabs {
@@ -732,6 +770,7 @@ impl Project {
                 "world_fields_changed": world_fields(world)? != self.saved_fields,
                 "terrain_edits_changed": world.terrain.as_ref().map(|t| &t.edits)
                     != self.saved.terrain.as_ref().map(|t| &t.edits),
+                "generators_changed": world.generators != self.saved.generators,
                 "files": saving.plan.writes.keys().collect::<Vec<_>>(),
                 "removes": saving.plan.removes,
             },
@@ -758,6 +797,7 @@ fn base_of(deps: &[&Pack], world: &str) -> Result<Base, ProjectError> {
         .as_ref()
         .map(|t| t.edits.clone())
         .unwrap_or_default();
+    base.generators = built.generators.clone();
     let keys: BTreeMap<EntityId, &str> = resolved
         .slots
         .iter()

@@ -72,3 +72,29 @@ pub fn nearest_species(id: &str) -> Option<String> {
         .min_by_key(|(d, _)| *d)
         .map(|(_, id)| id.to_string())
 }
+
+/// Share of a species' mature height that its trunk's radius is (a 25 m oak: 0.35 m).
+const TRUNK_RADIUS_SHARE: f64 = 0.014;
+/// Share of a species' mature height that its blocking trunk reaches (below the crown).
+const TRUNK_HEIGHT_SHARE: f64 = 0.6;
+/// The thinnest and thickest trunk this rule gives, metres of radius.
+const TRUNK_RADIUS_RANGE_M: (f64, f64) = (0.05, 1.5);
+
+/// The trunk of a mature plant of `species` that blocks characters and projectiles in a
+/// forest: `(radius_m, height_m)` from its mature height for trees, conifers and palms;
+/// `None` for other plants (shrubs, grasses: nothing to block) and unknown species.
+pub fn trunk_of(id: &str) -> Option<(f64, f64)> {
+    let s = Species::by_id(id)?;
+    if !matches!(
+        s.category,
+        Category::Tree | Category::Conifer | Category::Palm
+    ) {
+        return None;
+    }
+    let h = f64::from(s.mature_height_m);
+    let (lo, hi) = TRUNK_RADIUS_RANGE_M;
+    Some((
+        (h * TRUNK_RADIUS_SHARE).clamp(lo, hi),
+        h * TRUNK_HEIGHT_SHARE,
+    ))
+}
