@@ -17,13 +17,20 @@ use common::*;
 use gamecraft_automation::{MAX_BATCH_STEPS, MAX_REQUEST_BYTES, rpc};
 use serde_json::{Value, json};
 
-const HOST_COMMANDS: [&str; 7] = [
+const HOST_COMMANDS: [&str; 14] = [
     "edit.redo",
     "edit.undo",
     "file.new",
     "file.open",
     "file.save",
     "journal.save",
+    "pack.add_dependency",
+    "project.export",
+    "project.info",
+    "project.new",
+    "project.open",
+    "project.query",
+    "project.save",
     "view.render",
 ];
 
@@ -283,8 +290,13 @@ fn every_listed_example_runs() {
     let mut ran = 0;
     for c in list {
         let id = c["id"].as_str().unwrap();
-        // Files need roots (tests/files.rs and tests/journal.rs run them).
-        if id.starts_with("file.") || id.starts_with("edit.") || id == "journal.save" {
+        // Files need roots (tests/files.rs, tests/journal.rs and tests/projects.rs run them).
+        if id.starts_with("file.")
+            || id.starts_with("edit.")
+            || id.starts_with("project.")
+            || id.starts_with("pack.")
+            || id == "journal.save"
+        {
             continue;
         }
         let (mut fresh, _) = host_with_pictures(host());

@@ -282,7 +282,9 @@ mod tests {
                 ],
                 &[],
             ),
+            package("gamecraft-project", &["gamecraft-world"], &[]),
             package("gamecraft-automation", &["gamecraft-engine"], &[]),
+            package("gamecraft-index", &["gamecraft-project"], &[]),
             package(
                 "gamecraft-cli",
                 &["gamecraft-render", "gamecraft-automation", "winit"],

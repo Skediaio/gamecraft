@@ -1,0 +1,8 @@
+{
+  "gamecraft_world": 1,
+  "environment": {
+    "cloud_cover": 0.6,
+    "mist": 0.5,
+    "time_of_day_h": 23.0
+  }
+}

@@ -23,7 +23,10 @@ browser build simple. A database has two places:
   Chosen: Turso (MIT), the pure-Rust, SQLite-compatible database, because agents and developers
   already speak SQL, it needs no C code (so the browser build stays simple) and the developer
   trusts the team behind it. Its 0.7 release (July 2026) dropped the beta label but is not 1.0;
-  for a derived index that is enough, since a broken index is rebuilt from the files. Not SurrealDB: its Business Source
+  for a derived index that is enough, since a broken index is rebuilt from the files.
+  As built: `default-features = false`; one piece of C remains (`simsimd`, Apache-2.0, vector
+  kernels that Turso turns on and a user cannot turn off). Accepted, since the index is native
+  only and the browser build does not compile it. Not SurrealDB: its Business Source
   Licence does not fit an MIT engine whose games anyone must be free to ship.
 - **Persistent servers** (M9): a world that runs for weeks with many players keeps its live state
   and the players' progress in a server database, and writes snapshots and journals. That is

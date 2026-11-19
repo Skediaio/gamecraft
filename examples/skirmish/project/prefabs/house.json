@@ -1,0 +1,21 @@
+{
+  "id": "house",
+  "name": "House",
+  "components": [
+    {
+      "type": "shape",
+      "kind": "box",
+      "size": [
+        8.0,
+        3.6,
+        6.0
+      ],
+      "color": [
+        0.62,
+        0.55,
+        0.45
+      ],
+      "solid": true
+    }
+  ]
+}

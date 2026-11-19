@@ -39,7 +39,8 @@ fn inspect_spec() -> CommandSpec {
          {azimuth_deg, elevation_deg, direction, above_horizon}, entity_count, vars: {name: \
          value}, objectives: [{id, title, status, hidden}], trigger_count, prefabs: [{id, \
          name, components, children, instances, instance_count}], entities: [{id, name, \
-         position, rotation_y_deg, scale, prefab?, parent?, components (effective)}], \
+         position, rotation_y_deg, scale, prefab?, parent?, layer? (left out: the default layer), \
+         components (effective)}], \
          truncated, history: {can_undo, \
          can_redo}}",
         json!({"limit": 10}),

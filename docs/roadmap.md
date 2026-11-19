@@ -132,7 +132,15 @@ Scenarios, and the game master who steers them.
 characters, opens and closes objectives as the player reaches them, changes the weather, and
 the saved journal replays to the same hash.
 
-## M3: World
+## M3: World (in progress)
+
+Done 2026-11-19: projects and packs as directories (`docs/design/projects.md`): a manifest,
+worlds split into layer files with one entity per line, prefab files, packs layered by id so a
+mod changes a game, saves that write each change back to the file it came from (and edits to a
+dependency into the mod), `project.*` commands and `gamecraft-cli project`, and the Turso index
+with read-only SQL (`project.query`). Example: `examples/skirmish/project` and the mod
+`examples/skirmish-night-mod`.
+
 
 Worlds of real size, made of reusable parts, by anyone.
 

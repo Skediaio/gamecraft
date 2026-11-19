@@ -66,6 +66,8 @@ pub struct Spawn {
     /// Components that replace the prefab's components of the same type (or add a type the
     /// prefab lacks), at most one of each type.
     pub overrides: Vec<Component>,
+    /// The layer of the instance and its children; `None` is the world's default layer.
+    pub layer: Option<String>,
 }
 
 /// What [`crate::World::spawn_prefab`] placed.

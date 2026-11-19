@@ -9,13 +9,15 @@
 //!
 //! - [`rpc`]: `{"id", "method", "params"}` in, `{"id", "ok", "result" | "error"}` out.
 //! - [`mcp`]: the Model Context Protocol (JSON-RPC 2.0, one message per line).
-//! - [`Host`]: what both run: the engine's commands plus the host's own (`file.*`, `edit.*`,
-//!   `view.render`), one namespace and one listing ([`Host::command_docs`]), and batches.
+//! - [`Host`]: what both run: the engine's commands plus the host's own (`file.*`,
+//!   `project.*`, `pack.*`, `edit.*`, `view.render`), one namespace and one listing
+//!   ([`Host::command_docs`]), and batches.
 //!
 //! Each server is a function from one input line to at most one reply line (`handle_line`),
 //! plus a loop over a reader and a writer (`serve`). No line, however malformed, makes a server
 //! panic or stop. The file system is used only outside the browser: on `wasm32` there are no
-//! `file.*` commands and `view.render` cannot write a file.
+//! `file.*`, `project.*` or `pack.*` commands (but `project.query`, which says the index is
+//! native only), and `view.render` cannot write a file.
 
 mod commands;
 pub mod docs;
@@ -25,10 +27,14 @@ mod files;
 mod host;
 mod lines;
 pub mod mcp;
+#[cfg(not(target_arch = "wasm32"))]
+mod projects;
 pub mod rpc;
 
 pub use docs::{CommandDoc, ParamDoc};
-pub use host::{Access, CameraRequest, Host, Pictures, RenderRequest, Rendered};
+pub use host::{
+    Access, CameraRequest, Host, Indexer, Pictures, ProjectIndex, RenderRequest, Rendered,
+};
 pub use lines::{Line, read_line};
 
 /// Longest request line a server reads, in bytes (as 3DCraft and VisionCraft).

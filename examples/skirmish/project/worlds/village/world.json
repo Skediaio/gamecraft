@@ -1,0 +1,158 @@
+{
+  "gamecraft_world": 1,
+  "name": "Skirmish",
+  "seed": 21,
+  "default_layer": "village",
+  "layers": [
+    "terrain-features",
+    "village",
+    "enemies"
+  ],
+  "terrain": {
+    "cell_m": 2.0,
+    "size_m": 384.0,
+    "source": {
+      "feature_m": 160.0,
+      "kind": "noise",
+      "octaves": 3,
+      "relief_m": 40.0,
+      "roughness": 0.5,
+      "seed": 21
+    }
+  },
+  "environment": {
+    "cloud_cover": 0.3,
+    "day_of_year": 172,
+    "latitude_deg": 50.85,
+    "mist": 0.2,
+    "rain": 0.0,
+    "time_of_day_h": 11.0,
+    "wind_direction_deg": 270.0,
+    "wind_speed_mps": 5.0
+  },
+  "vars": {
+    "enemies_left": 4.0
+  },
+  "objectives": [
+    {
+      "hidden": false,
+      "id": "clear",
+      "status": "open",
+      "title": "Clear the village"
+    },
+    {
+      "hidden": false,
+      "id": "alive",
+      "status": "open",
+      "title": "Stay alive"
+    }
+  ],
+  "triggers": [
+    {
+      "do": [
+        {
+          "command": "var.set",
+          "params": {
+            "add": -1,
+            "name": "enemies_left"
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 8,
+            "text": "{target} is down, {var:enemies_left} left"
+          }
+        }
+      ],
+      "enabled": true,
+      "id": "enemy-down",
+      "once": false,
+      "when": {
+        "event": "down",
+        "target": "tag:enemy"
+      }
+    },
+    {
+      "do": [
+        {
+          "command": "objective.set",
+          "params": {
+            "id": "clear",
+            "status": "done"
+          }
+        },
+        {
+          "command": "objective.set",
+          "params": {
+            "id": "alive",
+            "status": "done"
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 30,
+            "text": "The village is clear."
+          }
+        }
+      ],
+      "enabled": true,
+      "id": "village-clear",
+      "if": {
+        "all": [
+          {
+            "op": "==",
+            "value": 0.0,
+            "var": "enemies_left"
+          },
+          {
+            "objective": "alive",
+            "status": "open"
+          }
+        ]
+      },
+      "once": true,
+      "when": {
+        "event": "var",
+        "name": "enemies_left"
+      }
+    },
+    {
+      "do": [
+        {
+          "command": "objective.set",
+          "params": {
+            "id": "alive",
+            "status": "failed"
+          }
+        },
+        {
+          "command": "objective.set",
+          "params": {
+            "id": "clear",
+            "status": "failed"
+          }
+        },
+        {
+          "command": "message.show",
+          "params": {
+            "seconds": 30,
+            "text": "You are down."
+          }
+        }
+      ],
+      "enabled": true,
+      "id": "player-down",
+      "if": {
+        "objective": "clear",
+        "status": "open"
+      },
+      "once": true,
+      "when": {
+        "event": "down",
+        "target": "tag:player"
+      }
+    }
+  ]
+}

@@ -397,6 +397,7 @@ fn scatter(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
         scale: 1.0,
         prefab: None,
         parent: None,
+        layer: None,
         components: template.clone(),
     };
     probe
@@ -451,6 +452,7 @@ fn scatter(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
             rotation_y_deg,
             scale,
             components,
+            layer: None,
         };
         let id = edit
             .world

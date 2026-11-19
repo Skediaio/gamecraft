@@ -33,7 +33,7 @@ pub use combat::{Behaviour, BehaviourMode, Health, Launcher};
 pub use component::{
     Character, Component, Interactable, Light, Plant, Shape, ShapeKind, Tags, Zone, ZoneShape,
 };
-pub use entity::{Entity, EntityDraft, EntityId};
+pub use entity::{Entity, EntityDraft, EntityId, MAX_LAYER_CHARS, is_layer_name};
 pub use environment::{Environment, STANDARD_TEMPERATURE_C, SunPosition};
 pub use error::WorldError;
 pub use prefab::{Prefab, PrefabChild, Spawn, Spawned};

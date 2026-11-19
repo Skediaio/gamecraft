@@ -7,6 +7,7 @@
 //! catalogue; a renderer is handed the world, its height field and the view revision.
 
 use gamecraft_engine::Session;
+use gamecraft_project::Project;
 use gamecraft_world::{EntityId, HeightField, World};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -17,9 +18,10 @@ use std::path::{Path, PathBuf};
 /// `--automation-write-root`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Access {
-    /// Where `file.open` reads.
+    /// Where `file.open` and `project.open` read.
     pub read_root: Option<PathBuf>,
-    /// Where `file.save` and `view.render` with a `path` write.
+    /// Where `file.save`, the `project.*` commands that write and `view.render` with a
+    /// `path` write.
     pub write_root: Option<PathBuf>,
 }
 
@@ -88,6 +90,27 @@ pub trait Pictures {
     ) -> Result<Rendered, String>;
 }
 
+/// The SQL index of an open project (the CLI's is `gamecraft-index`, on Turso): rebuilt from
+/// the world, queried with one read-only `SELECT`.
+pub trait ProjectIndex {
+    /// Replaces every row with the entities and prefabs of `world`, with their string ids,
+    /// layers and packs from `project`. Answers what it wrote, as JSON.
+    fn rebuild(&mut self, world: &World, project: &Project) -> Result<Value, String>;
+    /// Runs one read-only `SELECT` and answers `{columns, rows, truncated}` with at most
+    /// `max_rows` rows.
+    fn query(&mut self, sql: &str, max_rows: usize) -> Result<Value, String>;
+    /// Where the index is stored (a file path), or `None` in memory.
+    fn location(&self) -> Option<String>;
+}
+
+/// Opens project indexes for a [`Host`].
+pub trait Indexer {
+    /// Opens the index of the project in `project_dir` (stored beside it, in
+    /// `.gamecraft-index/`), or in memory when `project_dir` is `None` (the project's folder
+    /// is not writable).
+    fn open(&mut self, project_dir: Option<&Path>) -> Result<Box<dyn ProjectIndex>, String>;
+}
+
 /// The session the servers drive, the open file, the folders they may touch and the pictures.
 pub struct Host {
     pub(crate) session: Session,
@@ -97,6 +120,12 @@ pub struct Host {
     pub(crate) saved_revision: u64,
     pub(crate) access: Access,
     pub(crate) pictures: Option<Box<dyn Pictures>>,
+    /// The open project, if the document came from one.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) project: Option<crate::projects::OpenProject>,
+    /// Opens the index of a project; without one, `project.query` says an index is needed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) indexer: Option<Box<dyn Indexer>>,
 }
 
 impl Host {
@@ -110,7 +139,31 @@ impl Host {
             path: None,
             access,
             pictures: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            project: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            indexer: None,
         }
+    }
+
+    /// The same host, indexing projects with `indexer` (`project.query`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_indexer(mut self, indexer: Box<dyn Indexer>) -> Host {
+        self.indexer = Some(indexer);
+        self
+    }
+
+    /// The same host; in the browser there is no index, and the indexer is not kept.
+    #[cfg(target_arch = "wasm32")]
+    pub fn with_indexer(self, indexer: Box<dyn Indexer>) -> Host {
+        drop(indexer);
+        self
+    }
+
+    /// The open project and its folder, if the document came from one.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn project(&self) -> Option<(&Project, &Path)> {
+        self.project.as_ref().map(|p| (&p.project, p.dir.as_path()))
     }
 
     /// The same host, drawing pictures with `pictures`.

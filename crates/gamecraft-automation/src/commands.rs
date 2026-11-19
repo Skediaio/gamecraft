@@ -32,7 +32,15 @@ const MAX_FOLLOW_DISTANCE_M: f64 = 1000.0;
 
 /// Commands that replace the session or step through its history: they cannot be part of an
 /// atomic batch.
-const NOT_ATOMIC: [&str; 4] = ["file.new", "file.open", "edit.undo", "edit.redo"];
+const NOT_ATOMIC: [&str; 7] = [
+    "file.new",
+    "file.open",
+    "edit.undo",
+    "edit.redo",
+    "project.new",
+    "project.open",
+    "pack.add_dependency",
+];
 
 /// Wall-clock milliseconds to a tenth; `null` where there is no clock (the browser).
 pub(crate) struct Stopwatch(#[cfg(not(target_arch = "wasm32"))] std::time::Instant);
@@ -61,7 +69,7 @@ impl Stopwatch {
 // ----------------------------------------------------------------------------- the specs
 
 /// A host command: not an undo step of its own, scope `host` in the listing.
-fn host_spec(
+pub(crate) fn host_spec(
     name: &str,
     label: &str,
     summary: &str,
@@ -139,12 +147,29 @@ pub(crate) fn host_specs() -> Vec<CommandSpec> {
              {path, bytes, width, height, ...the renderer's info}",
             json!({"width": 320, "height": 180, "follow": {"entity": "Scout", "view": "third_person", "distance_m": 8}}),
         ),
+        host_spec(
+            "project.query",
+            "Query Project",
+            "Runs one read-only SQL SELECT on the index of the open project (rebuilt first when \
+             the world changed): tables entities(id, key, name, layer, pack, prefab, parent, x, \
+             y, z, rotation_y_deg, scale, tags, components), entity_tags(entity_id, tag), \
+             entity_components(entity_id, type, data) and prefabs(id, name, pack, components, \
+             instances). Anything but one SELECT is refused. Native only: the browser has no \
+             index.",
+            vec![
+                param("sql", T::String, "One SELECT statement.").required(),
+                param("limit", T::Integer, "Most rows returned, 1 to 1000.").default(json!(1000)),
+            ],
+            "{columns: [names], rows: [[values]], truncated, index}",
+            json!({"sql": "SELECT e.name, e.x, e.z FROM entities e JOIN entity_tags t ON t.entity_id = e.id WHERE t.tag = 'enemy'"}),
+        ),
     ];
     // The browser has no files.
     #[cfg(not(target_arch = "wasm32"))]
     let specs = {
         let mut specs = specs;
         specs.extend(file_specs());
+        specs.extend(crate::projects::project_specs());
         specs
     };
     specs
@@ -245,6 +270,16 @@ pub(crate) struct ListQuery<'a> {
 }
 
 impl Host {
+    /// Whether a project is open (never in the browser).
+    fn has_project(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.project.is_some()
+        }
+        #[cfg(target_arch = "wasm32")]
+        false
+    }
+
     /// The documentation of every command, the engine's and the host's, sorted by id.
     pub fn command_docs(&self) -> Vec<CommandDoc> {
         let mut docs: Vec<CommandDoc> = self.session.specs().into_iter().map(from_spec).collect();
@@ -278,8 +313,26 @@ impl Host {
             "journal.save" if self.session.journal().is_none() => {
                 Err("there is no journal yet; it starts with sim.start".into())
             }
-            "file.save" if self.access.write_root.is_none() => {
+            "file.save"
+            | "project.new"
+            | "project.save"
+            | "pack.add_dependency"
+            | "project.export"
+                if self.access.write_root.is_none() =>
+            {
                 Err("no write root is set (--automation-write-root DIR)".into())
+            }
+            "project.open" if self.access.read_root.is_none() => {
+                Err("no read root is set (--automation-read-root DIR)".into())
+            }
+            "project.save"
+            | "project.info"
+            | "project.export"
+            | "project.query"
+            | "pack.add_dependency"
+                if !self.has_project() =>
+            {
+                Err("no project is open; open one with project.open".into())
             }
             "sim.start" if playing => {
                 Err("a simulation is already running; stop it with sim.stop".into())
@@ -386,6 +439,26 @@ impl Host {
             "journal.save" => self.journal_save(p),
             #[cfg(not(target_arch = "wasm32"))]
             "file.save" => self.file_save(p),
+            #[cfg(not(target_arch = "wasm32"))]
+            "project.new" => self.project_new(p),
+            #[cfg(not(target_arch = "wasm32"))]
+            "project.open" => self.project_open(p),
+            #[cfg(not(target_arch = "wasm32"))]
+            "project.save" => self.project_save(),
+            #[cfg(not(target_arch = "wasm32"))]
+            "project.export" => self.project_export(p),
+            #[cfg(not(target_arch = "wasm32"))]
+            "project.info" => self.project_info(),
+            #[cfg(not(target_arch = "wasm32"))]
+            "pack.add_dependency" => self.add_dependency(p),
+            #[cfg(not(target_arch = "wasm32"))]
+            "project.query" => self.project_query(p),
+            #[cfg(target_arch = "wasm32")]
+            "project.query" => Err(
+                "the project index is native only: the browser has no files and no database; \
+                 run gamecraft-cli to query a project"
+                    .into(),
+            ),
             other => Err(format!("`{other}` is not a host command (a bug)")),
         }
     }
@@ -511,7 +584,7 @@ fn spec_keys(spec: &CommandSpec) -> Vec<&str> {
 }
 
 /// A [`Fields`] error without the `owner: ` in front (the caller puts the command id there).
-fn strip_owner(message: String) -> String {
+pub(crate) fn strip_owner(message: String) -> String {
     match message.split_once(": ") {
         Some((_, rest)) => rest.to_string(),
         None => message,
@@ -648,6 +721,7 @@ impl Host {
         world.validate().map_err(|e| e.to_string())?;
         self.session.replace_document(world);
         self.path = None;
+        self.project = None;
         self.saved_revision = self.session.revision();
         Ok(json!({"name": name, "seed": seed}))
     }
@@ -665,6 +739,7 @@ impl Host {
         });
         self.session.replace_document(world);
         self.path = Some(path);
+        self.project = None;
         self.saved_revision = self.session.revision();
         Ok(result)
     }

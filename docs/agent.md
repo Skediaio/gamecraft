@@ -182,6 +182,41 @@ children with it, `entity.remove` removes them too.
 - `prefab.spawn` works on a running world: the game master's "drop a squad here". What is
   spawned takes part from the next tick.
 
+## Projects, packs and layers
+
+A game on disk is a **project**: a folder of text files you can read, diff and merge
+(`design/projects.md`). A pack has `pack.json` (`id`, `name`, `depends`, `worlds`), one
+`prefabs/<id>.json` per prefab, and per world `worlds/<world>/world.json` (terrain, environment,
+scenario; `default_layer`, `layers` order) and `worlds/<world>/layers/<layer>.json`, one entity
+per line with a string `id` unique in its pack. A mod is a pack that depends on the game:
+packs load in dependency order and a later one changes an earlier one by id (a prefab file
+replaces the prefab, an entity with an existing `id` replaces it, `{"id": "...", "removed":
+true}` removes it, `world.json` fields merge one by one, a layer file with `"replace": true`
+drops the earlier layer of its name).
+
+- **`project.open {path}`** loads a project and its dependencies into the document;
+  **`project.info`** lists packs, worlds, layers with entity counts, prefabs with their pack,
+  and the files `project.save` would write. **`project.new {path, id, name, world?}`** makes a
+  project of the current world.
+- **Layers.** `entity.add {layer}`, `entity.set {layer}` and `prefab.spawn {layer}` put an entity
+  in a layer (a plain name; `""` or none is the world's default layer); `entity.get` and
+  `world.inspect` show it. A layer is a file: put each area or kind in its own (`village`,
+  `enemies`, `forest-north`) so an edit touches one small file.
+- **`project.save`** writes each change to the file it came from: an edited entity is one line of
+  its layer file. A change to something a dependency brought is written into the project's own
+  pack as an override (or a removal), so editing the game under a mod makes the mod, never
+  changes the game. Saving nothing changed writes nothing.
+- **`project.query {sql}`** asks the project's index with one `SELECT`: `entities` (`id, key,
+  name, layer, pack, prefab, parent, x, y, z, rotation_y_deg, scale, tags, components`),
+  `entity_tags (entity_id, tag)`, `entity_components (entity_id, type, data)`, `prefabs (id,
+  name, pack, components, instances)`. Every enemy within 100 m of a point:
+  `SELECT e.name FROM entities e JOIN entity_tags t ON t.entity_id = e.id WHERE t.tag = 'enemy'
+  AND (e.x - 4) * (e.x - 4) + (e.z + 54) * (e.z + 54) <= 10000`. The index is rebuilt from the
+  world when it changed; it cannot be written to, and change the world with commands instead.
+- `project.export {path}` writes the resolved world as one `.gamecraft` file, the format for
+  tests and exchange. `examples/skirmish/project` is the Skirmish as a project;
+  `examples/skirmish-night-mod` turns it to night, gives the enemies lanterns and adds a guard.
+
 ## Projectiles and behaviour
 
 Fighting is three components and two commands; they name no weapon, a pack fills them in.
@@ -228,7 +263,8 @@ Fighting is three components and two commands; they name no weapon, a pack fills
 
 ## Known limits of M0
 
-- Shapes are boxes, spheres and cylinders; there are no meshes, scripts or packs yet. A prefab's
+- Shapes are boxes, spheres and cylinders; there are no meshes or scripts yet, and packs hold
+  prefabs and worlds but no assets yet. A prefab's
   children follow `entity.set`, not the simulation: a character that walks leaves its children
   where they were.
 - Characters do not collide with each other; spheres block but cannot be stood on; plants are no

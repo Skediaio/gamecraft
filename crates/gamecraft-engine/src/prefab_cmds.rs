@@ -332,6 +332,7 @@ fn spawn_spec() -> CommandSpec {
                 T::String,
                 "The instance's name; the prefab's name when left out.",
             ),
+            crate::entity_cmds::layer_param("The layer of the instance and its children."),
             param(
                 "overrides",
                 T::Array,
@@ -357,6 +358,7 @@ fn spawn(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
         position,
         rotation_y_deg: p.f64("rotation_y_deg")?.unwrap_or(0.0),
         overrides: components(p, "overrides")?.unwrap_or_default(),
+        layer: crate::entity_cmds::layer_of(p)?.flatten(),
     };
     let spawned = edit
         .world

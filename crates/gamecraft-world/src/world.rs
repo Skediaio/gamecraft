@@ -104,6 +104,8 @@ struct EntityFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent: Option<EntityId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    layer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     components: Option<Vec<Component>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     overrides: Option<Vec<Component>>,
@@ -127,6 +129,7 @@ impl EntityFile {
             scale: e.scale,
             prefab: e.prefab.clone(),
             parent: e.parent,
+            layer: e.layer.clone(),
             components,
             overrides,
         }
@@ -176,6 +179,7 @@ impl EntityFile {
             scale: self.scale,
             prefab: self.prefab,
             parent: self.parent,
+            layer: self.layer,
             components,
         })
     }
@@ -491,6 +495,7 @@ impl World {
             scale: 1.0,
             prefab: Some(p.id.clone()),
             parent: None,
+            layer: spawn.layer.clone(),
             components: p.effective(&spawn.overrides),
         };
         root.validate()?;
@@ -512,6 +517,7 @@ impl World {
                 scale: 1.0,
                 prefab: None,
                 parent: Some(root_id),
+                layer: spawn.layer.clone(),
                 components: child.components.clone(),
             };
             e.validate()?;

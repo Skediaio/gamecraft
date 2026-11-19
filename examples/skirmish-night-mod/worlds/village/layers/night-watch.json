@@ -1,0 +1,6 @@
+{
+  "gamecraft_layer": 1,
+  "entities": [
+    {"id":"night-watch","name":"Night Watch","position":[4.0,5.0,-62.0],"rotation_y_deg":180.0,"scale":1.0,"prefab":"enemy-soldier"}
+  ]
+}

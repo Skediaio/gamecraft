@@ -69,9 +69,11 @@ crates/
   gamecraft-math         L0  deterministic maths: portable sines and powers, seeded randomness, noise, the state hash
   gamecraft-world        L1  the world document: terrain, environment, entities, components (pure data, serde)
   gamecraft-sim          L2  the simulation: fixed step, input as data, character movement, collisions, state hash
+  gamecraft-project      L2  projects and packs: manifests, layer files, layering by id, saving back (pure)
   gamecraft-engine       L3  Session and command registry: every action is a command; undo; edit and play
   gamecraft-render       L4  draws a world with VisionCraft's renderer and plants; offscreen pictures. No UI
   gamecraft-automation   L4  JSON-lines protocol and MCP server over one host (session, files, pictures)
+  gamecraft-index        L4  the derived SQL index of a project (Turso), native only
 apps/
   gamecraft-cli          L5  headless CLI: commands, run, batch, serve, mcp, render
   gamecraft              L5  the window, native and in the browser: walk, look, play (winit on wgpu)

@@ -69,6 +69,25 @@ pub(crate) fn placement(edit: &Edit<'_>, p: Params<'_>) -> Result<Option<[f64; 3
     }
 }
 
+/// The `layer` parameter: what it says each command does with it.
+pub(crate) fn layer_param(what: &str) -> crate::spec::ParamSpec {
+    param(
+        "layer",
+        T::String,
+        &format!(
+            "{what} A plain file name of 1 to 64 letters, digits, `-` and `_` (in a project the \
+             layer file `layers/<layer>.json`); \"\" or left out is the world's default layer."
+        ),
+    )
+}
+
+/// The layer a command asks for: `None` when left out, `Some(None)` for the default layer
+/// (`""`), else the name. The name is checked with the entity it lands on.
+pub(crate) fn layer_of(p: Params<'_>) -> Result<Option<Option<String>>, CommandError> {
+    Ok(p.str("layer")?
+        .map(|l| (!l.is_empty()).then(|| l.to_string())))
+}
+
 /// The entity `id`, to change.
 fn entity_mut<'w>(edit: &'w mut Edit<'_>, id: EntityId) -> Result<&'w mut Entity, CommandError> {
     edit.world
@@ -98,6 +117,7 @@ fn add_spec() -> CommandSpec {
             .unit("deg")
             .default(json!(0)),
             param("scale", T::Number, "Uniform scale, 0.001 to 1000.").default(json!(1)),
+            layer_param("The layer it belongs to."),
             param(
                 "components",
                 T::Array,
@@ -133,6 +153,7 @@ fn add(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
         rotation_y_deg: p.f64("rotation_y_deg")?.unwrap_or(0.0),
         scale: p.f64("scale")?.unwrap_or(1.0),
         components,
+        layer: layer_of(p)?.flatten(),
     };
     let id = edit
         .world
@@ -145,8 +166,9 @@ fn set_spec() -> CommandSpec {
     spec(
         "entity.set",
         "Edit Entity",
-        "Renames, moves, turns or scales an entity; only the fields given change. The \
-         entities that belong to it (a prefab's children) move and turn with it.",
+        "Renames, moves, turns, scales an entity or puts it in another layer; only the fields \
+         given change. The entities that belong to it (a prefab's children) move and turn with \
+         it, and go to the same layer.",
         vec![
             param("id", T::Entity, ID_DOC).required(),
             param("name", T::String, "Its new name, at most 200 characters."),
@@ -159,6 +181,7 @@ fn set_spec() -> CommandSpec {
             )
             .unit("deg"),
             param("scale", T::Number, "Uniform scale, 0.001 to 1000."),
+            layer_param("The layer it goes to, with the entities that belong to it."),
         ],
         "{id, position}",
         json!({"id": "Crate", "at": [4, -6], "rotation_y_deg": 45}),
@@ -171,6 +194,7 @@ fn set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
     let name = p.str("name")?;
     let rotation = p.f64("rotation_y_deg")?;
     let scale = p.f64("scale")?;
+    let layer = layer_of(p)?;
     if position.is_some() || rotation.is_some() {
         let entity = entity_mut(edit, id)?;
         let to = position.unwrap_or(entity.position);
@@ -187,7 +211,15 @@ fn set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
         entity.scale = s;
     }
     entity.validate().map_err(|e| bad(e.to_string()))?;
-    Ok(json!({"id": id.0, "position": entity.position}))
+    let position = entity.position;
+    if let Some(layer) = layer {
+        for e in std::iter::once(id).chain(edit.world.descendants(id)) {
+            let entity = entity_mut(edit, e)?;
+            entity.layer.clone_from(&layer);
+            entity.validate().map_err(|e| bad(e.to_string()))?;
+        }
+    }
+    Ok(json!({"id": id.0, "position": position}))
 }
 
 fn remove_spec() -> CommandSpec {

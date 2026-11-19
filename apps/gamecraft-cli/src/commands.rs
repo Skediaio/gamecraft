@@ -35,25 +35,25 @@ pub fn print(text: &str) -> Res {
         .map_err(|e| CliError::Failed(format!("cannot write to standard output: {e}")))
 }
 
-fn print_json(value: &Value) -> Res {
+pub fn print_json(value: &Value) -> Res {
     print(&serde_json::to_string(value).unwrap_or_else(|_| "null".into()))
 }
 
 /// The absolute path of an argument (the file need not exist).
-fn absolute(given: &str) -> Result<PathBuf, CliError> {
+pub fn absolute(given: &str) -> Result<PathBuf, CliError> {
     std::path::absolute(given)
         .map_err(|e| CliError::Failed(format!("cannot resolve the path `{given}`: {e}")))
 }
 
 /// The folder a file is in.
-fn folder(file: &Path) -> PathBuf {
+pub fn folder(file: &Path) -> PathBuf {
     file.parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
-/// A host with an empty world and the renderer, that may read and write only in the folders
-/// given.
-fn host(read_root: Option<PathBuf>, write_root: Option<PathBuf>) -> Host {
+/// A host with an empty world, the renderer and the project index, that may read and write
+/// only in the folders given.
+pub fn host(read_root: Option<PathBuf>, write_root: Option<PathBuf>) -> Host {
     Host::new(
         World::new("Untitled", 0),
         Access {
@@ -62,9 +62,10 @@ fn host(read_root: Option<PathBuf>, write_root: Option<PathBuf>) -> Host {
         },
     )
     .with_pictures(Box::new(GpuPictures::default()))
+    .with_indexer(Box::new(crate::index::TursoIndexer))
 }
 
-fn exec(host: &mut Host, id: &str, params: &Value) -> Result<Value, CliError> {
+pub fn exec(host: &mut Host, id: &str, params: &Value) -> Result<Value, CliError> {
     host.execute(id, params).map_err(CliError::Failed)
 }
 
@@ -78,11 +79,21 @@ fn open_in(host: &mut Host, file: &Path) -> Res {
     .map(drop)
 }
 
-/// A host that has opened `file`, writing only in `write_folder`.
-fn opened(file: &str, write_folder: Option<PathBuf>) -> Result<Host, CliError> {
+/// A host that has opened `file`, writing only in `write_folder`. A folder is a project:
+/// it is opened with project.open, reading in the folder that holds it (so a dependency
+/// beside it, `../game`, is found).
+pub fn opened(file: &str, write_folder: Option<PathBuf>) -> Result<Host, CliError> {
     let path = absolute(file)?;
     let mut host = host(Some(folder(&path)), write_folder);
-    open_in(&mut host, &path)?;
+    if path.is_dir() {
+        exec(
+            &mut host,
+            "project.open",
+            &json!({"path": path.display().to_string()}),
+        )?;
+    } else {
+        open_in(&mut host, &path)?;
+    }
     Ok(host)
 }
 

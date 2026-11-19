@@ -1,0 +1,66 @@
+{
+  "id": "enemy-soldier",
+  "name": "Enemy soldier",
+  "components": [
+    {
+      "type": "character",
+      "height_m": 1.8,
+      "radius_m": 0.3,
+      "eye_height_m": 1.65,
+      "walk_speed_mps": 1.6,
+      "run_speed_mps": 5.0,
+      "jump_speed_mps": 4.5,
+      "max_slope_deg": 45.0
+    },
+    {
+      "type": "health",
+      "max": 100.0,
+      "current": 100.0,
+      "armor": 0.0
+    },
+    {
+      "type": "launcher",
+      "muzzle_velocity_mps": 715.0,
+      "mass_kg": 0.004,
+      "ballistic_coefficient": 100.0,
+      "dispersion_mrad": 2.0,
+      "rate_s": 1.2,
+      "magazine": 10,
+      "reload_s": 4.0,
+      "damage_per_joule": 0.01,
+      "muzzle_height_m": 1.5,
+      "max_flight_s": 10.0,
+      "sound_range_m": 600.0
+    },
+    {
+      "type": "behaviour",
+      "mode": "guard",
+      "route": [],
+      "team": "red",
+      "view_range_m": 120.0,
+      "fov_deg": 120.0,
+      "engage_range_m": 100.0,
+      "aim_error_mrad": 8.0,
+      "reaction_s": 1.0,
+      "search_s": 10.0
+    },
+    {
+      "type": "tags",
+      "tags": [
+        "enemy",
+        "team:red"
+      ]
+    },
+    {
+      "type": "light",
+      "color": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "intensity_cd": 60.0,
+      "range_m": 12.0,
+      "on": true
+    }
+  ]
+}

@@ -10,11 +10,13 @@ Usage: gamecraft-cli <subcommand> [options]
 Subcommands:
   commands   List every command: id, parameters, summary
   run        Open or create a world, run commands and scripts, save with --out
-  info       Print a world file's state as JSON
-  render     Draw a world file to a PNG (needs a GPU)
-  play       Play a world file for a while and print the state hash (the file is not changed)
+  info       Print a world file's (or a project's) state as JSON
+  render     Draw a world file (or a project) to a PNG (needs a GPU)
+  play       Play a world file (or a project) for a while and print the state hash (nothing
+             is changed)
   replay     Run a journal of a play session again and compare its state hashes
   new        Write an empty world file
+  project    Make, open, describe, export and query a project folder (packs, layers, mods)
   serve      JSON-lines server on stdin and stdout, for scripts
   mcp        Model Context Protocol server on stdin and stdout, for agents
   help       This text; `help <subcommand>` explains one
@@ -36,7 +38,7 @@ pub const RUN: &str = "\
 Usage: gamecraft-cli run [FILE] [--new JSON] [--cmd ID [--params JSON]]... [--script FILE]...
                          [--out FILE] [--keep-going]
 
-Opens the world FILE (a .gamecraft file) or, with --new, starts a world with the parameters of
+Opens the world FILE (a .gamecraft file, or a project folder) or, with --new, starts a world with the parameters of
 file.new (without either, an empty world), runs the steps in the order given, prints one line of
 JSON per result, and saves the document with --out. It stops at the first step that fails, saves
 nothing and exits 1. Play commands work inside one run: sim.start, sim.input, sim.step,
@@ -60,8 +62,8 @@ Example:
 pub const INFO: &str = "\
 Usage: gamecraft-cli info FILE
 
-Prints the state of a .gamecraft file as JSON, as the command world.inspect gives it (at most
-1000 entities).";
+Prints the state of a .gamecraft file, or of a project folder (its world layered from its
+packs), as JSON, as the command world.inspect gives it (at most 1000 entities).";
 
 pub const RENDER: &str = "\
 Usage: gamecraft-cli render FILE --out PNG [--size WxH] [--camera JSON]
@@ -145,3 +147,25 @@ Options:
   --automation-read-root DIR   Where file.open may read
   --automation-write-root DIR  Where file.save and pictures may write
   --file FILE                  Start with this world open";
+
+pub const PROJECT: &str = "\
+Usage: gamecraft-cli project new DIR --id ID [--name NAME] [--world W] [--from FILE]
+       gamecraft-cli project open DIR [--world W]
+       gamecraft-cli project info DIR [--world W]
+       gamecraft-cli project export DIR --out FILE
+       gamecraft-cli project query DIR \"SELECT ...\" [--limit N]
+
+A project is a folder of text files: pack.json, prefabs/<id>.json and
+worlds/<world>/{world.json, layers/<layer>.json}, layered over the packs it depends on
+(docs/design/projects.md). run, play, info and render take a project folder wherever they take
+a .gamecraft file; the folder that holds the project is where its dependencies are looked for.
+
+Actions:
+  new      Make the project DIR (new or empty) from FILE (a .gamecraft file) or an empty world:
+           the pack ID with world W (default main), one file per layer and per prefab
+  open     Open the project and its dependencies and print what was loaded (packs in load
+           order, world, entities, the index)
+  info     Print project.info: packs, worlds, layers with their entity counts, prefabs, warnings
+  export   Write the project's world as one .gamecraft file
+  query    Run one read-only SQL SELECT on the project's index (kept in DIR/.gamecraft-index):
+           tables entities, entity_tags, entity_components, prefabs; at most 1000 rows";

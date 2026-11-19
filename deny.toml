@@ -40,3 +40,9 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # VisionCraft's renderer and plant generator (MIT).
 allow-git = ["https://github.com/Skediaio/visioncraft"]
+
+# cfg_block (a dependency of Turso) has no `license` field; its LICENSE file is Apache-2.0.
+[[licenses.clarify]]
+crate = "cfg_block"
+expression = "Apache-2.0"
+license-files = []

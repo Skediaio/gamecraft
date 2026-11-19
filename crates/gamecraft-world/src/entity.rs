@@ -25,6 +25,36 @@ fn default_scale() -> f64 {
     1.0
 }
 
+/// Most characters in a layer name.
+pub const MAX_LAYER_CHARS: usize = 64;
+
+/// Whether `layer` is a valid layer name: 1 to [`MAX_LAYER_CHARS`] ASCII letters, digits, `-`
+/// and `_`, so that `layers/<layer>.json` is a file inside its world's folder.
+pub fn is_layer_name(layer: &str) -> bool {
+    !layer.is_empty()
+        && layer.len() <= MAX_LAYER_CHARS
+        && layer
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// `layer` must be a valid layer name ([`is_layer_name`]).
+fn check_layer(ctx: Ctx, layer: &str) -> Result<(), WorldError> {
+    if is_layer_name(layer) {
+        return Ok(());
+    }
+    let shown: String = layer.chars().take(MAX_LAYER_CHARS + 8).collect();
+    Err(ctx.invalid(
+        "layer",
+        format!("{shown:?}"),
+        format!(
+            "a layer is a plain file name: 1 to {MAX_LAYER_CHARS} ASCII letters, digits, `-` \
+             and `_` (no `/`, `.` or spaces), such as \"village\"; leave it out for the \
+             world's default layer"
+        ),
+    ))
+}
+
 /// An entity of the world: a name, a placement and components.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,6 +82,11 @@ pub struct Entity {
     /// it. Default none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<EntityId>,
+    /// The layer of its world the entity belongs to: in a project, the layer file it is saved
+    /// to (`layers/<layer>.json`). A plain file name of 1 to 64 letters, digits, `-` and `_`;
+    /// `None` is the world's default layer. Default none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
     /// Components, at most one of each type: for a prefab's instance its effective
     /// components. Default none.
     #[serde(default)]
@@ -71,10 +106,13 @@ pub struct EntityDraft {
     pub scale: f64,
     /// Components, at most one of each type.
     pub components: Vec<Component>,
+    /// The layer it belongs to; `None` is the world's default layer.
+    pub layer: Option<String>,
 }
 
 impl Default for EntityDraft {
-    /// An unnamed entity at the origin, unrotated, scale 1, without components.
+    /// An unnamed entity at the origin, unrotated, scale 1, without components, in the
+    /// default layer.
     fn default() -> Self {
         EntityDraft {
             name: String::new(),
@@ -82,6 +120,7 @@ impl Default for EntityDraft {
             rotation_y_deg: 0.0,
             scale: 1.0,
             components: Vec::new(),
+            layer: None,
         }
     }
 }
@@ -97,6 +136,7 @@ impl EntityDraft {
             scale: self.scale,
             prefab: None,
             parent: None,
+            layer: self.layer,
             components: self.components,
         }
     }
@@ -236,6 +276,9 @@ impl Entity {
         }
         ctx.finite("rotation_y_deg", self.rotation_y_deg)?;
         ctx.range("scale", self.scale, SCALE_MIN, SCALE_MAX, "")?;
+        if let Some(layer) = &self.layer {
+            check_layer(ctx, layer)?;
+        }
         for (i, c) in self.components.iter().enumerate() {
             let kind = c.kind();
             if self

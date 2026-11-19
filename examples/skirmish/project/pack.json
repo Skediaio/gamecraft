@@ -1,0 +1,10 @@
+{
+  "gamecraft_pack": 1,
+  "id": "skirmish",
+  "name": "Skirmish",
+  "version": "0.1.0",
+  "worlds": [
+    "village"
+  ],
+  "license": "MIT"
+}

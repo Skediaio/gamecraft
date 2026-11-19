@@ -54,7 +54,8 @@ transaction**: steps that ran stay applied, each its own undo step.
 (`Session::transaction`): the first step that fails stops it and takes back every step; the
 document, the history, the play state and the open file are as before (`rolledBack: true`). An
 atomic batch that succeeds and changes the document is **one** undo step. `file.new`,
-`file.open`, `edit.undo` and `edit.redo` cannot be part of one (the batch is refused before
+`file.open`, `project.new`, `project.open`, `pack.add_dependency`, `edit.undo` and `edit.redo`
+cannot be part of one (the batch is refused before
 anything runs). Files a step wrote (`file.save`, `view.render` with a path) stay written either
 way.
 
@@ -117,8 +118,8 @@ degrees, times seconds; an entity is its id or its name.
 
 | Command | Params | Result |
 |---|---|---|
-| `entity.add` | `{name? = "", position?, at?, rotation_y_deg? = 0, scale? = 1, components? = []}` | `{id, position}`; give `position` (`[x, y, z]`) or `at` (`[x, z]`, the base on the ground) |
-| `entity.set` | `{id, name?, position?, at?, rotation_y_deg?, scale?}` | `{id, position}`; only the fields given change; the entities that belong to it (a prefab's children) move and turn with it |
+| `entity.add` | `{name? = "", position?, at?, rotation_y_deg? = 0, scale? = 1, layer?, components? = []}` | `{id, position}`; give `position` (`[x, y, z]`) or `at` (`[x, z]`, the base on the ground); `layer` is a plain name (1 to 64 letters, digits, `-`, `_`; in a project the file `layers/<layer>.json`), `""` or left out the world's default layer |
+| `entity.set` | `{id, name?, position?, at?, rotation_y_deg?, scale?, layer?}` | `{id, position}`; only the fields given change; the entities that belong to it (a prefab's children) move and turn with it, and go to the same `layer` (`""`: the default layer) |
 | `entity.remove` | `{id}` | `null`; removes the entities that belong to it too (a prefab's children); the ids are never handed out again |
 | `entity.set_component` | `{id, component}` | `null`; adds a component or replaces the one of its type |
 | `entity.remove_component` | `{id, type}` | `null`; `type` is a component type (`component.list`) |
@@ -126,7 +127,7 @@ degrees, times seconds; an entity is its id or its name.
 | `prefab.add` | `{id, name? = "", components? = [], children? = []}` | `{id}`; an entity described once to place many times; `children` (at most 64) are `[{name? = "", offset? = [0, 0, 0], rotation_y_deg? = 0, components? = []}]`, placed relative to each instance (`offset` in metres in its frame: -Z its forward, +X its right); the id must be new |
 | `prefab.set` | `{id, name?, components?, children?}` | `{id, instances: [ids]}`; only the fields given change, each as a whole; every instance keeps its overrides and takes the rest from the new prefab; children already placed stay |
 | `prefab.remove` | `{id}` | `null`; refused while entities are placed from it, naming them |
-| `prefab.spawn` | `{prefab, position?, at?, rotation_y_deg? = 0, name?, overrides? = []}` | `{id, children: [ids], position}`; an entity with `prefab` set, whose components are the prefab's with `overrides` replacing those of the same type (or adding a type the prefab lacks), and one entity per child with the instance as `parent`; `name` defaults to the prefab's; works on a running world too |
+| `prefab.spawn` | `{prefab, position?, at?, rotation_y_deg? = 0, name?, layer?, overrides? = []}` | `{id, children: [ids], position}`; the instance and its children go to `layer` (left out: the default layer); an entity with `prefab` set, whose components are the prefab's with `overrides` replacing those of the same type (or adding a type the prefab lacks), and one entity per child with the instance as `parent`; `name` defaults to the prefab's; works on a running world too |
 | `entity.scatter` | `{count, components, seed?, name? = "", center?, radius_m?, exclude? = [], min_distance_m? = 0, max_slope_deg? = 90, scale_range? = [1, 1], random_rotation? = true, vary_seed? = true}` | `{placed, requested, first_id, last_id}`; up to `count` (1 to 5000) copies of the template `components` on the terrain's ground, in a circle (`center` `[x, z]` and `radius_m`) or over the whole terrain, skipping points steeper than `max_slope_deg`, inside a circle of `exclude` (`[{center: [x, z], radius_m}]`, at most 256) or closer than `min_distance_m`; names get a number from 1 (`Oak 1`, `Oak 2`, ...); each plant its own seed with `vary_seed`; the same parameters give the same entities; one undo step |
 
 Components, as in the file format (fields left out take their defaults):
@@ -194,7 +195,7 @@ false`, `trigger_errors`) and changes nothing. Triggers fired by triggers nest a
 |---|---|---|
 | `world.inspect` | `{entities? = true, limit? = 200, offset? = 0}` | below |
 | `prefab.list` | `{}` | `{prefabs: [{id, name, components, children, instances: [ids], instance_count}]}`; in the order given |
-| `entity.get` | `{id}` | `{id, name, position, rotation_y_deg, scale, prefab, overrides, parent, children, components, ground_height_m, height_above_ground_m, body, input, health, behaviour, magazine}`; `prefab` (the prefab's id or null), `overrides` (its components that differ from its prefab's), `parent` (an id or null) and `children` (ids); `components` are the effective ones; `body` (`{velocity, grounded}`) and `input` while playing, for a character, else null; `health` (`{max, current, armor, down}`) with a `health` component; `behaviour` (its state) and `magazine` (its launcher's) while playing |
+| `entity.get` | `{id}` | `{id, name, position, rotation_y_deg, scale, prefab, overrides, parent, children, layer, components, ground_height_m, height_above_ground_m, body, input, health, behaviour, magazine}`; `prefab` (the prefab's id or null), `overrides` (its components that differ from its prefab's), `parent` (an id or null) and `children` (ids), `layer` (its layer, null for the default one); `components` are the effective ones; `body` (`{velocity, grounded}`) and `input` while playing, for a character, else null; `health` (`{max, current, armor, down}`) with a `health` component; `behaviour` (its state) and `magazine` (its launcher's) while playing |
 | `entity.find` | `{name?, component?, tag?, near?, radius_m?, limit? = 50}` | `{total, entities: [{id, name, position, components, distance_m?}]}`; part of the name in any case, a component type, a tag (exactly), a horizontal circle round `near` (`[x, z]`); by distance with `near`, else by id |
 | `query.ground_height` | `{x, z}` | `{x, z, height_m, normal, slope_deg}`; the terrain only, null outside it |
 | `query.raycast` | `{origin, direction, max_m? = 1000}` | `{hit: false}` or `{hit: true, kind: "terrain" \| "entity", entity?, name?, point, normal, distance_m}`; the nearest of the terrain and every shape, solid or not; plants and characters are not hit yet; a ray that starts inside a shape hits at distance 0 |
@@ -228,6 +229,13 @@ in the file format.
 | `edit.undo`, `edit.redo` | `{}` | `{can_undo, can_redo}`; refused while a simulation runs and when there is nothing to undo or redo |
 | `journal.save` | `{path, overwrite? = false}` | `{path, bytes, entries, final: {tick, hash}}`; writes the journal of the running (or last) simulation as a `.json` file inside the write root: `{gamecraft_journal: 1, world, entries, final}` (`docs/design/journal.md`); an existing file needs `overwrite`; `gamecraft-cli replay FILE --check` runs it again |
 | `view.render` | `{path?, width? = 960, height? = 540, camera?, follow?, time_s?}` | `{mime: "image/png", base64, width, height, ...info}`, or with `path` `{path, bytes, width, height, ...info}` |
+| `project.new` | `{path, id, name, world? = "main"}` | `{path, id, world, files, index}`; a new project folder inside the write root (new or empty) from the document: `pack.json`, `worlds/<world>/world.json`, one `worlds/<world>/layers/<layer>.json` per layer (entities without a layer in `main`), one `prefabs/<id>.json` per prefab; the project is then open, with nothing to save |
+| `project.open` | `{path, world?}` | `{path, root, world, worlds, packs, entities, warnings, index}`; the project folder inside the read root and its dependencies (a dependency's `path` relative to the pack naming it, else `packs/<id>` in the project), layered into one world that becomes the document (a new history, any simulation stopped); `packs` in load order; a missing pack or a cycle is named with its chain (`mod -> game -> nature`) |
+| `project.save` | `{}` | `{path, written, removed, unchanged}`; writes what changed in the document since the project was opened or saved, each change to its file in the root pack (an edited entity is one line of its layer file); a change to what a dependency brought becomes an override or a removal in the root pack, never an edit of the dependency; needs the project folder inside the write root |
+| `project.export` | `{path, overwrite? = false}` | `{path, bytes, entities}`; the open project's world (the document) as one `.gamecraft` file inside the write root, entities with their `layer` |
+| `project.info` | `{}` | `{path, root, world, worlds, default_layer, packs, layers: [{name, entities, default}], prefabs: [{id, pack, instances}], entities, changes: {entities_added, entities_changed, entities_removed, prefabs_changed, world_fields_changed, files, removes}, warnings, index}`; `changes.files` are the files `project.save` would write |
+| `pack.add_dependency` | `{id, path}` | `{id, path, packs, entities}`; the root pack depends on the pack `id` in the folder `path` (relative to the root pack); writes `pack.json` and opens the project again; refused with unsaved changes, and when the pack is missing, has another id or makes a cycle (`pack.json` stays as it was) |
+| `project.query` | `{sql, limit? = 1000}` | `{columns, rows, truncated, index}`; one read-only `SELECT` on the open project's index (rebuilt first when the world changed); anything else is refused; at most 1000 rows; native only (in the browser an error says so) |
 
 - **Files.** A relative path is inside the root, an absolute path must lie inside it. Refused,
   each with a sentence that says why: no root set (the sentence names the flag,
@@ -249,6 +257,20 @@ in the file format.
   answer is an error that says a renderer is needed.
 - **Dirty.** The host knows whether the document changed since it was opened, saved or
   started (`Host::is_dirty`).
+- **Projects** (`docs/design/projects.md`). A project is a folder of text files: a pack
+  (`pack.json`), its prefabs (`prefabs/<id>.json`) and worlds (`worlds/<world>/world.json` and
+  `worlds/<world>/layers/<layer>.json`, one entity per line with a string `id` unique in its
+  pack), layered over the packs it depends on. Later packs change earlier ones by id: a prefab
+  file replaces the prefab, an entity replaces the entity with its id, `{"id", "removed": true}`
+  removes one, a layer file with `"replace": true` drops the earlier layer of its name, and
+  `world.json` fields merge field by field. A file of a pack that is a link leading out of its
+  folder, a path with `..`, truncated JSON, an id used twice in one pack, a missing pack and a
+  cycle are refused with a sentence that names the file or the chain. `file.new` and `file.open`
+  close the project. The index lives in `.gamecraft-index/` inside the project folder when that
+  is inside the write root (in memory otherwise); deleting it loses nothing. It is rebuilt
+  when the project opens, after `project.save` and before a `project.query` when the world
+  changed (`project.new`, `project.open` and `pack.add_dependency` cannot be part of an atomic
+  batch).
 
 ## MCP
 

@@ -393,7 +393,7 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "command_batch",
-            "description": "Runs up to 256 commands in order and returns {completed, failed, results: [{ok, result | error, ms}], ms}. stop_on_error (default true) stops at the first command that returns an error, and the batch is then an error (isError) with the report as its content. Not atomic: steps that ran stay applied, each its own undo step. terse reports {completed, failed, errors: [{step, error, ms}], last: {step, result, ms}, ms}. atomic: true makes it all or nothing: the first failure takes back every step (rolledBack: true), and a batch that succeeds is one undo step; file.new, file.open, edit.undo and edit.redo cannot be part of one.",
+            "description": "Runs up to 256 commands in order and returns {completed, failed, results: [{ok, result | error, ms}], ms}. stop_on_error (default true) stops at the first command that returns an error, and the batch is then an error (isError) with the report as its content. Not atomic: steps that ran stay applied, each its own undo step. terse reports {completed, failed, errors: [{step, error, ms}], last: {step, result, ms}, ms}. atomic: true makes it all or nothing: the first failure takes back every step (rolledBack: true), and a batch that succeeds is one undo step; file.new, file.open, project.new, project.open, pack.add_dependency, edit.undo and edit.redo cannot be part of one.",
             "inputSchema": {"type": "object", "properties": {
                 "steps": {"type": "array", "maxItems": MAX_BATCH_STEPS, "items": {"type": "object", "properties": {
                     "id": {"type": "string", "description": "A command id."},

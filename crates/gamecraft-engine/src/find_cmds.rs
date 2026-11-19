@@ -30,7 +30,7 @@ fn get_spec() -> CommandSpec {
         "entity.get",
         "Get Entity",
         "Everything about one entity of the current world (the running world while playing): \
-         its placement, its prefab and overrides, its parent and children, its effective \
+         its placement, its layer, its prefab and overrides, its parent and children, its effective \
          components, the ground beneath it, its health, and while playing a \
          character's body and stored input, its behaviour's state and its launcher's magazine.",
         vec![
@@ -44,7 +44,7 @@ fn get_spec() -> CommandSpec {
         &format!(
             "{{id, name, position, rotation_y_deg, scale, prefab: id | null, overrides: [...] \
              (its components that differ from its prefab's), parent: id | null, children: \
-             [ids], components: [...] (the effective ones), ground_height_m: \
+             [ids], layer: name | null (null: the world's default layer), components: [...] (the effective ones), ground_height_m: \
              number | null (null without ground beneath), height_above_ground_m: number | null, \
              body: null | {{velocity, grounded}} (a character while playing), input: null | \
              {{forward, right, yaw_deg, pitch_deg, run, jump, interact, fire}} (the input \
@@ -82,6 +82,7 @@ fn get(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
         "prefab": entity.prefab,
         "overrides": serde_json::to_value(world.overrides_of(id)).map_err(failed)?,
         "parent": entity.parent.map(|p| p.0),
+        "layer": entity.layer,
         "children": world.children(id).iter().map(|c| c.0).collect::<Vec<_>>(),
         "components": serde_json::to_value(&entity.components).map_err(failed)?,
         "ground_height_m": ground,

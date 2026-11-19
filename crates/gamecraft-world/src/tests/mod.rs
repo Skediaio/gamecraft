@@ -3,6 +3,7 @@
 mod combat;
 mod document;
 mod fuzz;
+mod layer;
 mod prefab;
 mod scenario;
 mod sun;
@@ -136,6 +137,7 @@ pub(crate) fn example_world() -> World {
                 color: [0.6, 0.5, 0.4],
                 solid: true,
             })],
+            layer: None,
         })
         .unwrap();
     assert_eq!(crate_id.0, 1);

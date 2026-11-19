@@ -45,7 +45,7 @@ pub const METHODS: &[Method] = &[
     Method {
         name: "batch",
         params: r#"{"steps": [{"command": string, "params": object = {}, "intent": string = not set}], "stopOnError": boolean = true, "terse": boolean = false, "atomic": boolean = false, "intent": string = not set}"#,
-        summary: "Runs up to 256 commands in order and returns {completed, failed, results: [{ok, result | error, ms}], ms}; with terse, {completed, failed, errors: [{step, error, ms}], last: {step, result, ms}, ms}. stopOnError stops at the first command that returns an error. Not a transaction: earlier steps stay applied, each its own undo step. atomic: true makes it all or nothing: the first failure takes back every step (rolledBack: true), and a batch that succeeds is one undo step; file.new, file.open, edit.undo and edit.redo cannot be part of one.",
+        summary: "Runs up to 256 commands in order and returns {completed, failed, results: [{ok, result | error, ms}], ms}; with terse, {completed, failed, errors: [{step, error, ms}], last: {step, result, ms}, ms}. stopOnError stops at the first command that returns an error. Not a transaction: earlier steps stay applied, each its own undo step. atomic: true makes it all or nothing: the first failure takes back every step (rolledBack: true), and a batch that succeeds is one undo step; file.new, file.open, project.new, project.open, pack.add_dependency, edit.undo and edit.redo cannot be part of one.",
     },
     Method {
         name: "methods",

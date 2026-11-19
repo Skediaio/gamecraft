@@ -1,0 +1,9 @@
+{
+  "gamecraft_layer": 1,
+  "entities": [
+    {"id":"patrol-alpha","name":"Patrol Alpha","position":[-45.0,-1.9644968509674072,-25.0],"rotation_y_deg":90.0,"scale":1.0,"prefab":"enemy-soldier","overrides":[{"type":"behaviour","mode":"patrol","route":[[-45.0,-25.0],[-5.0,-25.0]],"team":"red","view_range_m":120.0,"fov_deg":120.0,"engage_range_m":100.0,"aim_error_mrad":8.0,"reaction_s":1.0,"search_s":10.0}]},
+    {"id":"patrol-bravo","name":"Patrol Bravo","position":[60.0,6.583308696746826,-20.0],"rotation_y_deg":180.0,"scale":1.0,"prefab":"enemy-soldier","overrides":[{"type":"behaviour","mode":"patrol","route":[[60.0,-20.0],[60.0,-70.0]],"team":"red","view_range_m":120.0,"fov_deg":120.0,"engage_range_m":100.0,"aim_error_mrad":8.0,"reaction_s":1.0,"search_s":10.0}]},
+    {"id":"village-guard","name":"Village Guard","position":[-8.0,3.587519884109497,-58.0],"rotation_y_deg":0.0,"scale":1.0,"prefab":"enemy-soldier"},
+    {"id":"hill-sentry","name":"Hill Sentry","position":[90.0,10.069363594055176,-30.0],"rotation_y_deg":0.0,"scale":1.0,"prefab":"enemy-soldier"}
+  ]
+}

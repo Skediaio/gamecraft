@@ -1,0 +1,14 @@
+{
+  "gamecraft_pack": 1,
+  "id": "skirmish-night",
+  "name": "Skirmish at night",
+  "version": "0.1.0",
+  "depends": [
+    {
+      "id": "skirmish",
+      "path": "../skirmish/project"
+    }
+  ],
+  "worlds": [],
+  "license": "MIT"
+}

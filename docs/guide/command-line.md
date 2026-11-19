@@ -11,12 +11,13 @@ lists the subcommands, `gamecraft-cli <subcommand> --help` explains one.
 | Subcommand | What it does |
 |---|---|
 | `commands` | Lists every command: id, parameters, summary |
-| `run` | Opens or creates a world, runs commands and scripts, saves |
-| `info` | Prints a world file's state as JSON |
-| `render` | Draws a world file to a PNG (GPU) |
-| `play` | Plays a world file for a while and prints the state hash |
+| `run` | Opens or creates a world (a file or a project folder), runs commands and scripts, saves |
+| `info` | Prints a world file's (or a project's) state as JSON |
+| `render` | Draws a world file (or a project) to a PNG (GPU) |
+| `play` | Plays a world file (or a project) for a while and prints the state hash |
 | `replay` | Runs a journal of a play session again and compares its state hashes |
 | `new` | Writes an empty world file |
+| `project` | Makes, opens, describes, exports and queries a project folder (packs, layers, mods) |
 | `serve` | The JSON-lines protocol on stdin and stdout |
 | `mcp` | The MCP server on stdin and stdout |
 
@@ -143,6 +144,41 @@ gamecraft-cli new empty.gamecraft --name Empty --seed 3
 ```
 
 Writes an empty world and prints `{path, bytes, name, seed}`. It does not replace an existing file.
+
+## Projects: `project`
+
+A game bigger than a test valley lives in a **project**: a folder of text files
+([`design/projects.md`](../design/projects.md)). `pack.json` names the pack and what it depends
+on, `prefabs/<id>.json` holds one prefab each, and a world is `worlds/<world>/world.json` (terrain,
+environment, scenario) plus `worlds/<world>/layers/<layer>.json`, one entity per line, each with a
+string `id`. A mod is a pack that depends on the game and changes it by id; editing a game you
+depend on and saving writes the change into your own pack, never into the game.
+
+```sh
+# The Skirmish as a project, and its night mod layered over it.
+gamecraft-cli project info examples/skirmish/project
+gamecraft-cli project open examples/skirmish-night-mod
+# Make a project from a world file (one file per layer and prefab).
+gamecraft-cli project new my-skirmish --id my-skirmish --name "My skirmish" --world village \
+    --from examples/skirmish/world.gamecraft
+# One .gamecraft file of what a project resolves to.
+gamecraft-cli project export examples/skirmish-night-mod --out night.gamecraft
+# Ask the index: every enemy within 100 m of the houses.
+gamecraft-cli project query examples/skirmish/project \
+    "SELECT e.name, e.x, e.z FROM entities e JOIN entity_tags t ON t.entity_id = e.id
+     WHERE t.tag = 'enemy' AND (e.x - 4) * (e.x - 4) + (e.z + 54) * (e.z + 54) <= 100 * 100"
+```
+
+`run`, `play`, `info` and `render` take a project folder wherever they take a `.gamecraft` file
+(`gamecraft-cli play examples/skirmish/project --script examples/skirmish/playthrough.json`); the
+folder that holds the project is where its dependencies are found (`"path": "../skirmish/project"`
+in the night mod's `pack.json`). The index is a Turso database in `.gamecraft-index/` inside the
+project folder, rebuilt from the files and ignored by git; `project query` takes one `SELECT` on
+the tables `entities` (`id, key, name, layer, pack, prefab, parent, x, y, z, rotation_y_deg, scale,
+tags, components`), `entity_tags` (`entity_id, tag`), `entity_components` (`entity_id, type,
+data`) and `prefabs` (`id, name, pack, components, instances`), and refuses anything else. Over
+`serve` and `mcp` the same is `project.new`, `project.open`, `project.save`, `project.export`,
+`project.info`, `pack.add_dependency` and `project.query`.
 
 ## Servers: `serve` and `mcp`
 

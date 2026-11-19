@@ -16,6 +16,9 @@ gamecraft-world = { workspace = true }
 gamecraft-engine = { workspace = true }
 gamecraft-automation = { workspace = true }
 gamecraft-render = { workspace = true }
+# The project index (project.query) and the project type it is built from.
+gamecraft-project = { workspace = true }
+gamecraft-index = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
