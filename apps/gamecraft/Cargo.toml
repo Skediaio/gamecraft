@@ -24,10 +24,17 @@ winit = { workspace = true }
 serde_json = { workspace = true }
 web-time = { workspace = true }
 
+# Natively gilrs needs libudev's development files on Linux (`libudev-dev`, `systemd-devel`),
+# so it is opt-in: `--features native-gamepad`. In the browser it uses the Gamepad API.
+[features]
+native-gamepad = ["dep:gilrs"]
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = { workspace = true }
+gilrs = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+gilrs = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }

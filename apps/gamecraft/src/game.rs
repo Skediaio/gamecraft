@@ -9,6 +9,7 @@
 use crate::clock::FixedStep;
 use crate::input::{Action, Controls, InputRecord, Key};
 use crate::notices::Notices;
+use crate::pad::{PadConfig, PadMapper, PadState};
 use crate::pose::{Pose, Poses};
 use crate::rig::{self, ViewMode};
 use gamecraft_automation::{Access, Host, rpc};
@@ -26,6 +27,7 @@ pub const TRACER_STREAK_S: f64 = 0.04;
 pub struct Game {
     host: Host,
     controls: Controls,
+    pad: PadMapper,
     step: FixedStep,
     poses: Poses,
     view: ViewMode,
@@ -51,6 +53,7 @@ impl Game {
         let mut game = Game {
             host: Host::new(world, Access::default()),
             controls: Controls::default(),
+            pad: PadMapper::default(),
             step: FixedStep::new(DT),
             poses: Poses::default(),
             view: ViewMode::default(),
@@ -99,6 +102,25 @@ impl Game {
     /// window can do its part (Esc releases the pointer).
     pub fn key(&mut self, key: Key, pressed: bool) -> Option<Action> {
         let action = self.controls.key(key, pressed);
+        self.act(action);
+        action
+    }
+
+    /// A gamepad snapshot for a frame of `dt_s` seconds: sticks and buttons go into the same
+    /// controls as the keys (start pauses, select switches the view).
+    pub fn pad(&mut self, state: &PadState, dt_s: f64) {
+        for action in self.pad.update(state, dt_s, &mut self.controls) {
+            self.act(Some(action));
+        }
+    }
+
+    /// How gamepads are read (dead zone, look speed, inverted look).
+    pub fn set_pad_config(&mut self, config: PadConfig) {
+        self.pad.config = config;
+    }
+
+    /// Does what a window action asks of the game itself.
+    fn act(&mut self, action: Option<Action>) {
         match action {
             Some(Action::ToggleView) => self.view = self.view.toggled(),
             Some(Action::Restart) => self.restart(),
@@ -110,7 +132,6 @@ impl Game {
             }
             Some(Action::Release) | None => {}
         }
-        action
     }
 
     /// The mouse moved by `dx`, `dy` pixels while the pointer is locked.

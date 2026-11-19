@@ -8,7 +8,9 @@
 //! so stdout carries only replies.
 
 use crate::game::Game;
+use crate::gamepads::Pads;
 use crate::input::{Action, Key};
+use crate::pad::PadConfig;
 use crate::view::GameView;
 use gamecraft_render::Quality;
 use std::sync::Arc;
@@ -176,6 +178,10 @@ type Pending = std::rc::Rc<std::cell::RefCell<Option<Result<(Game, Gpu), String>
 struct App {
     quality: Quality,
     game: Option<Game>,
+    /// The gamepads; opened with the window.
+    pads: Option<Pads>,
+    /// How a pad is read (`--invert-look`).
+    pad_config: PadConfig,
     gpu: Option<Gpu>,
     window: Option<Arc<Window>>,
     /// Whether the pointer is locked to the window (mouse look).
@@ -194,10 +200,12 @@ struct App {
 }
 
 impl App {
-    fn new(quality: Quality, game: Option<Game>) -> App {
+    fn new(quality: Quality, game: Option<Game>, pad_config: PadConfig) -> App {
         App {
             quality,
             game,
+            pads: None,
+            pad_config,
             gpu: None,
             window: None,
             captured: false,
@@ -248,6 +256,10 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         self.serve_stdin();
         let Some(game) = &mut self.game else { return };
+        // Opened on the first frame: the browser reports pads only once the page is running.
+        let pads = self.pads.get_or_insert_with(Pads::new);
+        game.set_pad_config(self.pad_config);
+        game.pad(&pads.poll(), frame_s);
         let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             game.frame(frame_s);
         }));
@@ -447,7 +459,14 @@ impl ApplicationHandler for App {
 pub fn run_native(world: gamecraft_world::World, args: &crate::args::Args) -> Result<(), String> {
     let event_loop = EventLoop::new()
         .map_err(|e| format!("no window can be opened here ({e}); GameCraft needs a display"))?;
-    let mut app = App::new(args.quality, Some(Game::new(world)));
+    let mut app = App::new(
+        args.quality,
+        Some(Game::new(world)),
+        PadConfig {
+            invert_look: args.invert_look,
+            ..PadConfig::default()
+        },
+    );
     if args.stdin {
         app.stdin = Some(read_stdin());
     }
@@ -508,7 +527,14 @@ pub fn run_web() {
         None => Quality::default(),
     };
     match EventLoop::new() {
-        Ok(event_loop) => event_loop.spawn_app(App::new(quality, None)),
+        Ok(event_loop) => event_loop.spawn_app(App::new(
+            quality,
+            None,
+            PadConfig {
+                invert_look: crate::web::query("invert_look").is_some_and(|v| v != "0"),
+                ..PadConfig::default()
+            },
+        )),
         Err(e) => crate::web::fail("GameCraft could not start", &e.to_string()),
     }
 }

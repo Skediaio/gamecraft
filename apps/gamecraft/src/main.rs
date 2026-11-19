@@ -1,4 +1,4 @@
-//! `gamecraft [world.gamecraft] [--stdin] [--quality low|medium|high]`: the window natively;
+//! `gamecraft [world.gamecraft] [--stdin] [--quality low|medium|high] [--invert-look]`: the window natively;
 //! the same binary built for `wasm32-unknown-unknown` is the page Trunk serves.
 
 #[cfg(not(target_arch = "wasm32"))]

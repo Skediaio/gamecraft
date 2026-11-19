@@ -83,7 +83,8 @@ state hash, and a picture of each exists.
 Done 2026-11-18: `apps/gamecraft`, the window on winit and wgpu, native and in the browser
 (Trunk), with a fixed-step loop and interpolated display, keyboard and mouse to input records,
 first- and third-person cameras, lights drawn, and `--stdin` so an agent drives the window a
-person watches; a headless Chromium smoke test walks in the browser. Open: gamepad, the socket
+person watches; a headless Chromium smoke test walks in the browser. Gamepads since 2026-11-19 (in the browser always; natively behind the feature `native-gamepad`,
+which needs the system's libudev development files). Open: the socket
 control channel and `--bridge`, the hash proven equal in wasm, a real native window tried by a
 person.
 

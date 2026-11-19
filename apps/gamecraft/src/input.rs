@@ -121,6 +121,16 @@ pub struct Controls {
     fire: bool,
     yaw_deg: f64,
     pitch_deg: f64,
+    /// The gamepad's left stick, and whether it moved after the walking keys last changed
+    /// (the last device used owns the walking axes).
+    pad_forward: f64,
+    pad_right: f64,
+    pad_owns_walk: bool,
+    /// The gamepad's buttons, kept apart from the keys' so neither lets go of the other's.
+    pad_run: bool,
+    pad_jump: bool,
+    pad_interact: bool,
+    pad_fire: bool,
 }
 
 impl Controls {
@@ -138,6 +148,9 @@ impl Controls {
 
     /// A key went down (`pressed`) or up. Returns the window's action for a window key's press.
     pub fn key(&mut self, key: Key, pressed: bool) -> Option<Action> {
+        if pressed && matches!(key, Key::Forward | Key::Back | Key::Left | Key::Right) {
+            self.pad_owns_walk = false;
+        }
         let held = match key {
             Key::Forward => &mut self.forward,
             Key::Back => &mut self.back,
@@ -181,6 +194,44 @@ impl Controls {
         self.fire = held;
     }
 
+    /// The gamepad's left stick, already past its dead zone: `forward` and `right`, -1 to 1.
+    /// A stick off centre owns the walking axes until a walking key is pressed; at rest it
+    /// leaves them to the keys.
+    pub fn pad_move(&mut self, forward: f64, right: f64) {
+        let clean = |v: f64| {
+            if v.is_finite() {
+                v.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        self.pad_forward = clean(forward);
+        self.pad_right = clean(right);
+        self.pad_owns_walk = self.pad_forward != 0.0 || self.pad_right != 0.0;
+    }
+
+    /// The gamepad's buttons as they are held now. A jump or interact that just went down is a
+    /// tap, like a key's.
+    pub fn pad_buttons(&mut self, run: bool, jump: bool, interact: bool, fire: bool) {
+        self.jump_tapped |= jump && !self.pad_jump;
+        self.interact_tapped |= interact && !self.pad_interact;
+        self.pad_run = run;
+        self.pad_jump = jump;
+        self.pad_interact = interact;
+        self.pad_fire = fire;
+    }
+
+    /// Turns the view by `dyaw_deg` (counter-clockwise positive) and tilts it by `dpitch_deg`
+    /// (up positive); the pitch stays within 85 degrees.
+    pub fn turn(&mut self, dyaw_deg: f64, dpitch_deg: f64) {
+        if dyaw_deg.is_finite() {
+            self.yaw_deg = wrap_deg(self.yaw_deg + dyaw_deg);
+        }
+        if dpitch_deg.is_finite() {
+            self.pitch_deg = (self.pitch_deg + dpitch_deg).clamp(-PITCH_LIMIT_DEG, PITCH_LIMIT_DEG);
+        }
+    }
+
     /// Faces `yaw_deg` (a restart puts the character back as it stood).
     pub fn face(&mut self, yaw_deg: f64) {
         if yaw_deg.is_finite() {
@@ -201,15 +252,20 @@ impl Controls {
     /// The input record of the keys held and tapped and the facing.
     pub fn record(&self) -> InputRecord {
         let axis = |plus: bool, minus: bool| f64::from(u8::from(plus)) - f64::from(u8::from(minus));
+        let (forward, right) = if self.pad_owns_walk {
+            (self.pad_forward, self.pad_right)
+        } else {
+            (axis(self.forward, self.back), axis(self.right, self.left))
+        };
         InputRecord {
-            forward: axis(self.forward, self.back),
-            right: axis(self.right, self.left),
+            forward,
+            right,
             yaw_deg: self.yaw_deg,
-            run: self.run,
-            jump: self.jump || self.jump_tapped,
-            interact: self.interact || self.interact_tapped,
+            run: self.run || self.pad_run,
+            jump: self.jump || self.pad_jump || self.jump_tapped,
+            interact: self.interact || self.pad_interact || self.interact_tapped,
             pitch_deg: self.pitch_deg,
-            fire: self.fire,
+            fire: self.fire || self.pad_fire,
         }
     }
 

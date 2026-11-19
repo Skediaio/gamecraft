@@ -12,6 +12,7 @@ second, at most four ticks per frame; the picture is interpolated between the la
 cargo run -p gamecraft --release                      # the engine's example valley
 cargo run -p gamecraft --release -- my.gamecraft      # a world file
 cargo run -p gamecraft --release -- --quality low     # low, medium (default) or high
+cargo run -p gamecraft --release -- --invert-look     # a gamepad's right stick up looks down
 ```
 
 The first character in id order is the player. Keys:
@@ -29,6 +30,24 @@ The first character in id order is the player. Keys:
 | F1 | first or third person |
 | F5 | restart the simulation from the document |
 | P | pause |
+
+### Gamepad
+
+A connected gamepad plays the same character through the same input records as the keyboard
+(natively, and in the browser through its Gamepad API: press a button once so the page sees the
+pad). The keyboard and the pad may be used together: the last one used owns the walking axes,
+and the right stick adds to the mouse's look.
+
+| Pad | Does |
+|---|---|
+| left stick | walk (radial dead zone of 0.2) |
+| right stick | look at up to 150 degrees per second, whatever the frame rate; `--invert-look` (natively) or `?invert_look=1` (browser) flips up and down |
+| left stick click, or left trigger held | run |
+| south button (A, cross) | jump |
+| west button (X, square) | interact |
+| right trigger | fire |
+| start | pause |
+| select | first or third person |
 
 New scenario messages and objective changes are printed to stderr, and the newest message is
 in the window's title.
@@ -65,8 +84,8 @@ trunk serve --release                 # http://127.0.0.1:8080
 trunk build --release                 # or a static build in apps/gamecraft/dist
 ```
 
-The page takes two query parameters: `?world=<url>` fetches a `.gamecraft` file (same origin,
-or one that allows it), otherwise the example world opens; `?quality=low|medium|high`. Click
+The page takes three query parameters: `?world=<url>` fetches a `.gamecraft` file (same origin,
+or one that allows it), otherwise the example world opens; `?quality=low|medium|high`; `?invert_look=1` inverts a gamepad's look. Click
 the canvas to look around with the mouse; the keys are the same as natively, and messages go
 to the browser's console. When the browser offers no WebGPU, the page says so and how to turn
 it on.

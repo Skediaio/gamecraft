@@ -661,3 +661,45 @@ fn firing_with_the_mouse_puts_tracers_in_the_air_and_puffs_where_they_hit() {
     game.restart();
     assert_eq!(game.effects(), gamecraft_render::Effects::default());
 }
+
+#[test]
+fn invert_look_is_a_flag() {
+    assert!(parse(&["--invert-look"]).unwrap().invert_look);
+    assert!(!parse(&[]).unwrap().invert_look);
+}
+
+#[test]
+fn the_left_stick_walks_the_player_north_and_start_pauses() {
+    use crate::pad::PadState;
+    let mut game = Game::new(example_world());
+    let scout = game.player().unwrap();
+    let start = game
+        .session()
+        .current_world()
+        .entity(scout)
+        .unwrap()
+        .position;
+    let stick = PadState {
+        left_y: 1.0,
+        ..PadState::default()
+    };
+    for _ in 0..60 {
+        game.pad(&stick, 1.0 / 60.0);
+        game.frame(1.0 / 60.0);
+    }
+    let end = game
+        .session()
+        .current_world()
+        .entity(scout)
+        .unwrap()
+        .position;
+    assert!(start[2] - end[2] > 0.5, "{start:?} {end:?}");
+    game.pad(
+        &PadState {
+            start: true,
+            ..stick
+        },
+        1.0 / 60.0,
+    );
+    assert!(game.is_paused());
+}

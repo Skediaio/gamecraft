@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 /// The usage, as `--help` prints it.
 pub const USAGE: &str = "\
-Usage: gamecraft [world.gamecraft] [--stdin] [--quality low|medium|high]
+Usage: gamecraft [world.gamecraft] [--stdin] [--quality low|medium|high] [--invert-look]
 
 Opens a window in which you walk the world's first character (by id). Without a world, the
 engine's example valley opens.
@@ -13,13 +13,16 @@ engine's example valley opens.
   --stdin            read JSON-lines requests on stdin (the protocol of `gamecraft-cli serve`),
                      run them between frames and answer on stdout
   --quality <q>      live frames' effects: low, medium (default) or high
+  --invert-look      a gamepad's right stick pushed up looks down
   --help             print this
 
 Keys: W/S forward and back, A/D strafe, Shift run, Space jump, E interact, mouse look (click
-the window to lock the pointer, Esc releases it), F1 first or third person, F5 restart, P pause.";
+the window to lock the pointer, Esc releases it), F1 first or third person, F5 restart, P pause.
+Gamepad: left stick walks, right stick looks, stick click or left trigger runs, south button
+jumps, west interacts, right trigger fires, start pauses, select switches the view.";
 
 /// The flags it knows, for the nearest name in an error.
-const FLAGS: [&str; 3] = ["--stdin", "--quality", "--help"];
+const FLAGS: [&str; 4] = ["--stdin", "--quality", "--invert-look", "--help"];
 
 /// What the command line asks for.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -30,6 +33,8 @@ pub struct Args {
     pub stdin: bool,
     /// The live frames' quality.
     pub quality: Quality,
+    /// A gamepad's right stick pushed up looks down.
+    pub invert_look: bool,
     /// Print the usage and stop.
     pub help: bool,
 }
@@ -42,6 +47,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--stdin" => out.stdin = true,
+            "--invert-look" => out.invert_look = true,
             "--help" | "-h" => out.help = true,
             "--quality" => {
                 let value = args
