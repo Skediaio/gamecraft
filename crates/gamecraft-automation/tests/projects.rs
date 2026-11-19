@@ -29,7 +29,7 @@ fn files(dir: &Path) -> BTreeMap<String, String> {
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/");
-            if rel.starts_with(".gamecraft-index") {
+            if rel.starts_with(".gamecraft-index") || rel.contains("/terrain/cache") {
                 continue;
             }
             if path.is_dir() {

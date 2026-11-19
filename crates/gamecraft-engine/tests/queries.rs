@@ -25,6 +25,7 @@ fn flat() -> Session {
         size_m: 100.0,
         cell_m: 1.0,
         source: TerrainSource::Flat { height_m: 0.0 },
+        ..Default::default()
     });
     Session::new(w)
 }

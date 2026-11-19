@@ -12,6 +12,7 @@ fn noise_terrain(size_m: f64, cell_m: f64) -> Terrain {
             octaves: 5,
             roughness: 0.5,
         },
+        ..Default::default()
     }
 }
 
@@ -47,6 +48,7 @@ fn flat_terrain_is_constant() {
         size_m: 64.0,
         cell_m: 4.0,
         source: TerrainSource::Flat { height_m: 3.5 },
+        ..Default::default()
     };
     let hf = t.build().unwrap();
     assert!(hf.heights().iter().all(|&h| h == 3.5));
@@ -328,6 +330,7 @@ fn oversized_terrain_is_an_error_not_an_allocation() {
         size_m: 16384.0,
         cell_m: 0.25,
         source: TerrainSource::Flat { height_m: 0.0 },
+        ..Default::default()
     };
     match t.build() {
         Err(WorldError::TerrainTooLarge { fitting_cell_m, .. }) => assert_eq!(fitting_cell_m, 8.0),
@@ -338,6 +341,7 @@ fn oversized_terrain_is_an_error_not_an_allocation() {
         size_m: 4096.0,
         cell_m: 2.0,
         source: TerrainSource::Flat { height_m: 0.0 },
+        ..Default::default()
     };
     let hf = t.build().unwrap();
     assert_eq!(hf.cols(), 2049);

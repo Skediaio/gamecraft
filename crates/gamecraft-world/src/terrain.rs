@@ -8,6 +8,10 @@ use crate::limits::{
     NOISE_ROUGHNESS_MIN, TERRAIN_CELL_MAX_M, TERRAIN_CELL_MIN_M, TERRAIN_MAX_SAMPLES_PER_SIDE,
     TERRAIN_MULTIPLE_TOLERANCE, TERRAIN_SIZE_MAX_M, TERRAIN_SIZE_MIN_M,
 };
+use crate::sculpt::{
+    self, Grid, PaintRule, Rect, TerrainEdit, TerrainLayer, WEIGHT_SLOTS, eval_heights,
+    eval_weights,
+};
 use gamecraft_math::noise::fbm2;
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +19,8 @@ use serde::{Deserialize, Serialize};
 const NOISE_LACUNARITY: f64 = 2.0;
 
 /// The terrain recipe: a square of side `size_m` centred on the origin (x and z from
-/// `-size_m / 2` to `+size_m / 2`), sampled every `cell_m`.
+/// `-size_m / 2` to `+size_m / 2`), sampled every `cell_m`, its heights from `source` changed
+/// by `edits` in order, and its painted `layers` (see [`crate::sculpt`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Terrain {
@@ -25,6 +30,16 @@ pub struct Terrain {
     pub cell_m: f64,
     /// Where the heights come from.
     pub source: TerrainSource,
+    /// The painted materials, at most 8; the first covers what nothing else paints. None: the
+    /// renderer shades by slope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<TerrainLayer>,
+    /// Automatic paint rules, applied in order before the paint edits.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paint_rules: Vec<PaintRule>,
+    /// Sculpt and paint edits, applied in order over the source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edits: Vec<TerrainEdit>,
 }
 
 fn default_relief_m() -> f64 {
@@ -75,12 +90,47 @@ pub enum TerrainSource {
     },
 }
 
+impl Default for Terrain {
+    /// Level ground at 0 m, 256 m across at 2 m cells, without layers, rules or edits.
+    fn default() -> Terrain {
+        Terrain::new(256.0, 2.0, TerrainSource::Flat { height_m: 0.0 })
+    }
+}
+
 impl Terrain {
+    /// A terrain of `source` without layers, rules or edits.
+    pub fn new(size_m: f64, cell_m: f64, source: TerrainSource) -> Terrain {
+        Terrain {
+            size_m,
+            cell_m,
+            source,
+            layers: Vec::new(),
+            paint_rules: Vec::new(),
+            edits: Vec::new(),
+        }
+    }
+
     /// Checks the terrain's limits (see [`crate::limits`]): every number finite and in range,
-    /// `size_m` a whole multiple of `cell_m`, and at most 2049 samples per side. Never
-    /// allocates.
+    /// `size_m` a whole multiple of `cell_m`, at most 2049 samples per side, and the layers,
+    /// paint rules and edits (every layer they name exists, and building them stays within
+    /// [`crate::limits::TERRAIN_EDIT_WORK_MAX`]). Never allocates more than the edit list.
     pub fn validate(&self) -> Result<(), WorldError> {
-        self.cells().map(|_| ())
+        self.grid().map(|_| ())
+    }
+
+    /// The grid, after checking every rule.
+    pub(crate) fn grid(&self) -> Result<Grid, WorldError> {
+        let cells = self.cells()?;
+        let samples = cells.saturating_add(1);
+        let half = self.size_m / 2.0;
+        let grid = Grid {
+            cols: samples,
+            rows: samples,
+            cell: self.cell_m,
+            min: [-half, -half],
+        };
+        sculpt::validate(&self.layers, &self.paint_rules, &self.edits, &grid)?;
+        Ok(grid)
     }
 
     /// The number of cells per side, after checking every rule.
@@ -178,8 +228,8 @@ impl Terrain {
         Ok(cells as usize)
     }
 
-    /// The height at world `x`, `z` according to the recipe (no grid involved).
-    fn height(&self, x: f64, z: f64) -> f64 {
+    /// The height at world `x`, `z` according to the source (no grid, no edits).
+    pub(crate) fn source_height(&self, x: f64, z: f64) -> f64 {
         match self.source {
             TerrainSource::Flat { height_m } => height_m,
             TerrainSource::Noise {
@@ -202,32 +252,126 @@ impl Terrain {
         }
     }
 
-    /// Builds the height field: validates, then samples the recipe at every grid node.
+    /// Builds the height field: validates, then samples the source at every grid node, applies
+    /// the edits in order and derives the layer weights.
     ///
     /// Node (col, row) lies at world `x = -size_m / 2 + col * cell_m`,
     /// `z = -size_m / 2 + row * cell_m`. The heights depend on the world coordinates only, so
     /// a larger terrain extends the same land.
     pub fn build(&self) -> Result<HeightField, WorldError> {
-        let cells = self.cells()?;
-        let samples = cells.saturating_add(1);
-        let half = self.size_m / 2.0;
-        let min = [-half, -half];
-        let mut heights = Vec::with_capacity(samples.saturating_mul(samples));
-        for row in 0..samples {
-            let z = min[1] + row as f64 * self.cell_m;
-            for col in 0..samples {
-                let x = min[0] + col as f64 * self.cell_m;
-                heights.push(self.height(x, z) as f32);
+        let grid = self.grid()?;
+        let all = grid.all();
+        let heights: Vec<f32> =
+            eval_heights(&self.edits, &grid, all, |x, z| self.source_height(x, z))
+                .into_iter()
+                .map(|h| h as f32)
+                .collect();
+        let mut field = HeightField {
+            cols: grid.cols,
+            rows: grid.rows,
+            cell_m: grid.cell,
+            min: grid.min,
+            heights,
+            layers: 0,
+            weights: Vec::new(),
+        };
+        if !self.layers.is_empty() {
+            field.layers = self.layers.len();
+            field.weights = vec![[0u8; WEIGHT_SLOTS]; field.heights.len()];
+            // Tile by tile: the weights are worked out in f64 shares, eight per sample.
+            for tile in crate::tiles::all_tiles(&grid) {
+                let rect = crate::tiles::tile_rect(&grid, tile);
+                let w = eval_weights(
+                    &self.layers,
+                    &self.paint_rules,
+                    &self.edits,
+                    &grid,
+                    &field.heights,
+                    rect,
+                );
+                field.put_weights(rect, &w);
             }
         }
-        Ok(HeightField {
-            cols: samples,
-            rows: samples,
-            cell_m: self.cell_m,
-            min,
-            heights,
+        Ok(field)
+    }
+
+    /// The height field of this terrain, rebuilt from `field`, the height field of `previous`,
+    /// in the tiles the difference touches only (see [`crate::tiles`]). Bit for bit what
+    /// [`Terrain::build`] gives. A different size, cell or source, or a `field` of another
+    /// grid, builds everything.
+    pub fn rebuild(&self, previous: &Terrain, field: &HeightField) -> Result<Rebuilt, WorldError> {
+        let grid = self.grid()?;
+        let tiles = crate::tiles::tile_count(&grid);
+        let total = tiles[0].saturating_mul(tiles[1]);
+        let same_grid = self.size_m == previous.size_m
+            && self.cell_m == previous.cell_m
+            && self.source == previous.source
+            && field.cols == grid.cols
+            && field.rows == grid.rows
+            && field.cell_m == grid.cell
+            && field.min == grid.min
+            && field.layers == previous.layers.len();
+        if !same_grid {
+            return Ok(Rebuilt {
+                field: self.build()?,
+                tiles: crate::tiles::all_tiles(&grid),
+                tiles_total: total,
+            });
+        }
+        let dirty = crate::tiles::dirty(previous, self, &grid);
+        let mut out = field.clone();
+        for &tile in &dirty.heights {
+            let rect = crate::tiles::tile_rect(&grid, tile);
+            let h = eval_heights(&self.edits, &grid, rect, |x, z| self.source_height(x, z));
+            out.put_heights(rect, &h);
+        }
+        if self.layers.is_empty() {
+            out.layers = 0;
+            out.weights = Vec::new();
+        } else {
+            if out.weights.len() != out.heights.len() {
+                out.weights = vec![[0u8; WEIGHT_SLOTS]; out.heights.len()];
+            }
+            out.layers = self.layers.len();
+            for &tile in &dirty.weights {
+                let rect = crate::tiles::tile_rect(&grid, tile);
+                let w = eval_weights(
+                    &self.layers,
+                    &self.paint_rules,
+                    &self.edits,
+                    &grid,
+                    &out.heights,
+                    rect,
+                );
+                out.put_weights(rect, &w);
+            }
+        }
+        let mut tiles: Vec<[usize; 2]> = dirty.heights;
+        tiles.extend(dirty.weights);
+        tiles.sort_unstable();
+        tiles.dedup();
+        Ok(Rebuilt {
+            field: out,
+            tiles,
+            tiles_total: total,
         })
     }
+
+    /// The index of the layer named `name`.
+    pub fn layer_index(&self, name: &str) -> Option<usize> {
+        self.layers.iter().position(|l| l.name == name)
+    }
+}
+
+/// A height field rebuilt from an earlier one ([`Terrain::rebuild`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rebuilt {
+    /// The new height field.
+    pub field: HeightField,
+    /// The tiles `[x, z]` whose heights or weights were computed again, in order.
+    pub tiles: Vec<[usize; 2]>,
+    /// How many tiles the terrain has.
+    pub tiles_total: usize,
 }
 
 /// The ground as a grid of height samples, derived from a [`Terrain`] by [`Terrain::build`].
@@ -248,6 +392,10 @@ pub struct HeightField {
     cell_m: f64,
     min: [f64; 2],
     heights: Vec<f32>,
+    /// How many layers the weights hold (0: no weights).
+    layers: usize,
+    /// Per sample the weights of up to eight layers, summing to 255; empty without layers.
+    weights: Vec<[u8; WEIGHT_SLOTS]>,
 }
 
 /// Where a point falls in the grid: its cell and its position inside it, 0 to 1 per axis.
@@ -309,6 +457,73 @@ impl HeightField {
         }
         let index = row.checked_mul(self.cols)?.checked_add(col)?;
         self.heights.get(index).copied()
+    }
+
+    /// How many painted layers the terrain has (0: none, the weights are empty).
+    pub fn layer_count(&self) -> usize {
+        self.layers
+    }
+
+    /// Per sample, row-major like [`HeightField::heights`], the weights of the terrain's
+    /// layers (unused slots 0), summing to 255. Empty when the terrain has no layers.
+    pub fn weights(&self) -> &[[u8; WEIGHT_SLOTS]] {
+        &self.weights
+    }
+
+    /// The layer weights of sample (`col`, `row`); `None` outside the grid or without layers.
+    pub fn weight(&self, col: usize, row: usize) -> Option<[u8; WEIGHT_SLOTS]> {
+        if col >= self.cols || row >= self.rows {
+            return None;
+        }
+        let index = row.checked_mul(self.cols)?.checked_add(col)?;
+        self.weights.get(index).copied()
+    }
+
+    /// The layer weights at world `x`, `z`: those of the nearest sample. `None` outside the
+    /// terrain, for non-finite input or without layers.
+    pub fn weight_at(&self, x: f64, z: f64) -> Option<[u8; WEIGHT_SLOTS]> {
+        let p = self.locate(x, z)?;
+        let col = p.col + usize::from(p.fu >= 0.5);
+        let row = p.row + usize::from(p.fv >= 0.5);
+        self.weight(col, row)
+    }
+
+    /// Writes `values` (row-major over `rect`) into the heights.
+    pub(crate) fn put_heights(&mut self, rect: Rect, values: &[f64]) {
+        let cols = self.cols;
+        for ((c, r), v) in rect_samples(rect).zip(values) {
+            if let Some(slot) = self.heights.get_mut(r * cols + c) {
+                *slot = *v as f32;
+            }
+        }
+    }
+
+    /// Writes `values` (row-major over `rect`) into the weights.
+    pub(crate) fn put_weights(&mut self, rect: Rect, values: &[[u8; WEIGHT_SLOTS]]) {
+        let cols = self.cols;
+        for ((c, r), v) in rect_samples(rect).zip(values) {
+            if let Some(slot) = self.weights.get_mut(r * cols + c) {
+                *slot = *v;
+            }
+        }
+    }
+
+    /// An empty field of `grid` with `layers` layers, to fill tile by tile.
+    pub(crate) fn blank(grid: &Grid, layers: usize) -> HeightField {
+        let n = grid.cols.saturating_mul(grid.rows);
+        HeightField {
+            cols: grid.cols,
+            rows: grid.rows,
+            cell_m: grid.cell,
+            min: grid.min,
+            heights: vec![0.0; n],
+            layers,
+            weights: if layers == 0 {
+                Vec::new()
+            } else {
+                vec![[0u8; WEIGHT_SLOTS]; n]
+            },
+        }
     }
 
     /// The lowest and highest sample, metres.
@@ -474,6 +689,11 @@ impl HeightField {
         }
         None
     }
+}
+
+/// The samples of `rect`, row by row.
+pub(crate) fn rect_samples(rect: Rect) -> impl Iterator<Item = (usize, usize)> {
+    (rect.r0..=rect.r1).flat_map(move |r| (rect.c0..=rect.c1).map(move |c| (c, r)))
 }
 
 /// Appends the parameters `t` in `[t0, t1]` where `w0 + dw * t` is a whole number.

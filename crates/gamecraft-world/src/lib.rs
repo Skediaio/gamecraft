@@ -9,8 +9,10 @@
 //! range when one is broken.
 //!
 //! Derived data is rebuilt from the document, never stored in it: [`Terrain::build`] turns the
-//! terrain recipe into a [`HeightField`] that answers ground height, normal and ray queries
-//! over exactly the triangles the renderer draws.
+//! terrain recipe (its source, then its sculpt and paint edits, [`sculpt`]) into a
+//! [`HeightField`] that answers ground height, normal and ray queries over exactly the
+//! triangles the renderer draws, with the painted layers' weights; [`Terrain::rebuild`] redoes
+//! only the tiles a change touches and [`tiles`] keeps resolved tiles as binary files.
 //!
 //! No GPU, no files, no clock: everything here is deterministic. Conventions: metres, Y up,
 //! the ground plane is x and z, north is -Z and east is +X; an entity's position is its base.
@@ -23,7 +25,9 @@ mod error;
 pub mod limits;
 mod prefab;
 mod scenario;
+pub mod sculpt;
 mod terrain;
+pub mod tiles;
 mod world;
 
 #[cfg(test)]
@@ -41,5 +45,7 @@ pub use scenario::{
     CompareOp, Condition, EntityRef, Objective, ObjectiveStatus, Step, TAG_PREFIX, Trigger,
     VarValue, When,
 };
-pub use terrain::{HeightField, Terrain, TerrainSource};
+pub use sculpt::{PaintRule, TerrainEdit, TerrainLayer, is_terrain_layer_name};
+pub use terrain::{HeightField, Rebuilt, Terrain, TerrainSource};
+pub use tiles::CachedBuild;
 pub use world::{FORMAT_VERSION, World};

@@ -139,7 +139,10 @@ worlds split into layer files with one entity per line, prefab files, packs laye
 mod changes a game, saves that write each change back to the file it came from (and edits to a
 dependency into the mod), `project.*` commands and `gamecraft-cli project`, and the Turso index
 with read-only SQL (`project.query`). Example: `examples/skirmish/project` and the mod
-`examples/skirmish-night-mod`.
+`examples/skirmish-night-mod`. Terrain editing (2026-11-19): sculpting (raise, lower,
+flatten, smooth, ramp, noise) and painted material layers with slope and height rules, as edits
+over the recipe that rebuild only the tiles they touch, a binary tile cache in projects, terrains
+of 4 km at 2 m (built in about 2 s, a crater in 45 ms).
 
 
 Worlds of real size, made of reusable parts, by anyone.

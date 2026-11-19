@@ -5,7 +5,7 @@ use crate::fields::{PROJECT_KEYS, merge};
 use crate::layer::{Entry, LayerEntity};
 use crate::pack::{Pack, PrefabEntry};
 use crate::paths::layer_path;
-use gamecraft_world::{EntityId, Prefab, World, WorldError};
+use gamecraft_world::{EntityId, Prefab, TerrainEdit, World, WorldError};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
@@ -34,6 +34,8 @@ pub(crate) struct Resolved {
     pub slots: Vec<Slot>,
     /// Removals of ids no earlier pack defines.
     pub warnings: Vec<String>,
+    /// The terrain edits of the last pack with a `terrain/edits.json`, and that file.
+    pub edits: Option<(Vec<TerrainEdit>, String)>,
 }
 
 impl Resolved {
@@ -108,6 +110,9 @@ pub(crate) fn resolve(packs: &[&Pack], world: &str) -> Result<Resolved, ProjectE
             continue;
         };
         r.has_world = true;
+        if let Some(edits) = &dir.edits {
+            r.edits = Some((edits.clone(), pack.file(&crate::terrain::edits_path(world))));
+        }
         if let Some(fields) = &dir.fields {
             merge(&mut r.fields, fields);
             for key in fields.keys() {
@@ -218,6 +223,25 @@ pub(crate) fn build_world(r: &Resolved, world_name: &str) -> Result<World, Proje
     for key in PROJECT_KEYS {
         doc.remove(key);
     }
+    if let Some((edits, file)) = &r.edits {
+        match doc.get_mut("terrain") {
+            Some(Value::Object(terrain)) => {
+                let list = serde_json::to_value(edits).map_err(|e| {
+                    ProjectError::in_file(file, format!("cannot read the edits: {e}"))
+                })?;
+                terrain.insert("edits".into(), list);
+            }
+            _ if edits.is_empty() => {}
+            _ => {
+                return Err(ProjectError::in_file(
+                    file,
+                    format!(
+                        "the world `{world_name}` has no terrain, so it has no terrain edits;                          add a terrain to its world.json or remove this file"
+                    ),
+                ));
+            }
+        }
+    }
     doc.entry("name")
         .or_insert_with(|| Value::String(world_name.to_string()));
     doc.insert("gamecraft".into(), json!(gamecraft_world::FORMAT_VERSION));
@@ -228,10 +252,19 @@ pub(crate) fn build_world(r: &Resolved, world_name: &str) -> Result<World, Proje
     let text = Value::Object(doc).to_string();
     World::from_json(&text).map_err(|e| {
         let packs: Vec<&str> = r.field_packs.values().map(String::as_str).collect();
+        let edits_file = r
+            .edits
+            .as_ref()
+            .filter(|_| is_edit_error(&e))
+            .map(|(_, f)| f);
         match entity_of(&e).and_then(|id| r.slots.get(id.0.saturating_sub(1) as usize)) {
             Some(slot) => {
                 ProjectError::in_file(&slot.file, format!("the entity `{}`: {e}", slot.key))
             }
+            None if edits_file.is_some() => ProjectError::in_file(
+                edits_file.map_or("", String::as_str),
+                format!("the world `{world_name}`: {e}"),
+            ),
             None if packs.is_empty() => {
                 ProjectError::new(format!("the world `{world_name}` is not valid: {e}"))
             }
@@ -241,6 +274,11 @@ pub(crate) fn build_world(r: &Resolved, world_name: &str) -> Result<World, Proje
             )),
         }
     })
+}
+
+/// Whether an error of the world document is about a terrain edit.
+fn is_edit_error(e: &WorldError) -> bool {
+    matches!(e, WorldError::Invalid { field, .. } if field.starts_with("terrain.edits"))
 }
 
 /// The entity an error of the world document is about.

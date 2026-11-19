@@ -33,6 +33,8 @@ pub(crate) struct OpenProject {
     pub index: Option<Box<dyn ProjectIndex>>,
     /// The view revision the index was built at.
     pub indexed: Option<u64>,
+    /// The terrain tiles the cache folder holds, by key, as last written or checked.
+    pub terrain_keys: crate::terrain_cache::Keys,
 }
 
 /// The specs of this module.
@@ -66,7 +68,7 @@ pub(crate) fn project_specs() -> Vec<CommandSpec> {
                 )
                 .default(json!("main")),
             ],
-            "{path, id, world, files: [paths written], index}",
+            "{path, id, world, files: [paths written], index, terrain}",
             json!({"path": "valley", "id": "valley", "name": "Green valley"}),
         ),
         host_spec(
@@ -76,9 +78,11 @@ pub(crate) fn project_specs() -> Vec<CommandSpec> {
              dependencies (a dependency's `path` relative to the pack that names it, else the \
              project's packs/<id>), layers the packs into one world and makes it the document, \
              with a new history; a running simulation stops. Remembers which file every \
-             entity, prefab and world field came from, and builds the index. A pack that is \
-             missing, a cycle, a file that is not valid or a link out of a pack is an error, \
-             and the session stays as it was.",
+             entity, prefab and world field came from, and builds the index. The terrain is \
+             built from the root pack's tile cache (worlds/<world>/terrain/cache, ignored by \
+             git): current tiles are read, missing or stale ones built (and written when the \
+             folder is inside the write root). A pack that is missing, a cycle, a file that is \
+             not valid or a link out of a pack is an error, and the session stays as it was.",
             vec![
                 param(
                     "path",
@@ -92,7 +96,8 @@ pub(crate) fn project_specs() -> Vec<CommandSpec> {
                     "The world to open; the root pack's first world when left out.",
                 ),
             ],
-            "{path, root, world, worlds, packs: [ids in load order], entities, warnings, index}",
+            "{path, root, world, worlds, packs: [ids in load order], entities, warnings, index, \
+             terrain: null | {tiles, from_cache, built, written, cache, problem, ms}}",
             json!({"path": "skirmish-night-mod"}),
         ),
         host_spec(
@@ -101,11 +106,13 @@ pub(crate) fn project_specs() -> Vec<CommandSpec> {
             "Writes what changed in the document (never the running world) since the project \
              was opened or saved, each change to the file it belongs to in the root pack: one \
              line of a layer file for an edited entity, a prefab file, world.json as a patch \
-             over the dependencies. A change to something a dependency brought is written to \
-             the root pack as an override or a removal, never to the dependency. Nothing \
-             changed: nothing is written. Needs the project folder inside the write root.",
+             over the dependencies, terrain/edits.json for the terrain's edits. A change to \
+             something a dependency brought is written to the root pack as an override or a \
+             removal, never to the dependency. Nothing changed: nothing is written. The terrain \
+             tiles whose recipe changed are written to the tile cache. Needs the project folder \
+             inside the write root.",
             vec![],
-            "{path, written: [paths], removed: [paths], unchanged}",
+            "{path, written: [paths], removed: [paths], unchanged, terrain_tiles_written}",
             json!({}),
         ),
         host_spec(
@@ -247,8 +254,9 @@ fn writable(access: &Access, dir: &Path) -> bool {
 }
 
 /// Reads the files of the pack in `dir` (resolved, inside `real_root`). Only `pack.json`,
-/// `prefabs/*.json`, `worlds/*/world.json` and `worlds/*/layers/*.json` are read; a file or
-/// folder that is a link leading out of the pack is refused.
+/// `prefabs/*.json`, `worlds/*/world.json`, `worlds/*/layers/*.json` and
+/// `worlds/*/terrain/edits.json` are read (the terrain's tile cache is read when the world is
+/// built); a file or folder that is a link leading out of the pack is refused.
 fn read_pack(dir: &Path, budget: &mut u64) -> Result<PackSource, String> {
     let mut source = PackSource {
         location: dir.display().to_string(),
@@ -308,6 +316,9 @@ fn read_pack(dir: &Path, budget: &mut u64) -> Result<PackSource, String> {
         }
         for name in json_files(&dir.join(&base).join("layers"))? {
             read(&format!("{base}/layers/{name}"), &mut source)?;
+        }
+        if dir.join(&base).join("terrain").join("edits.json").exists() {
+            read(&format!("{base}/terrain/edits.json"), &mut source)?;
         }
     }
     Ok(source)
@@ -505,14 +516,34 @@ impl Host {
         Ok(done)
     }
 
-    /// Makes `project` (from `dir`) and `world` the open project and the document.
+    /// Makes `project` (from `dir`) and `world` the open project and the document; the
+    /// terrain is built with the tile cache. Returns the index's report and the terrain's.
     fn take_project(
         &mut self,
         project: Project,
         dir: PathBuf,
         world: gamecraft_world::World,
-    ) -> Value {
-        self.session.replace_document(world);
+    ) -> (Value, Value) {
+        let mut terrain_keys = crate::terrain_cache::Keys::new();
+        let cached = world.terrain.as_ref().map(|terrain| {
+            crate::terrain_cache::load(&dir, project.world(), terrain, writable(&self.access, &dir))
+        });
+        let terrain = match cached {
+            Some(Ok(loaded)) => {
+                terrain_keys = loaded.on_disk;
+                self.session
+                    .replace_document_with_heights(world, loaded.field);
+                loaded.report
+            }
+            Some(Err(e)) => {
+                self.session.replace_document(world);
+                json!({"error": e})
+            }
+            None => {
+                self.session.replace_document(world);
+                Value::Null
+            }
+        };
         self.path = None;
         self.saved_revision = self.session.revision();
         let (index, problem) = self.index_project(&dir);
@@ -521,11 +552,43 @@ impl Host {
             dir,
             index,
             indexed: None,
+            terrain_keys,
         });
-        if problem.is_null() {
+        let index = if problem.is_null() {
             self.refresh_index().unwrap_or_else(|e| json!({"error": e}))
         } else {
             problem
+        };
+        (index, terrain)
+    }
+
+    /// Writes the terrain tiles of the document whose key changed since they were written.
+    fn save_terrain_cache(&mut self) -> Value {
+        let Some(open) = self.project.as_mut() else {
+            return Value::Null;
+        };
+        let (Some(terrain), Some(field)) = (
+            self.session.document().terrain.as_ref(),
+            self.session.document_heights(),
+        ) else {
+            return Value::Null;
+        };
+        let cache = crate::terrain_cache::cache_dir(&open.dir, open.project.world());
+        let written = terrain
+            .tile_keys()
+            .map_err(|e| e.to_string())
+            .and_then(|keys| {
+                crate::terrain_cache::write_tiles(
+                    &open.dir,
+                    &cache,
+                    field,
+                    &keys,
+                    &mut open.terrain_keys,
+                )
+            });
+        match written {
+            Ok(n) => json!(n),
+            Err(e) => json!({"error": e}),
         }
     }
 
@@ -565,13 +628,14 @@ impl Host {
         )?;
         let (project, world) =
             Project::load(id, &packs, Some(world_name)).map_err(|e| e.to_string())?;
-        let index = self.take_project(project, dir.clone(), world);
+        let (index, terrain) = self.take_project(project, dir.clone(), world);
         Ok(json!({
             "path": dir.display().to_string(),
             "id": id,
             "world": world_name,
             "files": written,
             "index": index,
+            "terrain": terrain,
         }))
     }
 
@@ -590,10 +654,11 @@ impl Host {
             "entities": loaded.entity_count(),
             "warnings": project.warnings(),
         });
-        let index = self.take_project(project, dir, loaded);
+        let (index, terrain) = self.take_project(project, dir, loaded);
         let mut result = result;
         if let Some(map) = result.as_object_mut() {
             map.insert("index".into(), index);
+            map.insert("terrain".into(), terrain);
         }
         Ok(result)
     }
@@ -626,11 +691,13 @@ impl Host {
         }
         self.saved_revision = self.session.revision();
         let unchanged = written.is_empty() && removed.is_empty();
+        let tiles = self.save_terrain_cache();
         Ok(json!({
             "path": dir.display().to_string(),
             "written": written,
             "removed": removed,
             "unchanged": unchanged,
+            "terrain_tiles_written": tiles,
         }))
     }
 
@@ -725,7 +792,7 @@ impl Host {
             .map(|p| p.manifest.id.clone())
             .collect();
         let entities = loaded.entity_count();
-        self.take_project(project, dir, loaded);
+        let _ = self.take_project(project, dir, loaded);
         Ok(json!({"id": id, "path": path, "packs": packs, "entities": entities}))
     }
 

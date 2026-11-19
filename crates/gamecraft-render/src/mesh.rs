@@ -2,7 +2,8 @@
 //!
 //! - [`terrain_chunks`]: a height field as chunks of at most [`TERRAIN_CHUNK_CELLS`] cells per
 //!   side, each cell split along the diagonal from sample (col, row) to (col + 1, row + 1), the
-//!   same two triangles `HeightField::height_at` interpolates over, with layer weights by slope.
+//!   same two triangles `HeightField::height_at` interpolates over, with the terrain's painted
+//!   layer weights, or (a terrain without layers) grass, earth and rock by slope.
 //! - [`terrain_apron`]: a ring of extra mesh round the terrain that eases its edge down (or up)
 //!   to the endless ground plane. It is scenery only, **not walkable ground**: the height field
 //!   and the simulation know nothing of it, and nothing may stand on it or be placed by it.
@@ -135,7 +136,8 @@ pub struct TerrainChunkMesh {
     pub first_row: usize,
     /// Positions in world coordinates, normals from the height field.
     pub mesh: MeshData,
-    /// Per vertex the weights of up to eight layers, summing to 255 ([`layer_weights`]).
+    /// Per vertex the weights of up to eight layers, summing to 255: the height field's
+    /// painted weights, or [`layer_weights`] by slope without layers.
     pub weights: Vec<[u8; 8]>,
 }
 
@@ -183,9 +185,8 @@ fn terrain_chunk(
             let x = x0 + col as f64 * cell;
             let z = z0 + row as f64 * cell;
             let normal = terrain_normal(heights, col, row);
-            let [_, normal_y, _] = normal;
             mesh.vertex([x, h, z], normal);
-            weights.push(layer_weights(normal_y));
+            weights.push(vertex_weights(heights, col, row, normal));
         }
     }
     let stride = u32::try_from(nx + 1).unwrap_or(u32::MAX);
@@ -235,8 +236,9 @@ fn smoothstep(t: f64) -> f64 {
 ///
 /// Ring 0 is the terrain's border samples, bit for bit (same positions, normals and weights as
 /// [`terrain_chunks`]); ring [`APRON_RINGS`] lies [`apron_width_m`] outside the square at the
-/// plane's height with the grass layer. In between the height follows a smoothstep from the
-/// border height to the plane height, and the layer weights fade to grass the same way.
+/// plane's height with the first layer (grass, or the terrain's first painted layer). In
+/// between the height follows a smoothstep from the border height to the plane height, and
+/// the layer weights fade to the first layer the same way.
 /// Normals come from the apron's own surface (the terrain's at ring 0). The mesh is one chunk
 /// at (0, 0); an empty chunk when the field has fewer than two samples per side.
 ///
@@ -295,8 +297,8 @@ pub fn terrain_apron(heights: &HeightField, plane_height_m: f64) -> TerrainChunk
             let x = x0 + c as f64 * cell;
             let z = z0 + r as f64 * cell;
             if k == 0 {
-                let [_, ny, _] = terrain_normal(heights, c, r);
-                border_weights.push(layer_weights(ny));
+                let normal = terrain_normal(heights, c, r);
+                border_weights.push(vertex_weights(heights, c, r, normal));
                 positions.push([x, h, z]);
             } else {
                 positions.push([
@@ -349,8 +351,16 @@ pub fn terrain_apron(heights: &HeightField, plane_height_m: f64) -> TerrainChunk
         let w = if k == 0 {
             border_weights.get(i).copied().unwrap_or([0; 8])
         } else {
-            let [_, ny, _] = normal;
-            fade_to_grass(layer_weights(ny), smoothstep(k as f64 / APRON_RINGS as f64))
+            let base = match ring.get(i) {
+                Some(&(c, r, _)) if heights.layer_count() > 0 => {
+                    heights.weight(c, r).unwrap_or(FIRST_LAYER)
+                }
+                _ => {
+                    let [_, ny, _] = normal;
+                    layer_weights(ny)
+                }
+            };
+            fade_to_first(base, smoothstep(k as f64 / APRON_RINGS as f64))
         };
         mesh.vertex(*position, normal);
         weights.push(w);
@@ -366,24 +376,30 @@ pub fn terrain_apron(heights: &HeightField, plane_height_m: f64) -> TerrainChunk
     }
 }
 
-/// `weights` moved `share` (0 to 1) of the way to all grass, still summing to 255.
-fn fade_to_grass(weights: [u8; 8], share: f64) -> [u8; 8] {
-    let keep = 1.0 - share.clamp(0.0, 1.0);
-    let scaled = |layer: usize| {
-        let w = weights.get(layer).copied().map_or(0.0, f64::from);
-        (w * keep).round().clamp(0.0, 255.0) as u8
-    };
-    let (e, r) = (scaled(LAYER_EARTH), scaled(LAYER_ROCK));
-    let mut out = [0u8; 8];
-    for (layer, w) in [
-        (LAYER_GRASS, 255u8.saturating_sub(e).saturating_sub(r)),
-        (LAYER_EARTH, e),
-        (LAYER_ROCK, r),
-    ] {
-        if let Some(slot) = out.get_mut(layer) {
-            *slot = w;
-        }
+/// All weight on the first layer (grass, or the terrain's first painted layer).
+const FIRST_LAYER: [u8; 8] = [255, 0, 0, 0, 0, 0, 0, 0];
+
+/// The layer weights of the vertex at sample (`col`, `row`): the terrain's painted weights
+/// when it has layers, else grass, earth and rock by the slope of `normal`.
+fn vertex_weights(heights: &HeightField, col: usize, row: usize, normal: [f64; 3]) -> [u8; 8] {
+    if heights.layer_count() > 0 {
+        return heights.weight(col, row).unwrap_or(FIRST_LAYER);
     }
+    let [_, normal_y, _] = normal;
+    layer_weights(normal_y)
+}
+
+/// `weights` moved `share` (0 to 1) of the way to all of the first layer, still summing to
+/// 255.
+fn fade_to_first(weights: [u8; 8], share: f64) -> [u8; 8] {
+    let keep = 1.0 - share.clamp(0.0, 1.0);
+    let mut out = [0u8; 8];
+    let mut rest: u8 = 255;
+    for (o, w) in out.iter_mut().zip(weights).skip(1) {
+        *o = (f64::from(w) * keep).round().clamp(0.0, 255.0) as u8;
+        rest = rest.saturating_sub(*o);
+    }
+    out[0] = rest;
     out
 }
 

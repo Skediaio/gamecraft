@@ -77,7 +77,8 @@ fn files(dir: &Path) -> BTreeMap<PathBuf, String> {
     while let Some(d) = stack.pop() {
         for entry in std::fs::read_dir(&d).unwrap() {
             let path = entry.unwrap().path();
-            if path.ends_with(".gamecraft-index") {
+            // The index and the terrain's tile cache are derived, ignored by git.
+            if path.ends_with(".gamecraft-index") || path.ends_with("terrain/cache") {
                 continue;
             }
             if path.is_dir() {

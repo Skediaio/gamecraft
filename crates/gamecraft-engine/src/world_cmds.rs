@@ -73,8 +73,9 @@ fn terrain_set_spec() -> CommandSpec {
         "terrain.set",
         "Set Terrain",
         "Replaces the terrain with a square centred on the origin: flat, or rolling land from \
-         seeded noise. Entities are not moved (entity.snap_to_ground puts them on the new \
-         ground). Parameters of the other kind are refused.",
+         seeded noise. Its painted layers, paint rules and sculpt edits (in world coordinates) \
+         stay; terrain.clear drops them. Entities are not moved (entity.snap_to_ground puts \
+         them on the new ground). Parameters of the other kind are refused.",
         vec![
             param("kind", T::String, "Where the heights come from.")
                 .allowed(&["flat", "noise"])
@@ -154,10 +155,15 @@ fn terrain_set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError
             roughness: p.f64("roughness")?.unwrap_or(0.5),
         }
     };
+    // The layers, rules and edits are in world coordinates: they stay.
+    let kept = edit.world.terrain.take().unwrap_or_default();
     let terrain = Terrain {
         size_m: p.f64("size_m")?.unwrap_or(256.0),
         cell_m: p.f64("cell_m")?.unwrap_or(2.0),
         source,
+        layers: kept.layers,
+        paint_rules: kept.paint_rules,
+        edits: kept.edits,
     };
     terrain.validate().map_err(|e| bad(e.to_string()))?;
     let field = terrain.build().map_err(failed)?;
@@ -177,7 +183,8 @@ fn terrain_clear_spec() -> CommandSpec {
     spec(
         "terrain.clear",
         "Clear Terrain",
-        "Removes the terrain: the world has no ground. Entities stay where they are.",
+        "Removes the terrain with its layers, paint rules and edits: the world has no ground. \
+         Entities stay where they are.",
         vec![],
         "null",
         json!({}),

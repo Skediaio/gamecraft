@@ -156,9 +156,82 @@ What the files are, where it differs from the method above or adds to it:
   index polls again with a no-op waker until the future is ready (`native::block_on`, capped)
   rather than use `pollster`, which parks the thread until a wake-up.
 
+### Terrain
+
+Built 2026-11-19 (M3): sculpting and painting as edits over the terrain's recipe
+(`gamecraft_world::sculpt`), tiles and their binary cache (`gamecraft_world::tiles`), the
+commands `terrain.sculpt`, `terrain.paint`, `terrain.layers`, `terrain.paint_rule`,
+`terrain.remove_paint_rule`, `terrain.edits` and `terrain.remove_edit`
+(`gamecraft-engine/src/terrain_cmds.rs`), the files of a project, and the painted layers in the
+renderer.
+
+- **The recipe.** `Terrain` keeps its source (`flat` or `noise`) and gains `layers` (at most 8
+  `{name, color, roughness}`, the first under everything), `paint_rules` (`{layer,
+  slope_min_deg?, slope_max_deg?, height_min_m?, height_max_m?}`, soft edges of 4 degrees and
+  4 m, applied in order) and `edits`, an ordered list: `raise`, `lower` (`center`, `radius_m`,
+  `strength_m`, `falloff`), `flatten` (`height_m`, `strength`), `smooth` (`strength`,
+  `iterations` 1 to 8, a 3 x 3 mean per pass), `ramp` (`from`, `to`, `width_m`,
+  `from_height_m`, `to_height_m`: a straight slope with round ends, for roads), `noise`
+  (`strength_m`, `feature_m`, `seed`) and `paint` (`layer`, `strength`). A brush is full
+  strength inside `radius_m * (1 - falloff)`, a smoothstep down to nothing at `radius_m`;
+  nothing changes at or beyond it. The three lists are left out of a file when empty, so a world
+  without them writes the same text and hashes the same.
+- **Every edit is explicit.** A flatten without `height_m` and a ramp without its end heights
+  take them from the ground when `terrain.sculpt` runs, and the edit keeps the numbers (the
+  brief allowed "to the height at the centre" as a live reading). So an edit reads only the
+  sample it changes (a smooth its neighbours within `iterations`), removing an earlier edit
+  never moves a later flatten's level, and the order still matters where it should (a raise
+  after a flatten lifts the level, before it is flattened away; raises and lowers commute).
+- **Heights, then weights.** The height of a sample is the source plus the height edits in
+  order, in `f64`, stored as `f32`; the weights are the rules over the final heights (the slope
+  from central differences, as the renderer's normals) and then the paint edits in order, as
+  shares that sum to 1 and become bytes summing to 255 exactly (largest remainder). Only
+  `+ - * /`, `sqrt`, `floor`, the noise and `patan`: the same bits everywhere.
+- **Tiles.** The field is cut in tiles of 128 cells (129 x 129 samples, neighbours sharing their
+  border samples). Any rectangle evaluates exactly: going backwards through the edits it grows by
+  `iterations` for every smooth that reaches it, the source is sampled over that, and the edits
+  run forwards. `Terrain::rebuild(previous, field)` finds the edits between the lists' common
+  start and common end, spreads their squares through later smooths, and recomputes only the
+  tiles they touch (weights: one sample further, for the slope); a different size, cell or
+  source builds everything. A sculpt, a removal, undo, redo, a live command and the simulation's
+  takeover of a changed running world all rebuild that way; tests compare every rebuild with a
+  full build bit for bit (40 random rounds of inserts and removals) and count the tiles (a small
+  crater in a 4 x 4 grid rebuilds one).
+- **In a project** the edits are text: `worlds/<world>/terrain/edits.json`,
+  `{"gamecraft_terrain_edits": 1, "edits": [...]}` one edit per line, beside `world.json`, which
+  keeps the rest of the terrain recipe (layers and rules included). A later pack's file
+  replaces the edits of earlier packs as a whole; a save writes the root pack's file when the
+  edits differ from what the files give. Edits for a world without terrain, a bad op, a number
+  out of range or a layer that is not one are errors that name the file.
+- **The tile cache** is binary and derived: `worlds/<world>/terrain/cache/tile_<x>_<z>.bin` in
+  the root pack's folder with a `.gitignore` of `*`. A file is the 8 bytes `GCTILE1\n`, a key
+  (u64), the tile's x and z, its columns and rows and the number of layers `n` (u32 each), then
+  the heights (f32) and `n` weights per sample (u8), little-endian. The key is a hash of the
+  grid, the source, the layers and rules and the edits that reach the tile (with their places),
+  so a tile is stale exactly when its content would change. `project.open` reads the current
+  tiles, builds the missing, stale or broken ones (a truncated file, another key, a NaN, weights
+  that do not sum to 255) and writes them when the folder is in the write root; `project.save`
+  writes the tiles whose key changed. Its answer says how many tiles came from the cache.
+- **Size.** The sample limit stays 2049 per side, which is what a 4 km terrain at 2 m and an 8
+  km terrain at 4 m need (the limit already allowed both; nothing was lifted). Measured on the
+  build server (one thread): a 4096 m terrain at 2 m (2049 x 2049, 256 tiles) with noise, a
+  200 m raise, a 3 km ramp, two layers and a slope rule builds in about 2 s (1.9 s optimised,
+  2.3 s in the test profile), a crater rebuilds its one tile in 45 ms, and loading it from a
+  full cache (25.6 MB in 256 files) takes 0.1 s; the field holds 17 MB of heights and 34 MB of
+  weights, and the test's peak resident memory, with two fields and the cache files in memory,
+  is 198 MB. Building the edits is capped at 2^28 sample updates (`TERRAIN_EDIT_WORK_MAX`),
+  next to the hostile-size checks of the grid, the edit count (1024), the layer count (8) and
+  the rule count (64).
+- **Queries and the simulation** read the edited field without change: `query.ground_height`,
+  `query.raycast`, the characters' ground and slope and scatter's slope test all use the one
+  `HeightField`. `sim.start` takes the document's field instead of building it again.
+- **The renderer** draws painted layers through VisionCraft's terrain layers: each layer's
+  colour and roughness (texture maps when assets exist), the field's weights per vertex, the
+  apron fading to the first layer, the ground plane in the first layer's colour. A terrain
+  without layers is shaded by slope (grass, earth, rock) as before.
+
 ## Open
 
-- Terrain tiles and painted layers on disk (binary, later in M3).
 - Asset import commands and licence records.
 - Version ranges and conflicts between two mods that change the same thing (last one wins, with a
   warning naming both).

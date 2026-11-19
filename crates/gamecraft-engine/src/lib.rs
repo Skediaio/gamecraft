@@ -29,7 +29,7 @@
 //!
 //! Commands live in one module per area, each with its own `SPECS` list of
 //! `Registration { spec, handler }`: `world_cmds.rs`, `entity_cmds.rs`, `play_cmds.rs`,
-//! `inspect_cmds.rs`, `scenario_cmds.rs`, `aim_cmds.rs`, `gm_cmds.rs`, .... A handler is a `fn` of its scope: a World handler edits a copy of the
+//! `inspect_cmds.rs`, `scenario_cmds.rs`, `aim_cmds.rs`, `gm_cmds.rs`, `terrain_cmds.rs`, .... A handler is a `fn` of its scope: a World handler edits a copy of the
 //! world (`fn(&mut Edit, Params)`), a Query handler reads the session (`fn(&Session, Params)`),
 //! a Play handler works on the play state (`fn(&mut Session, Params)`). Add the command to its
 //! module's `SPECS`; a new module is one more line in `MODULES` in `session.rs`. Its spec's
@@ -56,6 +56,7 @@ mod scatter_cmds;
 mod scenario_cmds;
 mod session;
 pub mod spec;
+mod terrain_cmds;
 mod triggers;
 mod world_cmds;
 

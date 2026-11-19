@@ -5,7 +5,7 @@ use crate::fields::parse_world;
 use crate::layer::Layer;
 use crate::manifest::Manifest;
 use crate::paths::{FileKind, classify};
-use gamecraft_world::Prefab;
+use gamecraft_world::{Prefab, TerrainEdit};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
@@ -19,7 +19,8 @@ pub struct PackSource {
     /// Where the pack is, for people (a folder path); errors name files as `location/path`.
     pub location: String,
     /// Path to text: `pack.json`, `prefabs/<id>.json`, `worlds/<world>/world.json`,
-    /// `worlds/<world>/layers/<layer>.json`. Other paths are not read.
+    /// `worlds/<world>/layers/<layer>.json`, `worlds/<world>/terrain/edits.json`. Other paths
+    /// are not read.
     pub files: BTreeMap<String, String>,
 }
 
@@ -37,6 +38,8 @@ pub(crate) struct WorldDir {
     pub fields: Option<Map<String, Value>>,
     /// The layer files by name.
     pub layers: BTreeMap<String, Layer>,
+    /// `terrain/edits.json`, if the pack has one.
+    pub edits: Option<Vec<TerrainEdit>>,
 }
 
 /// A parsed pack.
@@ -97,6 +100,10 @@ pub(crate) fn parse_pack(source: &PackSource) -> Result<Pack, ProjectError> {
             FileKind::World(world) => {
                 let fields = parse_world(text, &file)?;
                 pack.worlds.entry(world).or_default().fields = Some(fields);
+            }
+            FileKind::TerrainEdits(world) => {
+                let edits = crate::terrain::parse_edits(text, &file)?;
+                pack.worlds.entry(world).or_default().edits = Some(edits);
             }
             FileKind::Layer(world, layer) => {
                 let parsed = Layer::parse(text, &file)?;

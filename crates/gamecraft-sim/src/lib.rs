@@ -288,6 +288,13 @@ impl Sim {
     /// Starts a simulation of `world` at tick 0: validates it, builds its height field, and
     /// gives every character a body at rest.
     pub fn new(world: World) -> Result<Sim, SimError> {
+        Sim::with_heights(world, None)
+    }
+
+    /// [`Sim::new`] with the world's height field when the caller has it (it must be what
+    /// the world's terrain builds to; a session keeps it for its document), so a large
+    /// terrain is not built again.
+    pub fn with_heights(world: World, heights: Option<Arc<HeightField>>) -> Result<Sim, SimError> {
         let mut sim = Sim {
             world: World::new("", 0),
             heights: None,
@@ -308,6 +315,12 @@ impl Sim {
             taken_over: BTreeSet::new(),
             sounds: Vec::new(),
         };
+        if let (Some(terrain), Some(field)) = (&world.terrain, heights) {
+            // Taken over as built: the empty world's terrain differs, so replace_world would
+            // build it again; set both first so it sees the terrain unchanged.
+            sim.world.terrain = Some(terrain.clone());
+            sim.heights = Some(field);
+        }
         sim.replace_world(world)?;
         Ok(sim)
     }
@@ -840,15 +853,16 @@ impl Sim {
             .validate()
             .map_err(|e| SimError::World(e.to_string()))?;
         let static_hash = static_hash(&world)?;
-        // `None`: keep the current height field (the terrain did not change).
-        let rebuilt = match &world.terrain {
-            Some(terrain) if self.world.terrain.as_ref() == Some(terrain) => None,
-            Some(terrain) => Some(Some(Arc::new(
-                terrain
-                    .build()
-                    .map_err(|e| SimError::World(e.to_string()))?,
+        // `None`: keep the current height field (the terrain did not change). A sculpted
+        // terrain is rebuilt in the tiles its change touches only.
+        let to_sim = |e: gamecraft_world::WorldError| SimError::World(e.to_string());
+        let rebuilt = match (&world.terrain, &self.world.terrain, &self.heights) {
+            (Some(terrain), Some(old), _) if old == terrain => None,
+            (Some(terrain), Some(old), Some(field)) => Some(Some(Arc::new(
+                terrain.rebuild(old, field).map_err(to_sim)?.field,
             ))),
-            None => Some(None),
+            (Some(terrain), _, _) => Some(Some(Arc::new(terrain.build().map_err(to_sim)?))),
+            (None, _, _) => Some(None),
         };
         let mut bodies = BTreeMap::new();
         let mut inputs = BTreeMap::new();

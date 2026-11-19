@@ -65,6 +65,7 @@ fn valley(time_of_day_h: f64, cell_m: f64) -> (World, HeightField) {
             octaves: 5,
             roughness: 0.5,
         },
+        ..Default::default()
     };
     let hf = terrain.build().unwrap();
     world.terrain = Some(terrain);
@@ -78,6 +79,7 @@ fn flat(size_m: f64) -> (World, HeightField) {
         size_m,
         cell_m: 1.0,
         source: TerrainSource::Flat { height_m: 0.0 },
+        ..Default::default()
     };
     let hf = terrain.build().unwrap();
     world.terrain = Some(terrain);
@@ -468,6 +470,7 @@ fn a_night_valley_is_lit_where_the_lights_are_on() {
             octaves: 4,
             roughness: 0.5,
         },
+        ..Default::default()
     };
     let hf = terrain.build().unwrap();
     world.terrain = Some(terrain);
@@ -992,4 +995,78 @@ fn the_skirmish_mid_fight_and_the_lantern_at_night() {
     assert!(p.problems.is_empty(), "{:?}", p.problems);
     save("lantern-night.png", &p);
     assert!(luminance(mean_rgb(&p, 0..p.height)) < 90.0, "it is night");
+}
+
+/// Mean (r, g, b) of a square of `half` pixels round where `point` is seen.
+fn rgb_at(p: &Picture, camera: &Camera, point: [f64; 3], half: i64) -> [f64; 3] {
+    let aspect = f64::from(p.width) / f64::from(p.height);
+    let [x, y] = camera.project(point, aspect).expect("the point is in view");
+    let px = ((x * 0.5 + 0.5) * f64::from(p.width)) as i64;
+    let py = ((0.5 - y * 0.5) * f64::from(p.height)) as i64;
+    let mut sum = [0.0; 3];
+    let mut n = 0.0;
+    for yy in py - half..=py + half {
+        for xx in px - half..=px + half {
+            let i = (yy as usize * p.width as usize + xx as usize) * 4;
+            for k in 0..3 {
+                sum[k] += f64::from(p.rgba[i + k]);
+            }
+            n += 1.0;
+        }
+    }
+    sum.map(|s| s / n)
+}
+
+#[test]
+fn painted_layers_are_drawn_in_their_colours() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let (mut world, _) = flat(64.0);
+    let terrain = world.terrain.as_mut().unwrap();
+    terrain.layers = vec![
+        gamecraft_world::TerrainLayer {
+            name: "grass".into(),
+            color: [0.05, 0.25, 0.05],
+            roughness: 0.9,
+        },
+        gamecraft_world::TerrainLayer {
+            name: "paint".into(),
+            color: [0.6, 0.05, 0.05],
+            roughness: 0.9,
+        },
+    ];
+    terrain.edits = vec![gamecraft_world::TerrainEdit::Paint {
+        layer: "paint".into(),
+        center: [0.0, 0.0],
+        radius_m: 8.0,
+        strength: 1.0,
+        falloff: 0.2,
+    }];
+    let hf = world.terrain.as_ref().unwrap().build().unwrap();
+    assert!(r.sync(&world, Some(&hf)).is_empty());
+    let camera = Camera {
+        position: [0.0, 30.0, 20.0],
+        target: [0.0, 0.0, 0.0],
+        fov_y_deg: 50.0,
+    };
+    let p = r.render(&request(480, 320, camera)).unwrap();
+    save("render-painted.png", &p);
+    let painted = rgb_at(&p, &camera, [0.0, 0.0, 0.0], 4);
+    let grass = rgb_at(&p, &camera, [16.0, 0.0, 0.0], 4);
+    println!("painted {painted:?}, grass {grass:?}");
+    assert!(
+        painted[0] > 1.5 * painted[1],
+        "the painted circle is red: {painted:?}"
+    );
+    assert!(grass[1] > 1.3 * grass[0], "the rest is green: {grass:?}");
+    assert!(painted[0] > 1.8 * grass[0], "{painted:?} against {grass:?}");
+    // Without layers the same ground is shaded by slope again (all grass on the flat).
+    world.terrain.as_mut().unwrap().layers.clear();
+    world.terrain.as_mut().unwrap().edits.clear();
+    let hf = world.terrain.as_ref().unwrap().build().unwrap();
+    assert!(r.sync(&world, Some(&hf)).is_empty());
+    let p = r.render(&request(480, 320, camera)).unwrap();
+    let plain = rgb_at(&p, &camera, [0.0, 0.0, 0.0], 4);
+    assert!(plain[1] > plain[0], "{plain:?}");
 }

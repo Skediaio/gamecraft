@@ -112,6 +112,7 @@ fn a_changed_terrain_changes_the_ground() {
         size_m: 256.0,
         cell_m: 4.0,
         source: TerrainSource::Flat { height_m: 2.0 },
+        ..Default::default()
     });
     sim.replace_world(next).unwrap();
     assert_eq!(sim.heights().unwrap().height_at(0.0, 0.0), Some(2.0));
@@ -124,6 +125,7 @@ fn a_changed_terrain_changes_the_ground() {
         size_m: 256.0,
         cell_m: 4.0,
         source: TerrainSource::Flat { height_m: -3.0 },
+        ..Default::default()
     });
     sim.replace_world(next).unwrap();
     sim.step(1);

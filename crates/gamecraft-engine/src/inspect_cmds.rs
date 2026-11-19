@@ -35,7 +35,8 @@ fn inspect_spec() -> CommandSpec {
             param("offset", T::Integer, "Entities skipped first, in id order.").default(json!(0)),
         ],
         "{name, seed, revision, playing, tick (null when not playing), terrain: null | \
-         {size_m, cell_m, source, cols, rows, min_height_m, max_height_m}, environment, sun: \
+         {size_m, cell_m, source, layers: [names], paint_rules, edits (counts; terrain.edits \
+         lists them), cols, rows, min_height_m, max_height_m}, environment, sun: \
          {azimuth_deg, elevation_deg, direction, above_horizon}, entity_count, vars: {name: \
          value}, objectives: [{id, title, status, hidden}], trigger_count, prefabs: [{id, \
          name, components, children, instances, instance_count}], entities: [{id, name, \
@@ -66,6 +67,10 @@ fn inspect(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
             v.insert("size_m".into(), json!(t.size_m));
             v.insert("cell_m".into(), json!(t.cell_m));
             v.insert("source".into(), source);
+            let layers: Vec<&str> = t.layers.iter().map(|l| l.name.as_str()).collect();
+            v.insert("layers".into(), json!(layers));
+            v.insert("paint_rules".into(), json!(t.paint_rules.len()));
+            v.insert("edits".into(), json!(t.edits.len()));
             if let Some(field) = session.current_heights() {
                 let (lo, hi) = field.height_range();
                 v.insert("cols".into(), json!(field.cols()));

@@ -158,7 +158,15 @@ fn lantern_is_lost_by_standing_still() {
 /// prefab (House 2 overrides its shape). The world's text, which the static part of the hash
 /// covers, now holds the prefabs and the instances' references and overrides; every entity has
 /// the same id and the same effective components as before, and the fight is the same.
-const SKIRMISH_HASH: &str = "0221de111eb7dd5d";
+///
+/// Moved on 2026-11-19 from 0221de111eb7dd5d: the terrain is sculpted and painted (terrain
+/// edits, M3): a small flattened village square at [4, -54] between the houses, a road ramped
+/// along x = 4 from the north edge through the square to the wall line, smoothed where they
+/// meet, and four painted layers with dirt and rock by slope. The world's text, which the
+/// static part of the hash covers, now holds the layers, rules and edits, and the player's and
+/// the enemies' feet follow the sculpted ground where they cross the road. Every entity stands
+/// where it stood (the square stops short of the houses) and the playthrough wins as before.
+const SKIRMISH_HASH: &str = "cce705014879f043";
 
 #[test]
 fn skirmish_is_won_by_the_playthrough_and_replays_to_the_same_hash() {

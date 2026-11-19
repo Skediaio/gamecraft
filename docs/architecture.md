@@ -56,9 +56,9 @@ A world is one JSON document (`.gamecraft`, format version 1, `gamecraft-world`)
 
 Since then: scenario data (zones, objectives, triggers; `design/scenarios.md`), combat
 (`design/ballistics.md`) and prefabs with overrides and children, which an entity refers to by
-`prefab` and a child to its `parent` (`design/journal.md`). Planned: full orientation,
-layers, generators (forests, roads, rivers), sculpted terrain as edits over the source, a project
-of several worlds and mods layered over it (M3); rigid bodies and colliders (M4); scripts (M5).
+`prefab` and a child to its `parent` (`design/journal.md`). Terrain edits (sculpting and painting as an ordered list of recipes over the source) and
+projects of packs layered by id are in (`design/projects.md`). Planned: full orientation,
+layers, generators (forests, roads, rivers) (M3); rigid bodies and colliders (M4); scripts (M5).
 
 ### Axes and units
 
@@ -132,8 +132,6 @@ to a repository of their own that both projects depend on (`decisions.md`).
 
 ## Structural debt
 
-- The world is one file. A project with several worlds, prefabs and mods needs a directory
-  layout with layers and binary terrain tiles (M3; `decisions.md`, *One JSON file is M0's format*).
 - Undo keeps whole copies of the world (100 of them); it must keep changes instead before worlds
   grow (M3).
 - The renderer adapter rebuilds everything when the world changes. It needs to update only what

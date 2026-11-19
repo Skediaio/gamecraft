@@ -6,6 +6,7 @@ mod fuzz;
 mod layer;
 mod prefab;
 mod scenario;
+mod sculpt;
 mod sun;
 mod terrain;
 mod validation;
@@ -123,6 +124,7 @@ pub(crate) fn example_world() -> World {
             octaves: 5,
             roughness: 0.5,
         },
+        ..Default::default()
     });
     w.environment = Environment::default();
     let crate_id = w

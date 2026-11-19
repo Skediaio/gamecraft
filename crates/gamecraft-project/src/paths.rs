@@ -58,6 +58,8 @@ pub(crate) enum FileKind {
     World(String),
     /// `worlds/<world>/layers/<layer>.json`.
     Layer(String, String),
+    /// `worlds/<world>/terrain/edits.json`.
+    TerrainEdits(String),
     /// Anything else (assets, notes): not read.
     Other,
 }
@@ -106,6 +108,12 @@ pub(crate) fn classify(path: &str, location: &str) -> Result<FileKind, ProjectEr
                 return Err(ProjectError::in_file(&shown, name_rule()));
             }
             FileKind::World((*world).to_string())
+        }
+        ["worlds", world, "terrain", "edits.json"] => {
+            if !is_plain_name(world) {
+                return Err(ProjectError::in_file(&shown, name_rule()));
+            }
+            FileKind::TerrainEdits((*world).to_string())
         }
         ["worlds", world, "layers", file] => match stem(file) {
             Some(layer) => {

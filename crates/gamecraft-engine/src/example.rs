@@ -2,14 +2,16 @@
 
 use gamecraft_world::{
     Character, CompareOp, Component, Condition, EntityDraft, Health, Launcher, Objective,
-    ObjectiveStatus, Plant, Prefab, Shape, ShapeKind, Step, Tags, Terrain, TerrainSource, Trigger,
-    VarValue, When, World, WorldError,
+    ObjectiveStatus, PaintRule, Plant, Prefab, Shape, ShapeKind, Step, Tags, Terrain, TerrainEdit,
+    TerrainLayer, TerrainSource, Trigger, VarValue, When, World, WorldError,
 };
 
 /// The plant library species of the example oak.
 pub const EXAMPLE_SPECIES: &str = "quercus-robur";
 
-/// A small valley: noise terrain of 128 m at 2 m cells (seed 7, relief 12 m); entity 1 a solid
+/// A small valley: noise terrain of 128 m at 2 m cells (seed 7, relief 12 m) with three painted
+/// layers (`grass`, `rock` on slopes over 35 degrees, `dirt` painted in a 4 m circle at x -40,
+/// z 40: the terrain's one edit); entity 1 a solid
 /// box named `Crate` at `[-6, 0, 4]`, not on the ground (`entity.snap_to_ground` puts it there),
 /// entity 2 a plant `Oak` (`quercus-robur`) on the ground at x 8, z -10,
 /// entity 3 a character named `Scout` on the ground at (0, 0), facing north, with a default
@@ -33,6 +35,35 @@ fn build() -> Result<World, WorldError> {
             octaves: 4,
             roughness: 0.5,
         },
+        layers: vec![
+            TerrainLayer {
+                name: "grass".into(),
+                color: [0.075, 0.13, 0.035],
+                roughness: 0.9,
+            },
+            TerrainLayer {
+                name: "rock".into(),
+                color: [0.28, 0.27, 0.25],
+                roughness: 0.8,
+            },
+            TerrainLayer {
+                name: "dirt".into(),
+                color: [0.2, 0.15, 0.095],
+                roughness: 0.9,
+            },
+        ],
+        paint_rules: vec![PaintRule {
+            layer: "rock".into(),
+            slope_min_deg: Some(35.0),
+            ..PaintRule::default()
+        }],
+        edits: vec![TerrainEdit::Paint {
+            layer: "dirt".into(),
+            center: [-40.0, 40.0],
+            radius_m: 4.0,
+            strength: 1.0,
+            falloff: 0.5,
+        }],
     };
     let field = terrain.build()?;
     world.terrain = Some(terrain);

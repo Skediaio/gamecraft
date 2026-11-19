@@ -129,7 +129,8 @@ pub(crate) fn diff(base: &Map<String, Value>, current: &Map<String, Value>) -> M
     patch
 }
 
-/// The fields of `world` that a `world.json` holds, as the `.gamecraft` format writes them.
+/// The fields of `world` that a `world.json` holds, as the `.gamecraft` format writes them,
+/// without the terrain's edits (they have a file of their own).
 pub(crate) fn world_fields(world: &World) -> Result<Map<String, Value>, ProjectError> {
     let to = |v: Result<Value, serde_json::Error>| {
         v.map_err(|e| ProjectError::new(format!("cannot write the world's fields: {e}")))
@@ -137,7 +138,12 @@ pub(crate) fn world_fields(world: &World) -> Result<Map<String, Value>, ProjectE
     let mut map = Map::new();
     map.insert("name".into(), Value::String(world.name.clone()));
     map.insert("seed".into(), Value::from(world.seed));
-    map.insert("terrain".into(), to(serde_json::to_value(&world.terrain))?);
+    // The edits are saved to `terrain/edits.json`, not to world.json.
+    let mut terrain = to(serde_json::to_value(&world.terrain))?;
+    if let Value::Object(t) = &mut terrain {
+        t.remove("edits");
+    }
+    map.insert("terrain".into(), terrain);
     map.insert(
         "environment".into(),
         to(serde_json::to_value(&world.environment))?,

@@ -21,6 +21,7 @@ pub fn flat_world(height_m: f64) -> World {
         size_m: 256.0,
         cell_m: 4.0,
         source: TerrainSource::Flat { height_m },
+        ..Default::default()
     });
     world
 }
@@ -38,6 +39,7 @@ pub fn noise_world(seed: u64, relief_m: f64, feature_m: f64) -> World {
             octaves: 3,
             roughness: 0.5,
         },
+        ..Default::default()
     });
     world
 }

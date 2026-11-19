@@ -813,7 +813,7 @@ pub(crate) fn validate(
 /// Longest excerpt of a name or value quoted in an error, in characters.
 const MAX_EXCERPT_CHARS: usize = 60;
 
-fn excerpt(text: &str) -> String {
+pub(crate) fn excerpt(text: &str) -> String {
     if text.chars().count() <= MAX_EXCERPT_CHARS.min(MAX_NAME_CHARS) {
         return text.to_string();
     }

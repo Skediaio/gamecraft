@@ -12,6 +12,26 @@ pub const TERRAIN_CELL_MAX_M: f64 = 64.0;
 pub const TERRAIN_MAX_SAMPLES_PER_SIDE: usize = 2049;
 /// Relative tolerance when checking that `size_m` is a whole multiple of `cell_m`.
 pub const TERRAIN_MULTIPLE_TOLERANCE: f64 = 1e-9;
+/// Cells along one side of a terrain tile (a tile holds 129 x 129 samples, sharing its border
+/// samples with its neighbours).
+pub const TERRAIN_TILE_CELLS: usize = 128;
+/// Most edits of one terrain.
+pub const MAX_TERRAIN_EDITS: usize = 1024;
+/// Most painted layers of one terrain (the renderer's eight).
+pub const MAX_TERRAIN_LAYERS: usize = 8;
+/// Longest terrain layer name, in characters.
+pub const MAX_TERRAIN_LAYER_NAME_CHARS: usize = 32;
+/// Most paint rules of one terrain.
+pub const MAX_PAINT_RULES: usize = 64;
+/// Smallest radius (or ramp width) of a terrain edit, metres.
+pub const SCULPT_RADIUS_MIN_M: f64 = 0.1;
+/// Largest height a raise, lower or noise edit moves the ground, metres.
+pub const SCULPT_STRENGTH_MAX_M: f64 = 1000.0;
+/// Most passes of a smooth edit.
+pub const SMOOTH_ITERATIONS_MAX: u32 = 8;
+/// Most sample updates building a terrain's edits may take (the samples inside each edit's
+/// square times a smooth's passes): about a second of work.
+pub const TERRAIN_EDIT_WORK_MAX: u64 = 1 << 28;
 
 /// Fewest noise octaves.
 pub const NOISE_OCTAVES_MIN: u32 = 1;

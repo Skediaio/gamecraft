@@ -41,6 +41,7 @@ fn range_world() -> World {
         size_m: 1024.0,
         cell_m: 4.0,
         source: gamecraft_world::TerrainSource::Flat { height_m: 0.0 },
+        ..Default::default()
     });
     w.environment.wind_speed_mps = 0.0;
     w

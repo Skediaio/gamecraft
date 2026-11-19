@@ -62,6 +62,11 @@ impl Edit<'_> {
         self.world.terrain.as_ref()?;
         self.heights?.height_at(x, z)
     }
+
+    /// The height field of the world before the command (`None` without terrain).
+    pub fn heights(&self) -> Option<&HeightField> {
+        self.heights
+    }
 }
 
 /// A World handler: changes the copy in `edit`.
@@ -117,6 +122,7 @@ const MODULES: &[&[Registration]] = &[
     crate::prefab_cmds::SPECS,
     crate::journal_cmds::SPECS,
     crate::gm_cmds::SPECS,
+    crate::terrain_cmds::SPECS,
 ];
 
 /// The spec and scope of the built-in command `name`, without a session (for checking the
@@ -417,18 +423,43 @@ impl Session {
         }
     }
 
-    /// Rebuilds the document's height field when its terrain changed.
+    /// Rebuilds the document's height field when its terrain changed: takes `built` when the
+    /// handler made it, else rebuilds the tiles the change touches (a whole build for another
+    /// grid or source).
     fn refresh_heights(&mut self, built: Option<HeightField>) {
         if self.heights.terrain == self.document.terrain {
             return;
         }
-        self.heights = match (built, &self.document.terrain) {
-            (Some(field), Some(terrain)) => HeightCache {
+        let rebuilt = match (
+            &self.document.terrain,
+            &self.heights.terrain,
+            &self.heights.field,
+        ) {
+            (Some(terrain), _, _) if built.is_some() => built.map(|f| (terrain, f)),
+            (Some(terrain), Some(old), Some(field)) => {
+                terrain.rebuild(old, field).ok().map(|r| (terrain, r.field))
+            }
+            _ => None,
+        };
+        self.heights = match rebuilt {
+            Some((terrain, field)) => HeightCache {
                 terrain: Some(terrain.clone()),
                 field: Some(Arc::new(field)),
             },
-            _ => HeightCache::for_world(&self.document),
+            None => HeightCache::for_world(&self.document),
         };
+    }
+
+    /// The height field of the document (not of a running world), shared: what `sim.start`
+    /// hands the simulation so it does not build the terrain again.
+    pub(crate) fn document_heights_shared(&self) -> Option<Arc<HeightField>> {
+        self.heights.field.clone()
+    }
+
+    /// The height field of the document (not of a running world), `None` without terrain.
+    /// A host writes the document's terrain tile cache from it.
+    pub fn document_heights(&self) -> Option<&HeightField> {
+        self.heights.field.as_deref()
     }
 
     /// The running simulation, to change.
@@ -546,6 +577,17 @@ impl Session {
         self.view_revision += 1;
         self.refresh_heights(None);
         Ok(())
+    }
+
+    /// [`Session::replace_document`] with the height field of `world`'s terrain, which the
+    /// host built (from a tile cache): it must be what the terrain builds to, and is ignored
+    /// when the world has no terrain.
+    pub fn replace_document_with_heights(&mut self, world: World, heights: HeightField) {
+        self.heights = HeightCache {
+            terrain: world.terrain.clone(),
+            field: world.terrain.as_ref().map(|_| Arc::new(heights)),
+        };
+        self.replace_document(world);
     }
 
     /// A host opened a file or started a new world: stops any simulation, makes `world` the

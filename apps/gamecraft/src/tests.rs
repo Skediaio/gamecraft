@@ -273,6 +273,7 @@ fn flat_heights(height: f64) -> gamecraft_world::HeightField {
         size_m: 64.0,
         cell_m: 1.0,
         source: TerrainSource::Flat { height_m: height },
+        ..Default::default()
     }
     .build()
     .unwrap()

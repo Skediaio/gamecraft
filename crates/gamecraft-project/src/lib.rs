@@ -32,6 +32,7 @@ mod pack;
 mod paths;
 mod project;
 mod resolve;
+mod terrain;
 mod text;
 
 pub use error::ProjectError;
@@ -46,3 +47,4 @@ pub use paths::{
 pub use project::{
     DEFAULT_LAYER, EntitySource, PackInfo, Project, Provenance, SavePlan, Saving, manifests,
 };
+pub use terrain::TERRAIN_EDITS_FORMAT;

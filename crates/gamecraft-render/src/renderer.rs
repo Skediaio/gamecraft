@@ -11,7 +11,8 @@ use crate::{Camera, Quality, RenderError};
 use crate::{Picture, PictureRequest, PictureStats};
 use gamecraft_math::{DQuat, DVec3, deg_to_rad};
 use gamecraft_world::{
-    Character, Entity, EntityId, Environment, HeightField, Plant, Shape, ShapeKind, Terrain, World,
+    Character, Entity, EntityId, Environment, HeightField, Plant, Shape, ShapeKind, Terrain,
+    TerrainLayer, World,
 };
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
@@ -39,6 +40,10 @@ const LAYER_COLORS: [[f32; 4]; mesh::TERRAIN_LAYERS] = [
 ];
 /// The endless ground plane's linear albedo: the grass layer, a shade darker (far land).
 const GROUND_COLOR: [f32; 3] = [0.065, 0.11, 0.03];
+/// With painted layers the ground plane is the first layer's colour times this (far land).
+const GROUND_SHADE: f32 = 0.87;
+/// How much the shading of a painted layer varies (VisionCraft's `variation`).
+const LAYER_VARIATION: f32 = 0.5;
 /// How far sun shadows reach: twice the distance to the point looked at, within these
 /// bounds (metres).
 const SHADOW_SHARE: f64 = 2.0;
@@ -139,24 +144,48 @@ impl DrawnEntity {
     }
 }
 
-/// What the scene's geometry was built from; a sync with the same skips the rebuild.
+/// What the scene's geometry was built from; a sync with the same skips the rebuild. The
+/// height field is derived from the terrain recipe, so the recipe and the field's shape stand
+/// for its samples (comparing millions of samples every frame would not be cheap).
 struct GeometryKey {
     terrain: Option<Terrain>,
-    heights: Option<HeightField>,
+    heights: Option<FieldShape>,
     entities: Vec<DrawnEntity>,
+}
+
+/// The grid of a height field, without its samples.
+#[derive(Clone, Copy, PartialEq)]
+struct FieldShape {
+    cols: usize,
+    rows: usize,
+    cell_m: f64,
+    min: [f64; 2],
+    layers: usize,
+}
+
+impl FieldShape {
+    fn of(h: &HeightField) -> FieldShape {
+        FieldShape {
+            cols: h.cols(),
+            rows: h.rows(),
+            cell_m: h.cell_m(),
+            min: h.min(),
+            layers: h.layer_count(),
+        }
+    }
 }
 
 impl GeometryKey {
     fn of(world: &World, heights: Option<&HeightField>) -> GeometryKey {
         GeometryKey {
             terrain: world.terrain.clone(),
-            heights: heights.cloned(),
+            heights: heights.map(FieldShape::of),
             entities: world.entities().filter_map(DrawnEntity::of).collect(),
         }
     }
 
     fn matches(&self, world: &World, heights: Option<&HeightField>) -> bool {
-        if self.terrain != world.terrain || self.heights.as_ref() != heights {
+        if self.terrain != world.terrain || self.heights != heights.map(FieldShape::of) {
             return false;
         }
         let mut drawn = world
@@ -203,6 +232,8 @@ pub struct WorldRenderer {
     units: Option<UnitMeshes>,
     /// Terrain chunks are shaded by the layers; the renderer still wants a material per item.
     terrain_material: vc::MaterialId,
+    /// The painted layers handed to the renderer (empty: the built-in grass, earth and rock).
+    layers: Vec<TerrainLayer>,
     built: Built,
     /// The item of impact puffs and its material (kept for the renderer's life), when the
     /// sphere mesh could be uploaded.
@@ -232,13 +263,7 @@ impl WorldRenderer {
         if let Err(e) = renderer.set_sky(&vc::Sky::Physical) {
             setup_problems.push(format!("The physical sky could not be set up: {e}."));
         }
-        let layers = LAYER_COLORS.map(|base_color| vc::TerrainLayer {
-            base_color,
-            roughness: 0.9,
-            variation: 0.5,
-            ..Default::default()
-        });
-        if let Err(e) = renderer.set_terrain_layers(&layers) {
+        if let Err(e) = renderer.set_terrain_layers(&default_layers()) {
             setup_problems.push(format!("The terrain layers could not be set up: {e}."));
         }
         let mut unit = |m: MeshData| upload_mesh(&mut renderer, &m);
@@ -290,6 +315,7 @@ impl WorldRenderer {
             rebuilds: 0,
             units,
             terrain_material,
+            layers: Vec::new(),
             built: Built::default(),
             puffs,
             puff_instances: Vec::new(),
@@ -605,6 +631,28 @@ impl WorldRenderer {
             },
             (None, None) => None,
         };
+        let layers = world
+            .terrain
+            .as_ref()
+            .map(|t| t.layers.clone())
+            .unwrap_or_default();
+        if layers != self.layers {
+            let set = if layers.is_empty() {
+                default_layers().to_vec()
+            } else {
+                layers.iter().map(vc_layer).collect()
+            };
+            match self.renderer.set_terrain_layers(&set) {
+                Ok(()) => self.layers = layers.clone(),
+                Err(e) => problems.push(format!(
+                    "The terrain's painted layers could not be set up: {e}."
+                )),
+            }
+        }
+        let ground_color = match layers.first() {
+            Some(l) => l.color.map(|c| c as f32 * GROUND_SHADE),
+            None => GROUND_COLOR,
+        };
         let mut scene = Scene {
             r: &mut self.renderer,
             built: &mut self.built,
@@ -617,7 +665,7 @@ impl WorldRenderer {
                 scene.terrain(h, plane, self.terrain_material);
                 scene.r.set_ground(Some(vc::Ground {
                     height: plane as f32,
-                    color: GROUND_COLOR,
+                    color: ground_color,
                     ..Default::default()
                 }));
             }
@@ -629,6 +677,28 @@ impl WorldRenderer {
         scene.characters(world);
         scene.plants(world);
         self.problems = problems;
+    }
+}
+
+/// The built-in layers of a terrain without painted ones: grass, bare earth and rock.
+fn default_layers() -> [vc::TerrainLayer; mesh::TERRAIN_LAYERS] {
+    LAYER_COLORS.map(|base_color| vc::TerrainLayer {
+        base_color,
+        roughness: 0.9,
+        variation: LAYER_VARIATION,
+        ..Default::default()
+    })
+}
+
+/// A painted layer for the renderer: its colour and roughness (texture maps when assets
+/// exist).
+fn vc_layer(l: &TerrainLayer) -> vc::TerrainLayer {
+    let [r, g, b] = l.color.map(|c| c as f32);
+    vc::TerrainLayer {
+        base_color: [r, g, b, 1.0],
+        roughness: l.roughness as f32,
+        variation: LAYER_VARIATION,
+        ..Default::default()
     }
 }
 

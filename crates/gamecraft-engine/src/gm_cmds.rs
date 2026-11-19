@@ -372,7 +372,11 @@ fn sight(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
     let sim = match session.live() {
         Some(sim) => sim,
         None => {
-            built = Sim::new(session.document().clone()).map_err(failed)?;
+            built = Sim::with_heights(
+                session.document().clone(),
+                session.document_heights_shared(),
+            )
+            .map_err(failed)?;
             &built
         }
     };

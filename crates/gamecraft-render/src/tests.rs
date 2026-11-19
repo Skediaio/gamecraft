@@ -22,6 +22,7 @@ fn noise_terrain(size_m: f64, cell_m: f64) -> Terrain {
             octaves: 4,
             roughness: 0.5,
         },
+        ..Default::default()
     }
 }
 
@@ -276,6 +277,7 @@ fn valley() -> (World, HeightField) {
             octaves: 5,
             roughness: 0.5,
         },
+        ..Default::default()
     };
     let hf = terrain.build().unwrap();
     world.terrain = Some(terrain);
@@ -893,5 +895,52 @@ mod combat {
             ..camera
         };
         assert!(effects::crosshair_segments(&degenerate, height).is_empty());
+    }
+}
+
+#[test]
+fn painted_layers_reach_the_chunks_and_the_apron() {
+    let mut t = noise_terrain(256.0, 2.0);
+    t.layers = ["grass", "rock", "road"]
+        .iter()
+        .map(|n| gamecraft_world::TerrainLayer {
+            name: (*n).into(),
+            color: [0.2, 0.2, 0.2],
+            roughness: 0.9,
+        })
+        .collect();
+    t.edits = vec![gamecraft_world::TerrainEdit::Paint {
+        layer: "road".into(),
+        center: [0.0, 0.0],
+        radius_m: 20.0,
+        strength: 1.0,
+        falloff: 0.2,
+    }];
+    let h = t.build().unwrap();
+    // Every vertex carries its sample's weights from the height field.
+    for chunk in mesh::terrain_chunks(&h) {
+        let nx = chunk.mesh.positions.len();
+        assert_eq!(chunk.weights.len(), nx);
+        let cols = 1 + (h.cols() - 1 - chunk.first_col).min(mesh::TERRAIN_CHUNK_CELLS);
+        for (i, w) in chunk.weights.iter().enumerate() {
+            let (c, r) = (chunk.first_col + i % cols, chunk.first_row + i / cols);
+            assert_eq!(Some(*w), h.weight(c, r), "({c}, {r})");
+        }
+    }
+    let centre = mesh::terrain_chunks(&h)
+        .into_iter()
+        .flat_map(|c| c.mesh.positions.into_iter().zip(c.weights))
+        .find(|(p, _)| p[0] == 0.0 && p[2] == 0.0)
+        .unwrap();
+    assert_eq!(centre.1[2], 255);
+    // The apron's border ring is the terrain's weights; its outer ring the first layer.
+    let apron = mesh::terrain_apron(&h, 0.0);
+    let per = apron.weights.len() / (mesh::APRON_RINGS + 1);
+    assert_eq!(apron.weights[0], h.weight(0, 0).unwrap());
+    for w in apron.weights.iter().skip(per * mesh::APRON_RINGS) {
+        assert_eq!(w[0], 255, "{w:?}");
+    }
+    for w in &apron.weights {
+        assert_eq!(w.iter().map(|v| u32::from(*v)).sum::<u32>(), 255);
     }
 }

@@ -10,6 +10,54 @@
   ],
   "terrain": {
     "cell_m": 2.0,
+    "layers": [
+      {
+        "color": [
+          0.075,
+          0.13,
+          0.035
+        ],
+        "name": "grass",
+        "roughness": 0.9
+      },
+      {
+        "color": [
+          0.2,
+          0.15,
+          0.095
+        ],
+        "name": "dirt",
+        "roughness": 0.9
+      },
+      {
+        "color": [
+          0.28,
+          0.27,
+          0.25
+        ],
+        "name": "rock",
+        "roughness": 0.8
+      },
+      {
+        "color": [
+          0.3,
+          0.27,
+          0.22
+        ],
+        "name": "road",
+        "roughness": 0.95
+      }
+    ],
+    "paint_rules": [
+      {
+        "layer": "dirt",
+        "slope_min_deg": 20.0
+      },
+      {
+        "layer": "rock",
+        "slope_min_deg": 30.0
+      }
+    ],
     "size_m": 384.0,
     "source": {
       "feature_m": 160.0,

@@ -30,6 +30,8 @@ pub mod mcp;
 #[cfg(not(target_arch = "wasm32"))]
 mod projects;
 pub mod rpc;
+#[cfg(not(target_arch = "wasm32"))]
+mod terrain_cache;
 
 pub use docs::{CommandDoc, ParamDoc};
 pub use host::{

@@ -8,8 +8,9 @@ use crate::manifest::{Manifest, dependency_order};
 use crate::pack::{Pack, PackSource, manifest_of, parse_pack};
 use crate::paths::{is_plain_name, is_prefab_file_id, layer_path, prefab_path, world_path};
 use crate::resolve::{Resolved, Slot, build_world, ordered, resolve};
+use crate::terrain::{edits_path, edits_text};
 use crate::text::{pretty_ordered, pretty_typed};
-use gamecraft_world::{Entity, EntityId, World};
+use gamecraft_world::{Entity, EntityId, TerrainEdit, World};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -87,6 +88,8 @@ struct Next {
 struct Base {
     has_world: bool,
     fields: Map<String, Value>,
+    /// The terrain edits the dependencies give.
+    edits: Vec<TerrainEdit>,
     entities: BTreeMap<String, (String, LayerEntity)>,
     prefabs: BTreeSet<String>,
 }
@@ -98,6 +101,8 @@ struct Own {
     fields: Option<Map<String, Value>>,
     layers: BTreeMap<String, Layer>,
     prefab_files: BTreeSet<String>,
+    /// `terrain/edits.json`; `None` when the root pack has none.
+    edits: Option<Vec<TerrainEdit>>,
 }
 
 /// An open project: the root pack, its dependencies in load order, the world being edited and
@@ -331,6 +336,7 @@ impl Project {
             fields: None,
             layers: BTreeMap::new(),
             prefab_files: root.prefabs.keys().cloned().collect(),
+            edits: None,
         };
         let by_key: BTreeMap<&str, EntityId> = self
             .provenance
@@ -343,6 +349,7 @@ impl Project {
             return own;
         };
         own.fields.clone_from(&dir.fields);
+        own.edits.clone_from(&dir.edits);
         for (name, layer) in &dir.layers {
             let entries = layer
                 .entries
@@ -524,6 +531,20 @@ impl Project {
             own.fields = Some(patch);
         }
 
+        // Terrain edits: the whole list to the root pack's file when it differs from what
+        // the files give.
+        let edits = world
+            .terrain
+            .as_ref()
+            .map(|t| t.edits.clone())
+            .unwrap_or_default();
+        let given = own.edits.as_ref().unwrap_or(&self.base.edits);
+        if edits != *given {
+            plan.writes
+                .insert(edits_path(&self.world), edits_text(&edits)?);
+            own.edits = Some(edits);
+        }
+
         // Prefabs: a changed or new one is written whole; a removed one is deleted, or
         // removed by a marker when a dependency brings it.
         for prefab in &world.prefabs {
@@ -673,6 +694,8 @@ impl Project {
                 "entities_removed": removed,
                 "prefabs_changed": prefabs_changed,
                 "world_fields_changed": world_fields(world)? != self.saved_fields,
+                "terrain_edits_changed": world.terrain.as_ref().map(|t| &t.edits)
+                    != self.saved.terrain.as_ref().map(|t| &t.edits),
                 "files": saving.plan.writes.keys().collect::<Vec<_>>(),
                 "removes": saving.plan.removes,
             },
@@ -694,6 +717,11 @@ fn base_of(deps: &[&Pack], world: &str) -> Result<Base, ProjectError> {
     }
     let built = build_world(&resolved, world)?;
     base.fields = world_fields(&built)?;
+    base.edits = built
+        .terrain
+        .as_ref()
+        .map(|t| t.edits.clone())
+        .unwrap_or_default();
     let keys: BTreeMap<EntityId, &str> = resolved
         .slots
         .iter()
