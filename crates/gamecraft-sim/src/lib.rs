@@ -99,7 +99,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use gamecraft_math::{StateHasher, wrap_deg};
-use gamecraft_world::{EntityId, HeightField, World};
+use gamecraft_world::{Entity, EntityId, HeightField, World};
 use serde::{Deserialize, Serialize};
 
 pub mod aim;
@@ -833,8 +833,8 @@ impl Sim {
     /// both; positions come from the new world (so a character can be moved by hand). The
     /// height field is rebuilt only when the terrain changed. Projectiles fly on; a launcher
     /// and a behaviour that exist in both keep their state, new ones start fresh (a full
-    /// magazine; the base state, with the entity's place as its post). On an error nothing
-    /// changes.
+    /// magazine; the base state, with the entity's place as its post); a behaviour whose route
+    /// changed walks to the new route's first point next. On an error nothing changes.
     pub fn replace_world(&mut self, world: World) -> Result<(), SimError> {
         world
             .validate()
@@ -879,6 +879,15 @@ impl Sim {
                     .get(&entity.id)
                     .copied()
                     .unwrap_or_else(|| Brain::new(entity, behaviour));
+                let old_route = self
+                    .world
+                    .entity(entity.id)
+                    .and_then(Entity::behaviour)
+                    .map(|b| b.route.as_slice());
+                if old_route.is_some_and(|r| r != behaviour.route.as_slice()) {
+                    // A new route starts at its first point.
+                    brain.waypoint = 0;
+                }
                 brain.adapt(behaviour);
                 brains.insert(entity.id, brain);
             }

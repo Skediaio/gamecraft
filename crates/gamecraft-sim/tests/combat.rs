@@ -646,3 +646,42 @@ fn a_world_change_keeps_the_projectiles_flying() {
     sim.step(5);
     assert_eq!(sim.projectiles().len(), 1);
 }
+
+#[test]
+fn a_new_route_starts_at_its_first_point() {
+    let mut w = range_world();
+    let walker = soldier(
+        &mut w,
+        "walker",
+        [0.0, 0.0, 0.0],
+        vec![Component::Behaviour(Behaviour {
+            mode: BehaviourMode::Patrol,
+            route: vec![[0.0, -10.0], [10.0, -10.0], [10.0, 0.0]],
+            ..Behaviour::default()
+        })],
+    );
+    let mut sim = Sim::new(w).unwrap();
+    sim.step(60 * 8);
+    assert_eq!(
+        sim.brain(walker).unwrap().waypoint,
+        1,
+        "on its way to the second point"
+    );
+    // The same route again keeps the waypoint: only a change starts over.
+    let same = sim.world().clone();
+    sim.replace_world(same).unwrap();
+    assert_eq!(sim.brain(walker).unwrap().waypoint, 1);
+    let mut changed = sim.world().clone();
+    let entity = changed.entity_mut(walker).unwrap();
+    entity.set_component(Component::Behaviour(Behaviour {
+        mode: BehaviourMode::Patrol,
+        route: vec![[-10.0, 0.0], [-10.0, 10.0], [0.0, 10.0]],
+        ..Behaviour::default()
+    }));
+    sim.replace_world(changed).unwrap();
+    assert_eq!(
+        sim.brain(walker).unwrap().waypoint,
+        0,
+        "a new route starts at its first point"
+    );
+}

@@ -293,7 +293,14 @@ fn resources_and_prompts_are_listed_and_read() {
         .iter()
         .map(|r| r["uri"].as_str().unwrap())
         .collect();
-    assert_eq!(uris, ["gamecraft://world", "gamecraft://guide"]);
+    assert_eq!(
+        uris,
+        [
+            "gamecraft://world",
+            "gamecraft://guide",
+            "gamecraft://guide/game-master"
+        ]
+    );
     let world = one(
         &mut h,
         json!({"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": {"uri": "gamecraft://world"}}),
@@ -382,4 +389,63 @@ fn malformed_messages_get_errors_and_the_server_keeps_serving() {
     );
     assert_eq!(replies.len(), 2);
     assert_eq!(replies[1]["result"], json!({}));
+}
+
+#[test]
+fn the_game_master_has_a_prompt_and_a_guide() {
+    let mut h = host();
+    let prompts = one(
+        &mut h,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "prompts/list"}),
+    );
+    let names: Vec<&str> = prompts["result"]["prompts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["build_world", "direct_scenario"]);
+    let got = one(
+        &mut h,
+        json!({"jsonrpc": "2.0", "id": 2, "method": "prompts/get", "params": {"name": "direct_scenario", "arguments": {"goal": "a hard but fair fight"}}}),
+    );
+    let text = got["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("a hard but fair fight"), "{text}");
+    for word in [
+        "gm.overview",
+        "gm.order",
+        "gm.sight",
+        "prefab.spawn",
+        "environment.set",
+        "message.show",
+        "sim.step",
+        "intent",
+        "fair",
+        "gamecraft://guide/game-master",
+    ] {
+        assert!(text.contains(word), "the prompt lacks {word}: {text}");
+    }
+    let missing = one(
+        &mut h,
+        json!({"jsonrpc": "2.0", "id": 3, "method": "prompts/get", "params": {"name": "direct_scenario"}}),
+    );
+    assert_eq!(missing["error"]["code"], -32602);
+    assert!(
+        missing["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("goal"),
+        "{missing}"
+    );
+    let guide = one(
+        &mut h,
+        json!({"jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": {"uri": "gamecraft://guide/game-master"}}),
+    );
+    let content = &guide["result"]["contents"][0];
+    assert_eq!(content["mimeType"], "text/markdown");
+    let text = content["text"].as_str().unwrap();
+    assert!(text.starts_with("# Directing a game"), "{text}");
+    assert!(text.contains("gm.overview"));
 }

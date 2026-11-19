@@ -12,6 +12,7 @@ Everything here was made with engine commands only, nothing else.
 | `build.json` | The `gamecraft-cli run` script that builds the whole world: terrain, environment, trees, cover, player, enemies with their behaviour, objectives, variables and triggers. The enemies are placed from one prefab, `enemy-soldier` (the patrols override its `behaviour`), and the houses from a prefab `house` (House 2 overrides its `shape`) |
 | `world.gamecraft` | The result of that script (a test checks that building it again gives the same world) |
 | `playthrough.json` | A `gamecraft-cli play` script: a scripted player that moves from cover to cover, keeps each enemy in its sights with `face_entity`, and wins at 53.3 s with 43 health left |
+| `directed.journal.json` | The journal of the same playthrough directed by a scripted game master (`apps/gamecraft-cli/tests/game_master.rs`): reinforcements behind the village after two enemies are down, fog when the player is below half health, the wind turned when the player reaches the houses. This time the player goes down and both objectives fail. `gamecraft-cli replay examples/skirmish/directed.journal.json --check` |
 
 ## The weapons
 
@@ -82,7 +83,9 @@ gamecraft examples/skirmish/world.gamecraft
 ## What a game master can do while it runs
 
 Start `gamecraft-cli serve --file examples/skirmish/world.gamecraft` (or `gamecraft-cli mcp`),
-send `sim.start`, then step and steer:
+send `sim.start`, then look with `gm.overview`, step and steer. The game master's guide,
+[`docs/guide/game-master.md`](../../docs/guide/game-master.md), has ten such moves as exact
+commands; a few:
 
 - Turn the weather against the shooter: `environment.set {"wind_speed_mps": 18, "rain": 0.6,
   "mist": 0.8}` bends the shots and cuts how far the enemies (and you) see.
@@ -90,6 +93,9 @@ send `sim.start`, then step and steer:
   "Reinforcement", "overrides": [{"type": "behaviour", "mode": "patrol", "route": [[60, -40],
   [20, -40]], "team": "red"}]}` drops a soldier who patrols from the next tick, then
   `var.set {"name": "enemies_left", "add": 1}` so the count stays right.
+- Move a squad: `gm.order {"entity": ["Patrol Alpha", "Patrol Bravo"], "order": "move",
+  "point": [4, -62]}` pulls both patrols back to the houses; `"order": "patrol"` sends them on
+  their rounds again.
 - Take an enemy over and play it: `sim.input {"entity": "Hill Sentry", "face": [0, 48],
   "fire": true}` makes it fire where you say, and `sim.release {"entity": "Hill Sentry"}` gives
   it back to its behaviour.

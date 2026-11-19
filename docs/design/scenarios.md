@@ -56,9 +56,11 @@ that plays or directs sees what happened without polling.
 
 ## The game master
 
-There is no separate game-master API: the game master is whoever sends world commands to a
-running world. What makes it practical are the queries (`entity.find` by tag and area,
-`sim.state`, `objective.list`) and the events in each step's answer. An agent directing a
+The game master is whoever sends world commands to a running world. What makes it practical
+is a view and a few orders: `gm.overview` (every character with team, health, behaviour state
+and whom it sees; objectives, recent events, weather), `gm.sight` and `gm.order` (patrol, guard,
+hold, move, for one character or a squad by tag), messages to a character or a tag, and the
+events in each step's answer. The guide is `docs/guide/game-master.md`. An agent directing a
 scenario loops: read the state and the events, decide, send commands, step.
 
 ## Open

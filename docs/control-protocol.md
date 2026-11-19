@@ -150,7 +150,7 @@ Components, as in the file format (fields left out take their defaults):
 | `sim.fire` | `{entity, yaw_deg?, pitch_deg?}` | `{entity, projectile, magazine: {left, shots, ready_in_s, reloading}}`; fires the entity's launcher now (anything with a `launcher`, a character too); `yaw_deg` defaults to its rotation, `pitch_deg` (-90 to 90) to a character's input pitch, else 0; refused while the launcher is not ready (it says how long to wait) or the entity is down |
 | `sim.release` | `{entity}` | `{entity, released, behaviour}`; hands a character an agent took over back to its behaviour |
 | `sim.step` | `{ticks? = 1, seconds?}` | `{tick, time_s, hash, characters: [{id, name, position, rotation_y_deg, velocity, grounded, health, behaviour, magazine}], projectiles: [{id, shooter, position, velocity, speed_mps, age_s}], events: [{tick, event, ...}], fired: [{trigger, tick, event, ok, error?}]}`; whole ticks of 1/60 s, at most 36000 per call; the triggers run after each tick; at most 1000 events and 1000 fired listed (`events_omitted`, `fired_omitted` count the rest); `health` is `{max, current, armor, down}`, `behaviour` `{state, target?, wait_s?, point?, left_s?, waypoint, taken_over}` and `magazine` `{left, shots, ready_in_s, reloading}`, each null without the component |
-| `sim.state` | `{}` | `{playing: false}` or `{playing: true, tick, time_s, hash, characters: [...], projectiles: [...], inputs: [{entity, forward, right, yaw_deg, pitch_deg, run, jump, interact, fire, face, face_entity, face_pitch}], objectives, messages: [{text, to, shown_at_s, until_s}], trigger_errors: [{trigger, tick, error}]}`; the last 20 trigger errors |
+| `sim.state` | `{for?}` | `{playing: false}` or `{playing: true, tick, time_s, hash, characters: [...], projectiles: [...], inputs: [{entity, forward, right, yaw_deg, pitch_deg, run, jump, interact, fire, face, face_entity, face_pitch}], objectives, messages: [{text, to, recipients, shown_at_s, until_s}], trigger_errors: [{trigger, tick, error}]}`; the last 20 trigger errors; with `for` (a character) only the messages that character sees, as its player would: those for everyone, for it, or for a tag it has |
 | `sim.stop` | `{keep? = false}` | `{tick, kept}`; throws the running world away, or with `keep` makes it the document as one undo step; the journal stays readable until the next `sim.start` |
 | `journal.get` | `{from_tick?, to_tick?, limit? = 1000}` | `{recording, world, entry_count, matched, entries: [{index, tick, command, params, end_tick?, hash}], final: {tick, hash} \| null, truncated}`; the journal of the running (or last) simulation: every world command, `sim.input`, `sim.fire`, `sim.release`, `message.show` and `sim.step` sent from outside, with the tick it took effect at and the state hash after it (`end_tick` for a step); queries and the commands of triggers are not recorded; entries whose tick is in `from_tick..=to_tick`, at most `limit` (1 to 10000); before the first `sim.start` `recording: false` and no entries |
 
@@ -169,7 +169,8 @@ While a simulation runs, the World, Entities and Scenarios commands change the r
 | `trigger.add` | `{id, when, if?, do, once? = true, enabled? = true}` | the trigger; every command of `do` is checked against its spec now (world commands and `message.show` only; `$who` and `$target` only as the whole value of an entity parameter of an `enter`, `leave`, `interact`, `hit`, `down` or `heard` trigger); `if` is `{var, op, value}`, `{objective, status}` (`open`, `done` or `failed`), `{all: [...]}` or `{any: [...]}` |
 | `trigger.set` | `{id, when?, if?, do?, once?, enabled?}` | the trigger; only the fields given change, then the whole trigger is checked again |
 | `trigger.remove` | `{id}` | `null` |
-| `message.show` | `{text, to?, seconds? = 5}` | `{text, to, shown_at_s, until_s}`; while playing only; listed in `sim.state` until it expires; inside a trigger `{var:name}` in `text` becomes the variable's value and `{who}` and `{target}` the names of the event's entities, when the step runs; a placeholder without a value stays as written and is reported once in `trigger_errors` |
+| `message.show` | `{text, to?, seconds? = 5}` | `{text, to, recipients, shown_at_s, until_s}`; while playing only; `to` is a character (id or name) or `tag:<tag>` for every character with that tag (some character must have it), everyone when left out; `recipients` are the characters it reaches now (null for everyone); listed in `sim.state` until it expires; inside a trigger `{var:name}` in `text` becomes the variable's value and `{who}` and `{target}` the names of the event's entities, when the step runs; a placeholder without a value stays as written and is reported once in `trigger_errors` |
+| `gm.order` | `{entity, order, route?, point?}` | `{ordered: [{id, name, mode, route}]}`; changes the mode and route of behaviours and keeps the rest (team, ranges, aim): `order` is `patrol` (walk `route` `[[x, z], ...]`, or the route it has, from its first point), `move` (walk to `point` `[x, z]` and stay: a patrol of one point), `hold` (stand where it is: mode `idle`) or `guard` (back to its post); `entity` is a character, `tag:<tag>` or a list of these (at most 256), so one command moves a squad; a character without a behaviour gets one with the defaults; one that fights or searches finishes first; on the running world as on the document |
 | `scenario.inspect` | `{}` | `{playing, tick, vars, objectives, triggers: [{id, when, if?, do, once, enabled, fired}], messages, trigger_errors}` |
 | `objective.list` | `{}` | `{objectives: [{id, title, status, hidden}], open, done, failed}` |
 
@@ -200,6 +201,8 @@ false`, `trigger_errors`) and changes nothing. Triggers fired by triggers nest a
 | `query.line_of_sight` | `{from, to}` | `{clear, distance_m, blocked_by?: {kind, entity?, name?, point, distance_m}}`; the same hits as `query.raycast`, between two points |
 | `query.aim` | `{from, to: [x, y, z] \| entity, launcher?}` | `{yaw_deg, pitch_deg, time_of_flight_s, drop_m, drift_m, reachable, miss_m, from, target}`; the firing solution of the launcher of `from` (or of `launcher`, fired from `from`'s muzzle) at a point or an entity (a character's chest), in the current air and wind: trial shots flown with the simulation's own flight model until one passes within 2 cm, at most 40; the low solution only (pitch at most 45 degrees); `reachable: false` beyond the projectile's flight; obstacles, dispersion and the target's motion are not considered |
 | `species.list` | `{filter?, category?, limit? = 100}` | `{total, species: [{id, common_name, botanical_name, category, mature_height_m, mature_width_m, evergreen}]}`; the plant library |
+| `gm.overview` | `{near?, radius_m? = 100, team?}` | `{playing, tick, time_s, hash, characters: [{id, name, team, position, health, down, mode, state, target?, sees, taken_over}], characters_omitted?, teams: [{team, alive, down}], objectives, events, names: {id: name}, messages, weather: {time_of_day_h, sun_elevation_deg, cloud_cover, mist, rain, wind_direction_deg, wind_speed_mps, temperature_c, light, visibility_m}, vars, projectiles}`; the game master's view: every character (at most 200; `near` `[x, z]` with `radius_m` and `team` narrow the list, the teams count everyone) with its behaviour's state and target, whom it sees (the simulation's perception) and whether an agent took it over; the last 50 events with their ticks; numbers rounded to centimetres; while editing the document, with `tick`, `state` and `sees` null |
+| `gm.sight` | `{from}` | `{from, name, eye, facing_deg, range_m, fov_deg, light, visibility_m, characters: [{id, name, team, enemy, down, distance_m}], entities: [{id, name, kind, distance_m}], entities_omitted?}`; who and what a character sees now, by the simulation's perception (view range shortened by night, mist and rain, field of view, a clear line); `entities` are shapes, zones, interactables and lights whose middle it sees, nearest first, at most 100 |
 | `component.list` | `{}` | `{components: [{type, summary, fields: [{name, type, unit, default, doc}], example}]}`; every component type with its fields and defaults |
 
 `world.inspect` (MCP: `doc_inspect`, and the resource `gamecraft://world`) describes the current
@@ -278,10 +281,15 @@ model reads it and corrects itself.
 |---|---|---|
 | `gamecraft://world` | `application/json` | `world.inspect` of the current world |
 | `gamecraft://guide` | `text/markdown` | the agent guide, [`agent.md`](agent.md) |
+| `gamecraft://guide/game-master` | `text/markdown` | the game master's guide, [`guide/game-master.md`](guide/game-master.md) |
 
 The prompt `build_world {description}` briefs an agent to build the described world with the
 commands (plan in numbers, atomic batches), check it with `doc_inspect`, look at it with
-`doc_render_preview`, try it by playing and save it.
+`doc_render_preview`, try it by playing and save it. The prompt `direct_scenario {goal}`
+briefs an agent to direct the running scenario towards `goal` as its game master: read
+`gm.overview` every few seconds of game time, decide, act with world commands, `prefab.spawn`,
+`gm.order`, `environment.set` and `message.show`, step, keep it fair and fun, and give each
+command an `intent`.
 
 ## Limits
 
@@ -321,8 +329,8 @@ it, is planned for M1. Today both servers run in the process that owns the sessi
   `command` (as the JSON-lines protocol); not both.
 - **Tools.** `doc_inspect` runs `world.inspect`; `doc_render_preview` takes a picture size, a
   `camera` or a `follow` (no viewpoints, quality or photo settings); there is no window tool
-  `control_call`. Resources are `gamecraft://world` and `gamecraft://guide`; the prompt is
-  `build_world`.
+  `control_call`. Resources are `gamecraft://world`, `gamecraft://guide` and
+  `gamecraft://guide/game-master`; the prompts are `build_world` and `direct_scenario`.
 - **Paths** need a root: there is no unrestricted mode, and the existing parent folder is
   resolved with its links before the check.
 - **No control channel yet** (M1).

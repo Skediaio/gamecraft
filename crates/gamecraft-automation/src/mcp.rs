@@ -16,7 +16,7 @@
 //! | `doc_inspect` | `world.inspect` |
 //! | `doc_render_preview` | a PNG of the current world as an image block |
 //!
-//! Adapted: GameCraft's tools, resources and prompt; no window tool (`control_call`) and no
+//! Adapted: GameCraft's tools, resources and prompts; no window tool (`control_call`) and no
 //! agent log; `command_run` and a batch step take the command as `id` or as `command`.
 
 use crate::commands::{BatchOptions, ListQuery, Stopwatch, command_of, panic_text, parse_steps};
@@ -47,12 +47,16 @@ Start with command_list {\"brief\": true} (then {\"id\": ...} for one command's 
 Build with command_batch (atomic: true for all or nothing), check with doc_inspect and look with doc_render_preview. \
 Units are metres, seconds and degrees; Y is up, the ground is x and z, north is -Z and east is +X; an entity's position is its base, the point it stands on; entities are named by id or by name. \
 Play with sim.start, sim.input (what a character is asked to do), sim.step (whole ticks of 1/60 s; the answer has the state hash) and sim.stop; world commands sent while playing change the running world, not the document. \
-Open and save with command_run file.open / file.save; undo with edit.undo. The resource gamecraft://guide is the agent guide.";
+Open and save with command_run file.open / file.save; undo with edit.undo. The resource gamecraft://guide is the agent guide. \
+To direct a running game as its game master, read gm.overview, act with world commands and gm.order, and step: the prompt direct_scenario and the resource gamecraft://guide/game-master brief you.";
 
 const GUIDE_URI: &str = "gamecraft://guide";
 const WORLD_URI: &str = "gamecraft://world";
 const GUIDE: &str = include_str!("../../../docs/agent.md");
+const GM_GUIDE_URI: &str = "gamecraft://guide/game-master";
+const GM_GUIDE: &str = include_str!("../../../docs/guide/game-master.md");
 const PROMPT: &str = "build_world";
+const GM_PROMPT: &str = "direct_scenario";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -214,6 +218,7 @@ fn dispatch(host: &mut Host, method: &str, params: Option<&Value>) -> Result<Val
         "resources/list" => Ok(json!({ "resources": [
             {"uri": WORLD_URI, "name": "world", "title": "The current world", "description": "world.inspect of the current world (the running world while playing), as the tool doc_inspect gives it.", "mimeType": "application/json"},
             {"uri": GUIDE_URI, "name": "guide", "title": "Driving GameCraft", "description": "The agent guide: conventions, the working loop, editing and playing, and a worked example.", "mimeType": "text/markdown"},
+            {"uri": GM_GUIDE_URI, "name": "game-master", "title": "Directing a game", "description": "The game master's guide: the loop of gm.overview, decide, act and step; the commands; ten moves for the Skirmish as exact commands.", "mimeType": "text/markdown"},
         ]})),
         "resources/templates/list" => Ok(json!({ "resourceTemplates": [] })),
         "resources/read" => {
@@ -225,6 +230,7 @@ fn dispatch(host: &mut Host, method: &str, params: Option<&Value>) -> Result<Val
                 })?;
             let (mime, text) = match uri {
                 GUIDE_URI => ("text/markdown", GUIDE.to_string()),
+                GM_GUIDE_URI => ("text/markdown", GM_GUIDE.to_string()),
                 WORLD_URI => {
                     let v = host
                         .execute("world.inspect", &Value::Null)
@@ -237,7 +243,7 @@ fn dispatch(host: &mut Host, method: &str, params: Option<&Value>) -> Result<Val
                 other => {
                     return Err(invalid(format!(
                         "resources/read: unknown resource `{}`; the resources are: {WORLD_URI}, \
-                         {GUIDE_URI}",
+                         {GUIDE_URI}, {GM_GUIDE_URI}",
                         shorten(other)
                     )));
                 }
@@ -249,28 +255,47 @@ fn dispatch(host: &mut Host, method: &str, params: Option<&Value>) -> Result<Val
             "title": "Build a world from a description",
             "description": "Turns a description of a place into a GameCraft world, step by step, checks it with doc_inspect and looks at it with doc_render_preview.",
             "arguments": [{"name": "description", "description": "The world in words: its size and relief, the weather and time of day, what stands where, the characters.", "required": true}],
+        }, {
+            "name": GM_PROMPT,
+            "title": "Direct the running scenario",
+            "description": "Makes the agent the game master of the running scenario: it reads gm.overview every few seconds of game time, decides, acts with world commands and steps, fair and fun, towards a goal.",
+            "arguments": [{"name": "goal", "description": "What the directed game should become: \"a hard but fair fight\", \"a night of mayhem\", \"teach a new player the ropes\".", "required": true}],
         }]})),
         "prompts/get" => {
             let name = params
                 .and_then(|p| p.get("name"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if name != PROMPT {
-                return Err(invalid(format!(
-                    "prompts/get: unknown prompt `{}`; the prompts are: {PROMPT}",
-                    shorten(name)
-                )));
-            }
-            let description = params
+            let (argument, title, brief): (&str, &str, fn(&str) -> String) = match name {
+                PROMPT => (
+                    "description",
+                    "Build a world from a description",
+                    build_world_prompt,
+                ),
+                GM_PROMPT => (
+                    "goal",
+                    "Direct the running scenario",
+                    direct_scenario_prompt,
+                ),
+                _ => {
+                    return Err(invalid(format!(
+                        "prompts/get: unknown prompt `{}`; the prompts are: {PROMPT}, {GM_PROMPT}",
+                        shorten(name)
+                    )));
+                }
+            };
+            let value = params
                 .and_then(|p| p.get("arguments"))
-                .and_then(|a| a.get("description"))
+                .and_then(|a| a.get(argument))
                 .and_then(Value::as_str)
                 .ok_or_else(|| {
-                    invalid("prompts/get: build_world needs the argument `description`")
+                    invalid(format!(
+                        "prompts/get: {name} needs the argument `{argument}`"
+                    ))
                 })?;
             Ok(json!({
-                "description": "Build a world from a description",
-                "messages": [{"role": "user", "content": {"type": "text", "text": build_world_prompt(description)}}],
+                "description": title,
+                "messages": [{"role": "user", "content": {"type": "text", "text": brief(value)}}],
             }))
         }
         other => Err(RpcError {
@@ -295,6 +320,19 @@ Work in this order, and check after each stage:\n\
 4. After each batch: doc_inspect and compare names, positions and counts with your plan; then doc_render_preview (a camera, or follow a character) and look at the picture.\n\
 5. To try it: sim.start, sim.input for a character, sim.step, and read the positions and the state hash; sim.stop when done (keep: false leaves the document as built).\n\
 6. Save with command_run file.save {{\"path\": \"...\"}} when the server may write, and say what you built, with the numbers."
+    )
+}
+
+fn direct_scenario_prompt(goal: &str) -> String {
+    format!(
+        "You are the game master of the scenario running in GameCraft. Your goal:\n\n{goal}\n\n\
+Read the resource gamecraft://guide/game-master once: the loop, the commands and worked moves. Then:\n\
+1. If nothing runs yet (gm.overview says playing: false), start it with sim.start. Somebody else may be playing a character: never send sim.input to the players' characters.\n\
+2. Loop: read gm.overview (who is where, health, down, behaviour states, who sees whom, teams, objectives, the last events, messages, weather); decide; act; then sim.step a few seconds of game time ({{\"seconds\": 3}} to {{\"seconds\": 5}}) and read its events. Repeat until the objectives are no longer open, or the goal is met.\n\
+3. Act only with commands, as anyone would: world commands (entity.add, entity.set, entity.set_component, var.set, objective.add, objective.set, trigger.add), prefab.spawn to bring people in, gm.order to move one character or a squad (`tag:<tag>`), environment.set for the weather and the time of day, message.show to speak to players (`to: \"tag:player\"`), sim.input and sim.release to play an enemy for a moment. Ask gm.sight {{\"from\": ...}} what a character sees before you place a threat.\n\
+4. Give every command an `intent`: one sentence saying why. The session's journal keeps every command with its tick and hash; journal.save writes it, and it replays to the same hash.\n\
+5. Keep it fair and fun: announce a threat before it bites, follow a hard push with a breather, keep the counting variables right when you add or remove enemies (var.set with `add`), and never decide a hit or a death by hand: change the world, not the rules.\n\
+6. At the end, say what you did and why, move by move, with the ticks, and how the game ended."
     )
 }
 

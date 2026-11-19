@@ -9,11 +9,12 @@ use crate::error::{CommandError, bad, failed};
 use crate::params::Params;
 use crate::session::{Edit, Handler, Registration, Session, registered, registered_names};
 use crate::spec::{CommandSpec, ParamType as T, Scope, excerpt, nearest, param, spec};
-use crate::triggers::{MAX_MESSAGES, MESSAGE_COMMAND, Message, TARGET, WHO};
+use crate::triggers::{MAX_MESSAGES, MESSAGE_COMMAND, Message, Recipient, TARGET, WHO};
 use gamecraft_sim::TICK_HZ;
 use gamecraft_world::limits::MAX_TEXT_CHARS;
 use gamecraft_world::{
-    Condition, Objective, ObjectiveStatus, Step, Trigger, VarValue, When, World,
+    Condition, EntityId, Objective, ObjectiveStatus, Step, TAG_PREFIX, Trigger, VarValue, When,
+    World,
 };
 use serde_json::{Map, Value, json};
 
@@ -652,7 +653,8 @@ fn message_show_spec() -> CommandSpec {
             param(
                 "to",
                 T::Entity,
-                "The character it is for (its id or name); everyone when left out.",
+                "Who it is for: a character (its id or name), or `tag:<tag>` for every \
+                 character with that tag (`tag:player`); everyone when left out.",
             ),
             param(
                 "seconds",
@@ -662,7 +664,8 @@ fn message_show_spec() -> CommandSpec {
             .unit("s")
             .default(json!(5)),
         ],
-        "{text, to (null for everyone), shown_at_s, until_s}",
+        "{text, to (an id, \"tag:<tag>\" or null for everyone), recipients (the characters \
+         it reaches now, null for everyone), shown_at_s, until_s}",
         json!({"text": "Find the oak.", "to": "Scout", "seconds": 5}),
     )
     .play()
@@ -689,7 +692,7 @@ fn message_show(session: &mut Session, p: Params<'_>) -> Result<Value, CommandEr
             "`seconds` is {seconds}; it must be above 0 and at most {MAX_MESSAGE_S}"
         )));
     }
-    let to = p.entity("to", sim.world())?;
+    let to = recipient(&p, sim.world())?;
     let tick = sim.tick();
     let ticks = ((seconds * f64::from(TICK_HZ)).round() as u64).max(1);
     let shown_at_s = sim.time_s();
@@ -700,7 +703,7 @@ fn message_show(session: &mut Session, p: Params<'_>) -> Result<Value, CommandEr
         until_s: shown_at_s + seconds,
         until_tick: tick.saturating_add(ticks),
     };
-    let result = message.to_json();
+    let result = message.to_json(sim.world());
     let messages = &mut session.play_mut().messages;
     messages.push(message);
     while messages.len() > MAX_MESSAGES {
@@ -755,7 +758,7 @@ fn inspect(session: &Session, _p: Params<'_>) -> Result<Value, CommandError> {
         serde_json::to_value(&world.objectives).map_err(failed)?,
     );
     out.insert("triggers".into(), Value::Array(triggers));
-    out.insert("messages".into(), messages_json(session));
+    out.insert("messages".into(), messages_json(session, None));
     out.insert(
         "trigger_errors".into(),
         Value::Array(play.errors.iter().cloned().collect()),
@@ -763,14 +766,41 @@ fn inspect(session: &Session, _p: Params<'_>) -> Result<Value, CommandError> {
     Ok(Value::Object(out))
 }
 
-/// The messages showing, as JSON.
-pub(crate) fn messages_json(session: &Session) -> Value {
+/// The `to` of message.show: a character, or `tag:<tag>` that some character has now.
+fn recipient(p: &Params<'_>, world: &World) -> Result<Option<Recipient>, CommandError> {
+    if let Some(tag) = p
+        .value("to")
+        .and_then(Value::as_str)
+        .and_then(|t| t.strip_prefix(TAG_PREFIX))
+    {
+        if tag.trim().is_empty() {
+            return Err(bad(
+                "`to` is \"tag:\" without a tag; give `tag:<tag>`, such as `tag:player`",
+            ));
+        }
+        let r = Recipient::Tag(tag.to_string());
+        if r.characters(world).is_empty() {
+            return Err(failed(format!(
+                "`to`: no character has the tag \"{}\"; give a tag that a character has, or a \
+                 character's id or name",
+                crate::spec::excerpt(tag)
+            )));
+        }
+        return Ok(Some(r));
+    }
+    Ok(p.entity_named("to", world)?.map(Recipient::Entity))
+}
+
+/// The messages showing, as JSON; with `only` those for that character.
+pub(crate) fn messages_json(session: &Session, only: Option<EntityId>) -> Value {
+    let world = session.current_world();
     Value::Array(
         session
             .play()
             .messages
             .iter()
-            .map(Message::to_json)
+            .filter(|m| only.is_none_or(|id| m.is_for(world, id)))
+            .map(|m| m.to_json(world))
             .collect(),
     )
 }

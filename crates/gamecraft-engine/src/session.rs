@@ -116,6 +116,7 @@ const MODULES: &[&[Registration]] = &[
     crate::scenario_cmds::SPECS,
     crate::prefab_cmds::SPECS,
     crate::journal_cmds::SPECS,
+    crate::gm_cmds::SPECS,
 ];
 
 /// The spec and scope of the built-in command `name`, without a session (for checking the

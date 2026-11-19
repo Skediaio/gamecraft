@@ -31,6 +31,8 @@ pub(crate) const MAX_TRIGGER_ERRORS: usize = 20;
 /// Most events, and most fired triggers, one `sim.step` or `sim.start` answer lists; the
 /// rest are counted.
 pub(crate) const MAX_REPORTED: usize = 1000;
+/// Events kept for `gm.overview`.
+pub(crate) const MAX_RECENT_EVENTS: usize = 50;
 /// Most messages showing at once; the oldest goes first.
 pub(crate) const MAX_MESSAGES: usize = 100;
 /// The command a trigger may run besides world commands.
@@ -40,12 +42,40 @@ pub(crate) const WHO: &str = "$who";
 /// The placeholder for the entity the event was about.
 pub(crate) const TARGET: &str = "$target";
 
+/// Who a message is for.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Recipient {
+    /// One character.
+    Entity(EntityId),
+    /// Every character with this tag (without the `tag:` prefix), as the tags are when read.
+    Tag(String),
+}
+
+impl Recipient {
+    /// Whether a message to this recipient is for `entity`.
+    pub(crate) fn includes(&self, world: &World, entity: EntityId) -> bool {
+        match self {
+            Recipient::Entity(id) => *id == entity,
+            Recipient::Tag(tag) => world.entity(entity).is_some_and(|e| e.has_tag(tag)),
+        }
+    }
+
+    /// The characters it reaches now, in id order.
+    pub(crate) fn characters(&self, world: &World) -> Vec<u64> {
+        world
+            .entities()
+            .filter(|e| e.character().is_some() && self.includes(world, e.id))
+            .map(|e| e.id.0)
+            .collect()
+    }
+}
+
 /// A line shown to the players.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Message {
     pub(crate) text: String,
-    /// The character it is for; everyone when `None`.
-    pub(crate) to: Option<EntityId>,
+    /// Who it is for; everyone when `None`.
+    pub(crate) to: Option<Recipient>,
     pub(crate) shown_at_s: f64,
     pub(crate) until_s: f64,
     /// Shown while the tick is below this.
@@ -53,13 +83,31 @@ pub(crate) struct Message {
 }
 
 impl Message {
-    pub(crate) fn to_json(&self) -> Value {
+    /// `{text, to, recipients, shown_at_s, until_s}`: `to` is an id, `"tag:<tag>"` or null
+    /// (everyone); `recipients` the characters of `world` it reaches, null for everyone.
+    pub(crate) fn to_json(&self, world: &World) -> Value {
+        let (to, recipients) = match &self.to {
+            None => (Value::Null, Value::Null),
+            Some(r) => (
+                match r {
+                    Recipient::Entity(id) => json!(id.0),
+                    Recipient::Tag(tag) => json!(format!("tag:{tag}")),
+                },
+                json!(r.characters(world)),
+            ),
+        };
         json!({
             "text": self.text,
-            "to": self.to.map(|id| id.0),
+            "to": to,
+            "recipients": recipients,
             "shown_at_s": self.shown_at_s,
             "until_s": self.until_s,
         })
+    }
+
+    /// Whether `entity` sees this message.
+    pub(crate) fn is_for(&self, world: &World, entity: EntityId) -> bool {
+        self.to.as_ref().is_none_or(|r| r.includes(world, entity))
     }
 }
 
@@ -101,6 +149,8 @@ pub(crate) struct PlayLog {
     pub(crate) reported_placeholders: BTreeSet<(String, String)>,
     /// The answer being collected.
     pub(crate) report: Report,
+    /// The last [`MAX_RECENT_EVENTS`] events, oldest first, for `gm.overview`.
+    pub(crate) recent: VecDeque<Value>,
 }
 
 /// Something triggers wait for.
@@ -198,9 +248,15 @@ pub(crate) fn expire_messages(session: &mut Session, tick: u64) {
 }
 
 fn record_event(session: &mut Session, tick: u64, happening: &Happening) {
-    let report = &mut session.play_mut().report;
+    let event = happening.to_json(tick);
+    let play = session.play_mut();
+    play.recent.push_back(event.clone());
+    while play.recent.len() > MAX_RECENT_EVENTS {
+        play.recent.pop_front();
+    }
+    let report = &mut play.report;
     if report.events.len() < MAX_REPORTED {
-        report.events.push(happening.to_json(tick));
+        report.events.push(event);
     } else {
         report.events_omitted = report.events_omitted.saturating_add(1);
     }

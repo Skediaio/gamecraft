@@ -109,7 +109,8 @@ built, saved and changed with commands like everything else.
 - **Variables, objectives, messages.** `var.set {name, value | add}` keeps numbers, booleans and
   strings; `objective.add {id, title}` and `objective.set {id, status}` (`open`, `done`,
   `failed`) keep what the players are to achieve; `message.show {text, to?, seconds?}` puts a
-  line in `sim.state` while playing. In a trigger its `text` may hold `{var:name}`, `{who}` and
+  line in `sim.state` while playing; `to` is a character or `tag:<tag>` (`tag:player`), and
+  `sim.state {for: "Player"}` lists only what that player sees. In a trigger its `text` may hold `{var:name}`, `{who}` and
   `{target}`: `"{var:enemies_left} left"`.
 - **Triggers.** `trigger.add {id, when, if?, do, once?, enabled?}`: when the event happens while
   playing (`enter`/`leave` a zone, `interact`, `time` at `at_s`, a `var` changed, `start`) and
@@ -123,9 +124,9 @@ built, saved and changed with commands like everything else.
   triggers that `fired` (`ok`, or the `error` that stopped one); `sim.state` lists the
   objectives, the messages showing and the last trigger errors; `scenario.inspect` shows every
   variable, objective and trigger. A trigger that fails changes nothing and the game goes on.
-- **Directing a game.** There is no separate game-master API: read `sim.state`, the events and
-  `objective.list`, decide, send world or scenario commands, step. A variable you change between
-  steps fires its `var` triggers at the start of the next step.
+- **Directing a game.** The game master is whoever sends world commands to a running world; see
+  *The game master* below. A variable you change between steps fires its `var` triggers at the
+  start of the next step.
 - **The journal.** Everything you send to a running world that changes it (world commands,
   `sim.input`, `sim.fire`, `sim.release`, `message.show`, `sim.step`) is recorded with the tick
   it took effect at and the state hash after it; queries and the commands of triggers are not.
@@ -133,6 +134,30 @@ built, saved and changed with commands like everything else.
   world the simulation started from, and `gamecraft-cli replay FILE --check` runs it again and
   names the first tick where the hash differs (`--to-tick N` stops there to bisect). The journal
   of the last simulation stays readable after `sim.stop`, until the next `sim.start`.
+
+## The game master
+
+A person or an agent directs a running game with the same commands that build it (rule 6), and
+three tools of its own; the full guide, with ten worked moves for the Skirmish, is
+[`guide/game-master.md`](guide/game-master.md) (MCP: the resource
+`gamecraft://guide/game-master` and the prompt `direct_scenario {goal}`).
+
+- **`gm.overview {near?, radius_m?, team?}`**: what is going on, in one compact answer: the tick;
+  every character with its team, position, health, `down`, its behaviour's `mode`, `state` and
+  `target`, whom it `sees` and whether an agent `taken_over` it; the teams with their characters
+  alive and down; the objectives; the last 50 events with their ticks (`names` gives the name
+  of every id they mention); the messages showing; the weather with `visibility_m` and `light`;
+  the variables. Numbers are rounded to centimetres.
+- **`gm.sight {from}`**: who and what a character sees now, with distances, by the simulation's
+  own perception (the rules enemies decide by).
+- **`gm.order {entity, order, route? | point?}`**: `patrol` a route (or the one it has, from its
+  first point), `move` to a point and stay, `hold` where it stands, `guard` its post. It changes
+  only the mode and route of the behaviour and keeps the rest; `entity` is a character,
+  `tag:<tag>` or a list, so one command moves a squad.
+
+The loop: `gm.overview`, decide, act (`prefab.spawn`, `gm.order`, `environment.set`,
+`message.show {to: "tag:player"}`, objectives, triggers), `sim.step` a few seconds, again. Give
+each command an `intent`. Everything you send is in the journal and replays to the same hash.
 
 ## Prefabs
 

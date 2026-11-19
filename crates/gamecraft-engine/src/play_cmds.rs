@@ -439,23 +439,39 @@ fn state_spec() -> CommandSpec {
         "Play State",
         "Whether a simulation runs and, if so, its tick, hash, characters (with health, \
          behaviour and magazine), projectiles in flight, stored inputs, objectives, the \
-         messages showing and the last 20 trigger errors.",
-        vec![],
+         messages showing and the last 20 trigger errors. With `for`, the messages are those \
+         that character sees: the ones for everyone, for it, or for a tag it has.",
+        vec![param(
+            "for",
+            T::Entity,
+            "A character (its id or name): list only the messages it sees, as its player would.",
+        )],
         &format!(
             "{{playing: false}} or {{playing: true, tick, time_s, hash, characters: \
              {CHARACTERS_DOC}, projectiles: [{PROJECTILE_DOC}], inputs: [{INPUT_DOC}], \
-             objectives: [{{id, title, status, hidden}}], messages: [{{text, to, shown_at_s, \
-             until_s}}], trigger_errors: [{{trigger, tick, error}}]}}"
+             objectives: [{{id, title, status, hidden}}], messages: [{{text, to, recipients, \
+             shown_at_s, until_s}}], trigger_errors: [{{trigger, tick, error}}]}}"
         ),
         json!({}),
     )
     .play()
 }
 
-fn state(session: &mut Session, _p: Params<'_>) -> Result<Value, CommandError> {
+fn state(session: &mut Session, p: Params<'_>) -> Result<Value, CommandError> {
     let Some(sim) = session.live() else {
+        if p.has("for") {
+            p.entity_named("for", session.document())?;
+        }
         return Ok(json!({"playing": false}));
     };
+    let only = p.entity_named("for", sim.world())?;
+    if let Some(id) = only
+        && sim.world().entity(id).and_then(|e| e.character()).is_none()
+    {
+        return Err(bad(format!(
+            "`for` names entity {id}, which is not a character; give a character's id or name"
+        )));
+    }
     let inputs: Vec<Value> = sim
         .bodies()
         .filter_map(|(id, _)| sim.input(id).map(|i| input_json(id.0, i)))
@@ -469,7 +485,7 @@ fn state(session: &mut Session, _p: Params<'_>) -> Result<Value, CommandError> {
         "projectiles": projectiles_json(sim),
         "inputs": inputs,
         "objectives": serde_json::to_value(&sim.world().objectives).map_err(failed)?,
-        "messages": crate::scenario_cmds::messages_json(session),
+        "messages": crate::scenario_cmds::messages_json(session, only),
         "trigger_errors": session.play().errors.iter().cloned().collect::<Vec<_>>(),
     }))
 }

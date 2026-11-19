@@ -109,8 +109,11 @@ Done 2026-11-19: the journal (every command and input of a session with its tick
 `journal.get`, `journal.save`, `gamecraft-cli play --journal` and `replay --check` that names the
 tick where a run diverges) and prefabs (describe once, place many, with overrides and children;
 `prefab.spawn` works on a running world). Done earlier for P1 and P2: zones, objectives,
-triggers, characters that patrol and engage. Open: the game master's view (who is where, take
-over and release, speak to players), an MCP prompt and guide for an agent as game master.
+triggers, characters that patrol and engage. Done 2026-11-19: the game master's tools
+(`gm.overview`, `gm.sight`, `gm.order` for one character or a squad by tag, messages to a tag,
+the MCP prompt `direct_scenario` and `docs/guide/game-master.md` with ten moves that a test runs),
+and a scripted game master who directs the skirmish into a loss for the player, saved as a
+journal that replays to the same hash. Open: the window shows each player only its own messages.
 
 
 Scenarios, and the game master who steers them.

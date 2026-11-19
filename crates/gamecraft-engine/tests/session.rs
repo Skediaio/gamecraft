@@ -105,7 +105,7 @@ fn bad_parameters_name_the_command_and_the_parameter() {
     refuse(&mut s, "world.set", json!("x"), &["must be an object"]);
     refuse(
         &mut s,
-        "sim.state",
+        "sim.start",
         json!({"x": 1}),
         &["takes no parameters"],
     );
