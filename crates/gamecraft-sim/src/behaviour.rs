@@ -46,6 +46,7 @@ use crate::combat::cone_offset;
 use crate::cover::{self, CoverAsk, Threat};
 use crate::perception::{CHEST_SHARE, effective_range_m, sees};
 use crate::solid::Solid;
+use crate::trunk::Trunks;
 use crate::{Body, DT, GRAVITY_MPS2, Input, Projectile};
 
 /// The label of the aim error's random stream (forked from the world seed).
@@ -244,6 +245,8 @@ pub(crate) struct Mind<'a> {
     pub(crate) heard: Option<[f64; 3]>,
     /// The solids of the running world.
     pub(crate) solids: &'a [Solid],
+    /// The tree trunks of the running world.
+    pub(crate) trunks: &'a Trunks,
     /// The projectiles in flight (each flew the last tick).
     pub(crate) projectiles: &'a [Projectile],
     /// Every character's input.
@@ -260,7 +263,7 @@ impl<'a> Mind<'a> {
         let Some(mine) = team_of(self.me) else {
             return Vec::new();
         };
-        let (world, heights, me) = (self.world, self.heights, self.me);
+        let (world, heights, trunks, me) = (self.world, self.heights, self.trunks, self.me);
         world
             .entities()
             .filter(|other| {
@@ -268,7 +271,7 @@ impl<'a> Mind<'a> {
                     && other.character().is_some()
                     && !other.is_down()
                     && team_of(other).is_some_and(|t| t != mine)
-                    && sees(world, heights, me, other)
+                    && sees(world, heights, trunks, me, other)
             })
             .collect()
     }
@@ -570,7 +573,7 @@ impl<'a> Mind<'a> {
             threats,
             friends: &friends,
         };
-        let found = cover::evaluate(self.world, self.heights, self.solids, &ask);
+        let found = cover::evaluate(self.world, self.heights, self.solids, self.trunks, &ask);
         let best = found
             .iter()
             .find(|c| c.reachable == Some(true) && c.protection > 0.0)

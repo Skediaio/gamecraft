@@ -133,6 +133,54 @@ impl Solid {
         finite.then_some(solid)
     }
 
+    /// An upright round column standing on `base` (x, y, z): a tree trunk, not an entity's
+    /// shape. `None` unless every number is finite and the radius and height are positive.
+    pub(crate) fn column(
+        entity: EntityId,
+        base: [f64; 3],
+        radius: f64,
+        height: f64,
+    ) -> Option<Solid> {
+        let [x, y, z] = base;
+        let ok =
+            [x, y, z, radius, height].iter().all(|v| v.is_finite()) && radius > 0.0 && height > 0.0;
+        ok.then_some(Solid {
+            entity,
+            centre: [x, z],
+            bottom: y,
+            top: y + height,
+            footprint: Footprint::Circle { radius },
+        })
+    }
+
+    /// Where a ray meets a round column made by [`Solid::column`]; `None` for another solid.
+    pub(crate) fn column_ray(&self, origin: [f64; 3], dir: [f64; 3]) -> Option<crate::ray::RayHit> {
+        let Footprint::Circle { radius } = self.footprint else {
+            return None;
+        };
+        let [cx, cz] = self.centre;
+        crate::ray::ray_cylinder(
+            origin,
+            dir,
+            [cx, self.bottom, cz],
+            radius,
+            self.top - self.bottom,
+        )
+    }
+
+    /// World y of the base.
+    pub(crate) fn base(&self) -> f64 {
+        self.bottom
+    }
+
+    /// The radius and height of a round column made by [`Solid::column`].
+    pub(crate) fn column_size(&self) -> Option<(f64, f64)> {
+        match self.footprint {
+            Footprint::Circle { radius } => Some((radius, self.top - self.bottom)),
+            _ => None,
+        }
+    }
+
     /// World offset (x, z) to the solid's local frame: the inverse of its rotation.
     fn to_local(sin: f64, cos: f64, dx: f64, dz: f64) -> (f64, f64) {
         (dx * cos - dz * sin, dx * sin + dz * cos)

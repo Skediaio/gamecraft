@@ -6,6 +6,7 @@ use gamecraft_world::limits::MAX_COORDINATE_M;
 use gamecraft_world::{Character, HeightField};
 
 use crate::solid::Solid;
+use crate::trunk::Trunks;
 use crate::{Body, DT, FALL_FLOOR_M, GRAVITY_MPS2, Input, MAX_PUSH_ITERATIONS, STEP_HEIGHT_M};
 
 /// How far above the terrain, metres, a character's feet may be and still count as standing
@@ -19,6 +20,8 @@ pub(crate) struct Surroundings<'a> {
     pub(crate) heights: Option<&'a HeightField>,
     /// The solid shapes, in id order.
     pub(crate) solids: &'a [Solid],
+    /// The tree trunks, which block like solid cylinders.
+    pub(crate) trunks: &'a Trunks,
 }
 
 /// Where a character is and how it moves.
@@ -142,6 +145,13 @@ impl Surroundings<'_> {
                     p = q;
                     moved = true;
                 }
+            }
+            if let Some(q) = self
+                .trunks
+                .push(p, character.radius_m, feet, character.height_m)
+            {
+                p = q;
+                moved = true;
             }
             if !moved {
                 break;

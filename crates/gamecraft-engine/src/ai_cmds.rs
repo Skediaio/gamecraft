@@ -550,7 +550,12 @@ fn cover(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
     };
     let found = match session.live() {
         Some(sim) => sim.cover(&ask),
-        None => evaluate_world(world, session.current_heights(), &ask),
+        None => evaluate_world(
+            world,
+            session.current_heights(),
+            &session.current_trunks(),
+            &ask,
+        ),
     };
     let count = found.len();
     let candidates: Vec<Value> = found

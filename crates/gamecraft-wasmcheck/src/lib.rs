@@ -4,7 +4,7 @@
 //! A fixed set of deterministic scenarios, each giving a list of labelled hashes: the example
 //! world played for 600 ticks with scripted input, the Lantern and Skirmish prototypes played
 //! through to the end, `query.aim` solutions, a 4 km noise terrain's height field and a
-//! scatter. `cargo xtask wasm-hash` runs them natively (the binary of this crate) and as
+//! scatter, a grove whose trunks block a walking character and its shots. `cargo xtask wasm-hash` runs them natively (the binary of this crate) and as
 //! WebAssembly in Node (the export [`wasm_hash_report`], built with wasm-bindgen) and compares
 //! every hash. The plays are hashed every 60 ticks, so a difference names the first second
 //! in which the two targets part.
@@ -64,6 +64,10 @@ pub const SCENARIOS: &[Scenario] = &[
     Scenario {
         name: "scatter",
         run: scenarios::scatter,
+    },
+    Scenario {
+        name: "grove",
+        run: scenarios::grove,
     },
 ];
 

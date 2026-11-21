@@ -11,7 +11,8 @@ use crate::journal::{Journal, JournalEnd, JournalEntry, MAX_JOURNAL_ENTRIES, has
 use crate::params::Params;
 use crate::spec::{CommandSpec, Scope, nearest};
 use crate::triggers::PlayLog;
-use gamecraft_sim::Sim;
+use crate::trunks::PlantTrunks;
+use gamecraft_sim::{Sim, TrunkSource, Trunks};
 use gamecraft_world::{HeightField, ModelBounds, Terrain, World};
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
@@ -201,6 +202,8 @@ pub struct Session {
     /// How deep [`Session::run`] is nested (a trigger's commands run inside a step): only
     /// the outermost command is recorded in the journal.
     depth: u32,
+    /// Where the trunks of the trees come from, for the simulation and for queries.
+    trunk_source: Arc<PlantTrunks>,
 }
 
 /// What a transaction remembers of the journal: its length, end and truncation.
@@ -239,6 +242,7 @@ impl Session {
             journal: None,
             journal_stash: None,
             depth: 0,
+            trunk_source: Arc::new(PlantTrunks::default()),
         }
     }
 
@@ -449,6 +453,23 @@ impl Session {
             },
             None => HeightCache::for_world(&self.document),
         };
+    }
+
+    /// A simulation of `world` with the document's terrain and the trees' trunks, which block
+    /// characters, rays and projectiles.
+    pub(crate) fn new_sim(&self, world: World) -> Result<Sim, gamecraft_sim::SimError> {
+        let mut sim = Sim::with_heights(world, self.document_heights_shared())?;
+        sim.set_trunk_source(self.trunk_source.clone());
+        Ok(sim)
+    }
+
+    /// The tree trunks of [`Session::current_world`]: derived from its plants, cached while they
+    /// do not change.
+    pub fn current_trunks(&self) -> Arc<Trunks> {
+        match &self.live {
+            Some(sim) => sim.trunks_shared(),
+            None => self.trunk_source.trunks_of(&self.document),
+        }
     }
 
     /// The height field of the document (not of a running world), shared: what `sim.start`

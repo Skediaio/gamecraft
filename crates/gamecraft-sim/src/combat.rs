@@ -33,6 +33,7 @@ use serde::Serialize;
 
 use crate::ballistics::{Flight, SUBSTEP_S, advance, air_at};
 use crate::ray::{self, RayHit};
+use crate::trunk::Trunks;
 use crate::{EventKind, FALL_FLOOR_M, PROJECTILE_SUBSTEPS};
 
 /// The label of the dispersion's random stream (forked from the world seed).
@@ -295,6 +296,9 @@ fn heard(world: &World, shooter: EntityId, point: [f64; 3], range_m: f64) -> Vec
 struct Impact {
     hit: RayHit,
     target: Option<EntityId>,
+    /// What was hit is a tree trunk (target is its plant): it stops the projectile, and takes
+    /// no damage.
+    trunk: bool,
 }
 
 /// The nearest hit along the segment from `from` with unit `dir` and length `len`: terrain,
@@ -302,16 +306,20 @@ struct Impact {
 fn impact(
     world: &World,
     heights: Option<&HeightField>,
+    trunks: &Trunks,
     from: [f64; 3],
     dir: [f64; 3],
     len: f64,
     skip: Option<EntityId>,
 ) -> Option<Impact> {
-    let mut best =
-        ray::cast(world, heights, from, dir, len, |id| Some(id) == skip).map(|f| Impact {
-            hit: f.hit,
-            target: f.entity,
-        });
+    let mut best = ray::cast(world, heights, trunks, from, dir, len, |id| {
+        Some(id) == skip
+    })
+    .map(|f| Impact {
+        hit: f.hit,
+        target: f.entity,
+        trunk: f.trunk,
+    });
     for e in world.entities() {
         let Some(c) = e.character() else {
             continue;
@@ -334,6 +342,7 @@ fn impact(
             best = Some(Impact {
                 hit,
                 target: Some(e.id),
+                trunk: false,
             });
         }
     }
@@ -385,6 +394,7 @@ pub fn substep(
 pub(crate) fn fly(
     world: &mut World,
     heights: Option<&HeightField>,
+    trunks: &Trunks,
     p: &mut Projectile,
 ) -> Option<Vec<EventKind>> {
     for _ in 0..PROJECTILE_SUBSTEPS {
@@ -410,7 +420,7 @@ pub(crate) fn fly(
         let len = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
         let skip = (p.age_s < SELF_HIT_GRACE_S).then_some(p.shooter);
         if let Some(dir) = ray::normalize(delta)
-            && let Some(found) = impact(world, heights, p.position, dir, len, skip)
+            && let Some(found) = impact(world, heights, trunks, p.position, dir, len, skip)
         {
             let k = if len > 0.0 {
                 (found.hit.distance_m / len).clamp(0.0, 1.0)
@@ -431,6 +441,7 @@ pub(crate) fn fly(
                 energy_j,
             }];
             if let Some(target) = found.target
+                && !found.trunk
                 && let Some(health) = world.entity_mut(target).and_then(Entity::health_mut)
                 && !health.is_down()
             {

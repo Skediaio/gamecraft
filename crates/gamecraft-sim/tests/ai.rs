@@ -15,7 +15,7 @@ use gamecraft_math::wrap_deg_signed;
 use gamecraft_sim::ai::{self, CoverPhase, FORGET_S, REACT_KNOWLEDGE};
 use gamecraft_sim::cover::{CoverAsk, Threat, evaluate_world};
 use gamecraft_sim::ray::line_of_sight;
-use gamecraft_sim::{BrainState, DT, Sim};
+use gamecraft_sim::{BrainState, DT, Sim, Trunks};
 use gamecraft_world::{
     Alertness, Behaviour, BehaviourMode, Character, Component, EntityDraft, EntityId, Health,
     Launcher, ShapeKind, Tags, World,
@@ -374,6 +374,7 @@ fn chest_seen(sim: &Sim, from: EntityId, to: EntityId) -> bool {
     line_of_sight(
         sim.world(),
         sim.heights(),
+        sim.trunks(),
         [x, y + CHEST_M, z],
         [tx, ty + CHEST_M, tz],
         skip,
@@ -473,7 +474,7 @@ fn the_cover_query_ranks_the_far_side_first() {
         friends: &[],
     };
     let field = w.terrain.as_ref().unwrap().build().unwrap();
-    let found = evaluate_world(&w, Some(&field), &ask);
+    let found = evaluate_world(&w, Some(&field), &Trunks::default(), &ask);
     assert!(found.len() > 10, "{} candidates", found.len());
     let best = found[0];
     assert_eq!(best.protection, 1.0);

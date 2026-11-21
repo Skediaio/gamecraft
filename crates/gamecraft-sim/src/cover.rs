@@ -36,6 +36,8 @@ use serde::Serialize;
 use crate::perception::CHEST_SHARE;
 use crate::ray;
 use crate::solid::{self, Solid};
+use crate::trunk::MAX_TRUNK_RADIUS_M;
+use crate::trunk::Trunks;
 
 /// How far beyond the character's radius the points around a solid lie, metres.
 pub const COVER_CLEARANCE_M: f64 = 0.3;
@@ -144,9 +146,10 @@ fn horizontal(a: [f64; 3], b: [f64; 3]) -> f64 {
 pub fn evaluate_world(
     world: &World,
     heights: Option<&HeightField>,
+    trunks: &Trunks,
     ask: &CoverAsk<'_>,
 ) -> Vec<CoverPoint> {
-    evaluate(world, heights, &solid::solids_of(world), ask)
+    evaluate(world, heights, &solid::solids_of(world), trunks, ask)
 }
 
 /// The whole query (see the module docs). Empty without threats or with a position or sizes
@@ -155,6 +158,7 @@ pub(crate) fn evaluate(
     world: &World,
     heights: Option<&HeightField>,
     solids: &[Solid],
+    trunks: &Trunks,
     ask: &CoverAsk<'_>,
 ) -> Vec<CoverPoint> {
     let threats: Vec<Threat> = ask
@@ -176,6 +180,7 @@ pub(crate) fn evaluate(
         world,
         heights,
         solids,
+        trunks,
         ask,
         threats: &threats,
         solid_ids: solids.iter().map(|s| s.entity).collect(),
@@ -187,6 +192,7 @@ struct Picker<'a> {
     world: &'a World,
     heights: Option<&'a HeightField>,
     solids: &'a [Solid],
+    trunks: &'a Trunks,
     ask: &'a CoverAsk<'a>,
     threats: &'a [Threat],
     solid_ids: BTreeSet<EntityId>,
@@ -258,6 +264,27 @@ impl Picker<'_> {
                 }
             }
         }
+        for s in self
+            .trunks
+            .near(fx, fz, search + clearance + MAX_TRUNK_RADIUS_M)
+        {
+            if Some(s.entity) == self.ask.me {
+                continue;
+            }
+            let [cx, cz] = s.centre();
+            let (dx, dz) = (cx - fx, cz - fz);
+            if (dx * dx + dz * dz).sqrt() > search + s.reach() + clearance {
+                continue;
+            }
+            for p in s.around(clearance) {
+                if out.len() >= MAX_COVER_CANDIDATES {
+                    return out;
+                }
+                if within(p) {
+                    out.push((p, CoverSource::Solid));
+                }
+            }
+        }
         for r in [search / 2.0, search] {
             for i in 0..RING_SAMPLES {
                 if out.len() >= MAX_COVER_CANDIDATES {
@@ -282,15 +309,11 @@ impl Picker<'_> {
 
     /// Whether a character standing at `feet` overlaps a solid.
     fn blocked(&self, feet: [f64; 3]) -> bool {
-        self.solids.iter().any(|s| {
-            s.push(
-                [feet[0], feet[2]],
-                self.ask.radius_m,
-                feet[1],
-                self.ask.height_m,
-            )
-            .is_some()
-        })
+        let (at, radius, height) = ([feet[0], feet[2]], self.ask.radius_m, self.ask.height_m);
+        self.solids
+            .iter()
+            .any(|s| s.push(at, radius, feet[1], height).is_some())
+            || self.trunks.push(at, radius, feet[1], height).is_some()
     }
 
     /// A candidate with its protection, crowding and first score; `None` where it cannot
@@ -334,7 +357,7 @@ impl Picker<'_> {
     fn sees(&self, t: &Threat, to: [f64; 3]) -> bool {
         let me = self.ask.me;
         let skip = |id: EntityId| Some(id) == me || Some(id) == t.entity;
-        ray::line_of_sight(self.world, self.heights, t.point, to, skip)
+        ray::line_of_sight(self.world, self.heights, self.trunks, t.point, to, skip)
             .is_some_and(|s| s.blocked_by.is_none())
     }
 
@@ -344,8 +367,10 @@ impl Picker<'_> {
         let me = self.ask.me;
         let from = [a[0], a[1] + KNEE_HEIGHT_M, a[2]];
         let to = [b[0], b[1] + KNEE_HEIGHT_M, b[2]];
-        let skip = |id: EntityId| Some(id) == me || !self.solid_ids.contains(&id);
-        match ray::line_of_sight(self.world, None, from, to, skip) {
+        let skip = |id: EntityId| {
+            Some(id) == me || !(self.solid_ids.contains(&id) || self.trunks.contains(id))
+        };
+        match ray::line_of_sight(self.world, None, self.trunks, from, to, skip) {
             Some(s) => match s.blocked_by {
                 None => Ok(()),
                 Some(found) => Err(found.entity),
@@ -368,6 +393,7 @@ impl Picker<'_> {
         let corners: Vec<[f64; 3]> = self
             .solids
             .iter()
+            .chain(self.trunks.find(in_the_way))
             .filter(|s| s.entity == in_the_way)
             .flat_map(|s| s.around(clearance).into_iter().skip(4))
             .map(|c| self.stand(c))
@@ -450,7 +476,13 @@ impl Picker<'_> {
 impl crate::Sim {
     /// The cover query (see the module docs of [`crate::cover`]) in the running world.
     pub fn cover(&self, ask: &CoverAsk<'_>) -> Vec<CoverPoint> {
-        evaluate(&self.world, self.heights.as_deref(), &self.solids, ask)
+        evaluate(
+            &self.world,
+            self.heights.as_deref(),
+            &self.solids,
+            &self.trunks,
+            ask,
+        )
     }
 }
 

@@ -267,8 +267,9 @@ Fighting is three components and two commands; they name no weapon, a pack fills
   prefabs and worlds but no assets yet. A prefab's
   children follow `entity.set`, not the simulation: a character that walks leaves its children
   where they were.
-- Characters do not collide with each other; spheres block but cannot be stood on; plants are no
-  obstacles; there are no rigid bodies.
+- Characters do not collide with each other; spheres block but cannot be stood on; tree trunks
+  block and stop shots (`query.trees` lists them) but small plants are no obstacles; there are no
+  rigid bodies.
 - A running world has no history; its journal is how a directed session is kept and replayed.
 - `intent` is accepted and checked on commands and batches, but not recorded yet.
 - There is no control channel to a running window yet (M1).

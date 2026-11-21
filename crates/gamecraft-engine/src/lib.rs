@@ -59,6 +59,7 @@ mod session;
 pub mod spec;
 mod terrain_cmds;
 mod triggers;
+mod trunks;
 mod world_cmds;
 
 pub use error::CommandError;

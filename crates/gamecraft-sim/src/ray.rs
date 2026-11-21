@@ -12,6 +12,8 @@
 use gamecraft_math::{Portable, deg_to_rad};
 use gamecraft_world::{Entity, EntityId, HeightField, Shape, ShapeKind, World};
 
+use crate::trunk::Trunks;
+
 /// Where a ray meets a shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RayHit {
@@ -309,17 +311,21 @@ pub fn ray_shape(origin: [f64; 3], dir: [f64; 3], e: &Entity, shape: &Shape) -> 
 pub struct Found {
     /// Where along the ray, and the surface's normal.
     pub hit: RayHit,
-    /// The entity whose shape was hit, `None` for the terrain.
+    /// The entity whose shape was hit, `None` for the terrain. For a tree trunk, the plant
+    /// entity.
     pub entity: Option<EntityId>,
+    /// Whether what was hit is the trunk of the plant `entity` ([`Trunks`]), not a shape.
+    pub trunk: bool,
 }
 
 /// The nearest hit within `max_m` of a ray with a unit `dir`: the terrain (the triangles of
 /// `heights`) and the `shape` and the model's collider box ([`World::model_box`]) of every
-/// entity, solid or not, except those `skip` names; on a tie the terrain, then the lowest id
-/// (an entity's shape before its model). A hit whose point is not finite is no hit.
+/// entity, solid or not, and the tree `trunks`, except those `skip` names; on a tie the terrain,
+/// then the lowest id (an entity's shape before its model), then a trunk. A hit whose point is not finite is no hit.
 pub fn cast(
     world: &World,
     heights: Option<&HeightField>,
+    trunks: &Trunks,
     origin: [f64; 3],
     dir: [f64; 3],
     max_m: f64,
@@ -337,6 +343,7 @@ pub fn cast(
                 normal,
             },
             entity: None,
+            trunk: false,
         });
     }
     for e in world.entities() {
@@ -355,9 +362,19 @@ pub fn cast(
                 best = Some(Found {
                     hit,
                     entity: Some(e.id),
+                    trunk: false,
                 });
             }
         }
+    }
+    if let Some((id, hit)) = trunks.cast(origin, dir, max_m, &skip)
+        && best.is_none_or(|b| hit.distance_m < b.hit.distance_m)
+    {
+        best = Some(Found {
+            hit,
+            entity: Some(id),
+            trunk: true,
+        });
     }
     best.filter(|f| {
         along(origin, dir, f.hit.distance_m)
@@ -387,6 +404,7 @@ pub struct Sight {
 pub fn line_of_sight(
     world: &World,
     heights: Option<&HeightField>,
+    trunks: &Trunks,
     from: [f64; 3],
     to: [f64; 3],
     skip: impl Fn(EntityId) -> bool,
@@ -409,12 +427,13 @@ pub fn line_of_sight(
     }
     let reach = distance - LINE_OF_SIGHT_END_TOLERANCE_M;
     let blocked_by = if reach > 0.0 {
-        cast(world, heights, from, dir, reach, skip)
+        cast(world, heights, trunks, from, dir, reach, skip)
     } else {
         // Shorter than the tolerance: only a start inside a shape blocks.
         cast(
             world,
             heights,
+            trunks,
             from,
             dir,
             LINE_OF_SIGHT_END_TOLERANCE_M,

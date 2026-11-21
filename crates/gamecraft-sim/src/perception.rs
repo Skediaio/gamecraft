@@ -30,6 +30,7 @@ use gamecraft_math::{Portable, yaw_forward};
 use gamecraft_world::{Entity, Environment, HeightField, World};
 
 use crate::ray;
+use crate::trunk::Trunks;
 
 /// View range of a character without a behaviour, metres.
 pub const DEFAULT_VIEW_RANGE_M: f64 = 300.0;
@@ -106,7 +107,13 @@ fn eye_and_chest(e: &Entity) -> Option<([f64; 3], [f64; 3])> {
 }
 
 /// Whether `a` sees `b` (see the module docs). False when either is not a character.
-pub(crate) fn sees(world: &World, heights: Option<&HeightField>, a: &Entity, b: &Entity) -> bool {
+pub(crate) fn sees(
+    world: &World,
+    heights: Option<&HeightField>,
+    trunks: &Trunks,
+    a: &Entity,
+    b: &Entity,
+) -> bool {
     if a.id == b.id {
         return false;
     }
@@ -139,6 +146,7 @@ pub(crate) fn sees(world: &World, heights: Option<&HeightField>, a: &Entity, b: 
     }
     let skip = |id| id == a.id || id == b.id;
     [their_eye, chest].into_iter().any(|to| {
-        ray::line_of_sight(world, heights, eye, to, skip).is_some_and(|s| s.blocked_by.is_none())
+        ray::line_of_sight(world, heights, trunks, eye, to, skip)
+            .is_some_and(|s| s.blocked_by.is_none())
     })
 }

@@ -113,7 +113,11 @@ fn skirmish_world_is_what_its_build_script_builds() {
 /// the five rings (which also shift the beacons' ids), and the player's passing through the rings
 /// is zone membership in the hash. The beacons' own components, the player's path and the
 /// objectives are unchanged.
-const LANTERN_HASH: &str = "143a88eedd10f8c6";
+///
+/// Moved on 2026-11-21 from 143a88eedd10f8c6: the trunks of the trees block (and are part of
+/// the hash when there are any). Without the trunks in the hash the play still moved, to
+/// 81d00677efe3429e: the player's path meets trunks. The playthrough wins as before.
+const LANTERN_HASH: &str = "f1da932c104bfd8e";
 
 #[test]
 fn lantern_is_won_by_the_playthrough_and_replays_to_the_same_hash() {
@@ -175,7 +179,12 @@ fn lantern_is_lost_by_standing_still() {
 /// static part of the hash covers, now holds the layers, rules and edits, and the player's and
 /// the enemies' feet follow the sculpted ground where they cross the road. Every entity stands
 /// where it stood (the square stops short of the houses) and the playthrough wins as before.
-const SKIRMISH_HASH: &str = "d6ea8fda4b83e06d";
+///
+/// Moved on 2026-11-21 from d6ea8fda4b83e06d: the trunks of the trees block characters and
+/// shots (and are part of the hash when there are any). Without the trunks in the hash the play
+/// still moved, to 9c2ca56203200ef8: the feet and the shots meet trunks. The playthrough wins as
+/// before.
+const SKIRMISH_HASH: &str = "5571ac6e6c155fcd";
 
 #[test]
 fn skirmish_is_won_by_the_playthrough_and_replays_to_the_same_hash() {

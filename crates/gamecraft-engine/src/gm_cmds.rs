@@ -372,11 +372,9 @@ fn sight(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
     let sim = match session.live() {
         Some(sim) => sim,
         None => {
-            built = Sim::with_heights(
-                session.document().clone(),
-                session.document_heights_shared(),
-            )
-            .map_err(failed)?;
+            built = session
+                .new_sim(session.document().clone())
+                .map_err(failed)?;
             &built
         }
     };
@@ -439,8 +437,10 @@ fn sight(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
         {
             continue;
         }
-        let clear = ray::line_of_sight(world, sim.heights(), eye, to, |e| e == id || e == o.id)
-            .is_some_and(|s| s.blocked_by.is_none());
+        let clear = ray::line_of_sight(world, sim.heights(), sim.trunks(), eye, to, |e| {
+            e == id || e == o.id
+        })
+        .is_some_and(|s| s.blocked_by.is_none());
         if clear {
             things.push((d, o, kind));
         }

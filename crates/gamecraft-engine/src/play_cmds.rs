@@ -108,8 +108,7 @@ fn start(session: &mut Session, _p: Params<'_>) -> Result<Value, CommandError> {
         ));
     }
     let world = session.document().clone();
-    let sim =
-        Sim::with_heights(world.clone(), session.document_heights_shared()).map_err(failed)?;
+    let sim = session.new_sim(world.clone()).map_err(failed)?;
     let ids: Vec<u64> = sim.bodies().map(|(id, _)| id.0).collect();
     session.start_live(sim, world);
     triggers::begin_report(session);

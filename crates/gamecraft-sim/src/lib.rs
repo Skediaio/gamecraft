@@ -94,8 +94,16 @@
 //!
 //! What M0 leaves out: characters do not collide with each other (a shape on a character's
 //! own entity is ignored as an obstacle); a character's entity `scale` does not change its
-//! size or speed; spheres block but are not ground to stand on; plants are no obstacles;
-//! there are no rigid bodies, inertia or friction.
+//! size or speed; spheres block but are not ground to stand on; small plants are no
+//! obstacles; there are no rigid bodies, inertia or friction.
+//!
+//! **Tree trunks** ([`trunk`]) are derived, never in the document: the engine works an upright
+//! round column out of every tree, conifer and palm and hands them over as a [`TrunkSource`]
+//! ([`Sim::set_trunk_source`]); the simulation asks again whenever the running world is
+//! replaced. A trunk pushes a character's circle out like a solid cylinder, stops rays and
+//! projectiles (a hit ends the shot and damages nothing), blocks sight and is cover. A grid
+//! keeps thousands cheap. They enter the state hash only when there are any, so a world
+//! without trees hashes as before.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -117,6 +125,7 @@ mod motion;
 pub mod perception;
 pub mod ray;
 mod solid;
+pub mod trunk;
 
 pub use behaviour::{Brain, BrainState};
 pub use combat::{Magazine, Projectile};
@@ -125,6 +134,7 @@ pub use handling::{Breath, Handling, Stance};
 
 use motion::{State, Surroundings, clamp_to_disc};
 use solid::Solid;
+pub use trunk::{Trunk, TrunkSource, Trunks};
 
 /// Simulation ticks per second.
 pub const TICK_HZ: u32 = 60;
@@ -151,6 +161,8 @@ pub const MAX_PITCH_DEG: f64 = 89.0;
 /// Steepest aim of [`Sim::fire`], up or down, degrees (straight up is allowed).
 pub const MAX_FIRE_PITCH_DEG: f64 = 90.0;
 
+/// Marks the tree trunks in the state hash.
+const HASH_MARK_TRUNKS: u64 = 0x7233_7233_7233_7233;
 /// Marks the projectiles, launchers, health, behaviours and aim in the state hash.
 const HASH_MARK_COMBAT: u64 = 0xC0BA_7C0B_A7C0_BA7C;
 /// Marks the zone memberships in the state hash.
@@ -279,6 +291,10 @@ pub struct Sim {
     inputs: BTreeMap<EntityId, Input>,
     /// The solid shapes of `world`, derived by [`Sim::replace_world`].
     solids: Vec<Solid>,
+    /// Where the tree trunks come from, `None` for a world without plants that block.
+    trunk_source: Option<Arc<dyn TrunkSource>>,
+    /// The tree trunks of `world`, derived by [`Sim::replace_world`] from the source.
+    trunks: Arc<Trunks>,
     /// The hash of `world` without its characters' positions and rotations.
     static_hash: u64,
     /// The zones, interactables and trigger times of `world`, derived by
@@ -326,6 +342,8 @@ impl Sim {
             bodies: BTreeMap::new(),
             inputs: BTreeMap::new(),
             solids: Vec::new(),
+            trunk_source: None,
+            trunks: Arc::new(Trunks::default()),
             static_hash: 0,
             watch: events::Watch::default(),
             inside: BTreeSet::new(),
@@ -358,6 +376,27 @@ impl Sim {
     /// Ends the simulation and hands back the running world.
     pub fn into_world(self) -> World {
         self.world
+    }
+
+    /// Where the running world's tree trunks come from: they block characters, stop rays and
+    /// projectiles, and give cover, and are derived again every time the world is replaced.
+    /// Derived data: the world document does not hold them.
+    pub fn set_trunk_source(&mut self, source: Arc<dyn TrunkSource>) {
+        self.trunk_source = Some(source);
+        self.trunks = self
+            .trunk_source
+            .as_ref()
+            .map_or_else(Default::default, |s| s.trunks_of(&self.world));
+    }
+
+    /// The tree trunks of the running world.
+    pub fn trunks(&self) -> &Trunks {
+        &self.trunks
+    }
+
+    /// The tree trunks of the running world, shared.
+    pub fn trunks_shared(&self) -> Arc<Trunks> {
+        self.trunks.clone()
     }
 
     /// The height field of the running world's terrain, `None` without terrain.
@@ -540,7 +579,9 @@ impl Sim {
     /// a character of the running world.
     pub fn sees(&self, a: EntityId, b: EntityId) -> bool {
         match (self.world.entity(a), self.world.entity(b)) {
-            (Some(a), Some(b)) => perception::sees(&self.world, self.heights.as_deref(), a, b),
+            (Some(a), Some(b)) => {
+                perception::sees(&self.world, self.heights.as_deref(), &self.trunks, a, b)
+            }
             _ => false,
         }
     }
@@ -693,6 +734,7 @@ impl Sim {
                 shots: self.magazines.get(&id).map_or(0, |m| m.shots),
                 heard,
                 solids: &self.solids,
+                trunks: &self.trunks,
                 projectiles: &self.projectiles,
                 inputs: &self.inputs,
                 bodies: &self.bodies,
@@ -832,9 +874,10 @@ impl Sim {
     fn fly(&mut self) -> Vec<EventKind> {
         let mut events = Vec::new();
         let heights = self.heights.clone();
+        let trunks = self.trunks.clone();
         let mut flying = std::mem::take(&mut self.projectiles);
         flying.retain_mut(
-            |p| match combat::fly(&mut self.world, heights.as_deref(), p) {
+            |p| match combat::fly(&mut self.world, heights.as_deref(), &trunks, p) {
                 Some(hit) => {
                     events.extend(hit);
                     false
@@ -871,6 +914,7 @@ impl Sim {
             let around = Surroundings {
                 heights: self.heights.as_deref(),
                 solids: &self.solids,
+                trunks: &self.trunks,
             };
             for &id in &ids {
                 let Some(entity) = self.world.entity(id) else {
@@ -1041,6 +1085,9 @@ impl Sim {
         self.handlings = handlings;
         self.brains = brains;
         self.solids = solid::solids_of(&world);
+        if let Some(source) = &self.trunk_source {
+            self.trunks = source.trunks_of(&world);
+        }
         self.watch = events::Watch::of(&world);
         let zone_ids: BTreeSet<EntityId> = self.watch.zones.iter().copied().collect();
         self.inside
@@ -1138,6 +1185,11 @@ impl Sim {
                     }
                 }
             }
+        }
+        // Written only when there are trunks, so a world without trees hashes as before.
+        if !self.trunks.is_empty() {
+            hasher.write_u64(HASH_MARK_TRUNKS);
+            hasher.write_u64(self.trunks.digest());
         }
         self.hash_combat(&mut hasher);
         self.hash_handling(&mut hasher);

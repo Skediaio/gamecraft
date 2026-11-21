@@ -12,7 +12,7 @@ mod common;
 
 use common::{add_character, box_distance, flat_world, pos, walk};
 use gamecraft_math::Portable;
-use gamecraft_sim::{Sim, ray};
+use gamecraft_sim::{Sim, Trunks, ray};
 use gamecraft_world::{
     Character, Component, EntityDraft, EntityId, Model, ModelBounds, ModelCollider, World,
 };
@@ -139,6 +139,7 @@ fn rays_hit_a_model_s_collider_box() {
     let found = ray::cast(
         &world,
         None,
+        &Trunks::default(),
         [0.4, 0.5, 0.0],
         [0.0, 0.0, -1.0],
         100.0,
@@ -157,6 +158,7 @@ fn rays_hit_a_model_s_collider_box() {
         ray::cast(
             &none,
             None,
+            &Trunks::default(),
             [0.4, 0.5, 0.0],
             [0.0, 0.0, -1.0],
             100.0,

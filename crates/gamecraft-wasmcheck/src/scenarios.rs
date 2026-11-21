@@ -4,7 +4,7 @@ use crate::{hash_text, hex};
 use gamecraft_engine::{Session, example_world};
 use gamecraft_math::StateHasher;
 use gamecraft_sim::TICK_HZ;
-use gamecraft_world::{Terrain, World};
+use gamecraft_world::{Terrain, TerrainSource, World};
 use serde_json::{Value, json};
 
 /// A play is hashed every this many ticks (one second).
@@ -328,5 +328,57 @@ pub fn scatter(hashes: &mut Hashes) -> Result<(), String> {
         .to_json()
         .map_err(|e| format!("the document does not serialise: {e}"))?;
     hashes.push(("document".to_owned(), hash_text(&text)));
+    Ok(())
+}
+
+/// A grove of trees of three species on flat ground with a character who walks into the
+/// trunks and fires at them: the trunk columns (measured on generated meshes, with `f32`
+/// maths) must come out the same on every target, or the hashes part.
+pub fn grove(hashes: &mut Hashes) -> Result<(), String> {
+    let mut world = World::new("Grove", 5);
+    world.terrain = Some(Terrain {
+        size_m: 200.0,
+        cell_m: 2.0,
+        source: TerrainSource::Flat { height_m: 0.0 },
+        ..Default::default()
+    });
+    let mut session = Session::new(world);
+    let species = ["quercus-robur", "pinus-sylvestris", "phoenix-canariensis"];
+    for (i, species) in (0..9u64).zip(species.iter().cycle()) {
+        let (col, row) = (i % 3, i / 3);
+        run(
+            &mut session,
+            "entity.add",
+            &json!({"name": format!("Tree {i}"),
+                    "position": [col as f64 * 4.0 - 4.0, 0, -6.0 - row as f64 * 5.0],
+                    "scale": 1.0 + col as f64 * 0.25,
+                    "components": [{"type": "plant",
+                                    "species": species, "seed": i + 1}]}),
+        )?;
+    }
+    run(
+        &mut session,
+        "entity.add",
+        &json!({"name": "Hero", "position": [0.3, 0, 0],
+                "components": [{"type": "character"},
+                               {"type": "launcher", "muzzle_velocity_mps": 800,
+                                "magazine": 30, "rate_s": 0.2}]}),
+    )?;
+    let trees = run(
+        &mut session,
+        "query.trees",
+        &json!({"position": [0, 0, -10], "radius_m": 50, "limit": 100}),
+    )?;
+    hashes.push(("trunks".to_owned(), hash_text(&trees.to_string())));
+    let mut play = Play::start(session.document().clone(), hashes)?;
+    let inputs = [
+        json!({"entity": "Hero", "forward": 1, "yaw_deg": 0}),
+        json!({"entity": "Hero", "forward": 1, "right": 0.3, "yaw_deg": 0, "fire": true}),
+        json!({"entity": "Hero", "forward": 1, "right": -0.5, "yaw_deg": 20, "fire": false}),
+    ];
+    for input in &inputs {
+        run(&mut play.session, "sim.input", input)?;
+        play.step(180)?;
+    }
     Ok(())
 }

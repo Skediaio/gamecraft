@@ -36,6 +36,7 @@ fn the_scenarios_are_the_ones_the_brief_names() {
             "query-aim",
             "terrain-4km",
             "scatter",
+            "grove",
         ]
     );
 }
@@ -95,6 +96,14 @@ fn the_4km_terrain_is_hashed_in_bands_of_rows() {
 fn the_scatter_places_copies_and_hashes_the_document() {
     let o = outcome("scatter");
     assert!(labels(&o).contains(&"document"), "{:?}", labels(&o));
+}
+
+#[test]
+fn the_grove_lists_its_trunks_and_is_hashed_every_second() {
+    let o = outcome("grove");
+    assert_eq!(o.error, None);
+    assert_eq!(o.hashes[0].0, "trunks");
+    assert_eq!(o.hashes.len(), 1 + 1 + 9, "{:?}", labels(&o));
 }
 
 #[test]
