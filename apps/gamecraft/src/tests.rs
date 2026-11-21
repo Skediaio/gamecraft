@@ -13,7 +13,7 @@ use gamecraft_math::{DVec3, yaw_forward};
 use gamecraft_render::Quality;
 use gamecraft_sim::DT;
 use gamecraft_world::{
-    Character, Component, EntityDraft, EntityId, FireMode, HeldModel, Launcher, Objective,
+    Character, Component, EntityDraft, EntityId, FireMode, Health, HeldModel, Launcher, Objective,
     ObjectiveStatus, Recoil, Terrain, TerrainSource, ViewMode as WorldView, ViewRules, World,
 };
 use serde_json::json;
@@ -176,14 +176,21 @@ fn the_recoil_climbs_the_view_and_the_player_pulls_it_back() {
     };
     let level = pitch_of(&game);
     assert!(close(level, 0.0, 1e-9), "{level}");
-    assert_eq!(game.hud_text().as_deref(), Some("SEMI 30/30"));
+    assert!(
+        game.hud().is_empty(),
+        "the ammunition is hidden until the weapon does something"
+    );
     // A click: one shot; the view climbs by the kick (10 mrad, 0.57 degrees).
     game.fire(true);
     game.fire(false);
     frames(&mut game, 1);
     let kicked = pitch_of(&game);
     assert!(close(kicked, 0.01_f64.to_degrees(), 1e-6), "{kicked}");
-    assert_eq!(game.hud_text().as_deref(), Some("SEMI 29/30"));
+    assert_eq!(
+        game.hud().corner[0].text,
+        "SEMI",
+        "a shot shows the ammunition"
+    );
     let aim = game.view_model_aim().unwrap();
     assert!(
         close(aim.pitch_deg, kicked, 1e-9),
@@ -203,7 +210,7 @@ fn the_recoil_climbs_the_view_and_the_player_pulls_it_back() {
     game.key(Key::SwitchMode, true);
     game.key(Key::SwitchMode, false);
     frames(&mut game, 1);
-    assert!(game.hud_text().unwrap().starts_with("AUTO"));
+    assert_eq!(game.hud().corner[0].text, "AUTO");
 }
 
 #[test]
@@ -1060,4 +1067,139 @@ fn a_project_folder_opens_with_its_models_handed_to_the_view_once() {
         .err()
         .unwrap();
     assert!(e.contains("cannot be opened"), "{e}");
+}
+
+// ---- the HUD: ammunition, hits and death ----
+
+/// `rifleman()` with a health component on the player and a sniper 40 m north that fires
+/// south at it through `sim.fire`.
+fn duel(spare: Option<u32>) -> World {
+    let mut world = rifleman();
+    let player = world.entities().next().unwrap().id;
+    let e = world.entity_mut(player).unwrap();
+    e.set_component(Component::Health(Health::default()));
+    if let Some(l) = e.launcher().cloned() {
+        e.set_component(Component::Launcher(Launcher {
+            spare_magazines: spare,
+            ..l
+        }));
+    }
+    world
+        .add_entity(EntityDraft {
+            name: "Sniper".into(),
+            position: [0.0, 0.0, -40.0],
+            components: vec![Component::Launcher(Launcher {
+                dispersion_mrad: 0.0,
+                max_flight_s: 1.0,
+                ..Launcher::default()
+            })],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    world
+}
+
+fn sniper_fires(game: &mut Game) {
+    let sniper = game
+        .session()
+        .current_world()
+        .entities()
+        .find(|e| e.name == "Sniper")
+        .unwrap()
+        .id;
+    let line = json!({"id": 1, "method": "engine.execute", "params": {"command": "sim.fire",
+            "params": {"entity": sniper.0, "yaw_deg": 180}}});
+    let reply = game.control(&line.to_string()).unwrap();
+    assert!(reply.contains("\"ok\":true"), "{reply}");
+}
+
+#[test]
+fn the_ammunition_shows_after_a_shot_a_reload_or_a_check_and_hides_after_three_seconds() {
+    let mut game = Game::new(duel(Some(2)));
+    frames(&mut game, 2);
+    assert!(game.hud().is_empty());
+    // T: check the magazine.
+    game.key(Key::CheckMagazine, true);
+    game.key(Key::CheckMagazine, false);
+    let lines: Vec<String> = game.hud().corner.iter().map(|l| l.text.clone()).collect();
+    assert_eq!(lines, ["SEMI", "MAGAZINE FULL", "2 SPARE MAGAZINES"]);
+    frames(&mut game, (crate::hud::AMMO_SHOW_S / DT) as u32 - 5);
+    assert!(!game.hud().is_empty(), "still up just before three seconds");
+    frames(&mut game, 10);
+    assert!(game.hud().is_empty(), "gone after three seconds");
+    // A shot shows it again, counted from the last shot.
+    game.fire(true);
+    game.fire(false);
+    frames(&mut game, 2);
+    assert!(!game.hud().is_empty());
+    frames(&mut game, 150);
+    assert!(!game.hud().is_empty(), "2.5 s after the shot");
+    frames(&mut game, 60);
+    assert!(game.hud().is_empty());
+    // A reload shows it, with the reload and one spare magazine less.
+    game.key(Key::Reload, true);
+    game.key(Key::Reload, false);
+    frames(&mut game, 2);
+    let lines: Vec<String> = game.hud().corner.iter().map(|l| l.text.clone()).collect();
+    assert_eq!(lines, ["SEMI", "RELOADING", "1 SPARE MAGAZINE"]);
+}
+
+#[test]
+fn being_shot_flashes_the_screen_and_dying_shows_the_death_screen_until_enter() {
+    let mut game = Game::new(duel(None));
+    frames(&mut game, 2);
+    assert!(!game.is_dead());
+    sniper_fires(&mut game);
+    // The bullet needs about 50 ms for 40 m.
+    let mut flashed = false;
+    for _ in 0..30 {
+        game.frame(DT);
+        flashed |= game.hud().vignette.is_some() && !game.is_dead();
+        if game.is_dead() {
+            break;
+        }
+    }
+    assert!(game.is_dead(), "one hit of 160 against 100 health");
+    let hud = game.hud();
+    assert!(flashed || hud.veil.is_some());
+    assert!(hud.veil.is_some() && hud.corner.is_empty());
+    frames(&mut game, 120);
+    let hud = game.hud();
+    let lines: Vec<&str> = hud.centre.iter().map(|l| l.text.as_str()).collect();
+    assert_eq!(
+        lines,
+        [
+            "YOU ARE DEAD",
+            "KILLED BY SNIPER AT 40 M",
+            "PRESS ENTER TO RESTART"
+        ]
+    );
+    // The dead player's trigger does nothing, and Enter restarts the world from its document.
+    game.fire(true);
+    frames(&mut game, 5);
+    game.key(Key::Confirm, true);
+    game.key(Key::Confirm, false);
+    assert!(!game.is_dead());
+    assert!(game.hud().is_empty());
+    let player = game.player().unwrap();
+    let health = game
+        .session()
+        .current_world()
+        .entity(player)
+        .unwrap()
+        .health()
+        .unwrap()
+        .current;
+    assert_eq!(health, 100.0);
+}
+
+#[test]
+fn enter_does_nothing_while_the_player_lives() {
+    let mut game = Game::new(duel(None));
+    frames(&mut game, 5);
+    let tick = game.session().live().unwrap().tick();
+    game.key(Key::Confirm, true);
+    game.key(Key::Confirm, false);
+    frames(&mut game, 1);
+    assert!(game.session().live().unwrap().tick() > tick, "no restart");
 }

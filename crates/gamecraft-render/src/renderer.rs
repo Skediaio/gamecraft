@@ -406,7 +406,7 @@ pub struct WorldRenderer {
     /// Whether the live frames carry a crosshair.
     crosshair: bool,
     /// The line of text in the bottom right corner of live frames, if any.
-    hud: Option<String>,
+    hud: hud::Hud,
     synced: Option<GeometryKey>,
     problems: Vec<String>,
     /// Problems of setting the renderer up, repeated with every sync.
@@ -524,7 +524,7 @@ impl WorldRenderer {
             puff_instances: Vec::new(),
             tracer_lines: Vec::new(),
             crosshair: false,
-            hud: None,
+            hud: hud::Hud::default(),
             synced: None,
             problems: setup_problems.clone(),
             setup_problems,
@@ -642,11 +642,13 @@ impl WorldRenderer {
         self.crosshair = on;
     }
 
-    /// A line of text live frames ([`WorldRenderer::draw`]) carry in their bottom right corner
-    /// (a weapon's mode and rounds: `AUTO 27/30`), drawn over everything in capitals, digits
-    /// and `/` ([`hud`]); `None` (the default) for none. Pictures never carry one.
-    pub fn set_hud_text(&mut self, text: Option<&str>) {
-        self.hud = text.map(str::to_string);
+    /// What live frames ([`WorldRenderer::draw`]) carry over the world besides the crosshair:
+    /// lines of text in the bottom right corner or the middle, a tint over the frame and a
+    /// vignette at its edges ([`hud`]); the default is nothing. Pictures never carry one.
+    pub fn set_hud(&mut self, hud: &hud::Hud) {
+        if self.hud != *hud {
+            self.hud = hud.clone();
+        }
     }
 
     /// How many times [`WorldRenderer::sync`] built the scene's geometry: a count of work for
@@ -754,13 +756,11 @@ impl WorldRenderer {
         } else {
             Vec::new()
         };
-        if let Some(text) = &self.hud {
-            sights.extend(
-                hud::hud_segments(camera, self.size.0, self.size.1, text)
-                    .iter()
-                    .flat_map(line_pair),
-            );
-        }
+        sights.extend(
+            hud::hud_segments(camera, self.size.0, self.size.1, &self.hud)
+                .iter()
+                .flat_map(line_pair),
+        );
         self.renderer.set_overlay_lines_on_top(&sights);
         let output = self.renderer.render(encoder);
         self.blit

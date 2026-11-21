@@ -471,6 +471,14 @@ const LAUNCHER_FIELDS: &[Field] = &[
         "Seconds a reload from an empty magazine takes, 0 to 3600; null takes reload_s.",
     ),
     field(
+        "spare_magazines",
+        "integer | null",
+        None,
+        "Spare magazines carried besides the one in the launcher, 0 to 100000; a reload takes \
+         one (a partly used magazine is discarded) and with none left does nothing; null is \
+         unlimited.",
+    ),
+    field(
         "recoil",
         "{kick_up_mrad, kick_side_mrad, recovery_s}",
         Some("mrad, s"),

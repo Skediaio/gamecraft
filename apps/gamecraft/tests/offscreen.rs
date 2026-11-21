@@ -348,3 +348,158 @@ fn firing_in_first_person_shows_a_crosshair_and_tracers() {
         );
     }
 }
+
+/// Draws one frame of `game` and reads the picture back.
+fn shoot(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    view: &mut GameView,
+    texture: &wgpu::Texture,
+    game: &mut Game,
+) -> Vec<u8> {
+    let surface = texture.create_view(&Default::default());
+    view.provide_assets(game.take_assets());
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let problems = view.draw(game, &surface, &mut encoder).unwrap();
+    assert!(problems.is_empty(), "{problems:?}");
+    queue.submit([encoder.finish()]);
+    read_back(device, queue, texture)
+}
+
+/// The mean of each colour channel over the picture.
+fn mean_rgb(rgba: &[u8]) -> [f64; 3] {
+    let n = (rgba.len() / 4) as f64;
+    let mut sum = [0.0; 3];
+    for p in rgba.as_chunks::<4>().0 {
+        for (s, c) in sum.iter_mut().zip(p) {
+            *s += f64::from(*c);
+        }
+    }
+    sum.map(|s| s / n)
+}
+
+/// How many pixels of the bottom right corner (a 360 x 140 block) differ between two pictures.
+fn corner_changes(a: &[u8], b: &[u8]) -> usize {
+    let (w, h) = (WIDTH as usize, HEIGHT as usize);
+    let mut n = 0;
+    for y in h - 140..h {
+        for x in w - 360..w {
+            let i = (y * w + x) * 4;
+            let d: i32 = (0..3)
+                .map(|k| (i32::from(a[i + k]) - i32::from(b[i + k])).abs())
+                .sum();
+            if d > 90 {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+#[test]
+fn the_hud_shows_the_ammunition_briefly_and_the_death_screen_is_unmistakable() {
+    let (device, queue) = match headless_gpu() {
+        Ok(gpu) => gpu,
+        Err(e) => {
+            if std::env::var("GAMECRAFT_REQUIRE_GPU").as_deref() == Ok("1") {
+                panic!("GAMECRAFT_REQUIRE_GPU=1 but there is no GPU: {e}");
+            }
+            println!("skipping GPU test: {e}");
+            return;
+        }
+    };
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/skirmish/project");
+    let texture = target(&device);
+    let mut view = GameView::new(
+        device.clone(),
+        queue.clone(),
+        Quality::Medium,
+        (WIDTH, HEIGHT),
+    );
+    let mut game = Game::from_project(&path).unwrap();
+    game.key(Key::ToggleView, true);
+    game.key(Key::ToggleView, false);
+    assert_eq!(game.view(), ViewMode::FirstPerson);
+    for _ in 0..5 {
+        game.frame(DT);
+    }
+    // The ammunition: hidden, then up after a check (T), then gone after three seconds.
+    let hidden = shoot(&device, &queue, &mut view, &texture, &mut game);
+    game.key(Key::CheckMagazine, true);
+    game.key(Key::CheckMagazine, false);
+    game.frame(DT);
+    let shown = shoot(&device, &queue, &mut view, &texture, &mut game);
+    save("hud-ammo.png", &shown);
+    let changed = corner_changes(&hidden, &shown);
+    assert!(
+        changed > 400,
+        "the ammunition changes the corner: {changed}"
+    );
+    for _ in 0..200 {
+        game.frame(DT);
+    }
+    let gone = shoot(&device, &queue, &mut view, &texture, &mut game);
+    assert!(
+        corner_changes(&hidden, &gone) < changed / 4,
+        "the ammunition is hidden again"
+    );
+    // A sniper 25 m north shoots the player down.
+    let player = game.player().unwrap();
+    let [px, _, pz] = game
+        .session()
+        .current_world()
+        .entity(player)
+        .unwrap()
+        .position;
+    let add = serde_json::json!({"id": 1, "method": "engine.execute", "params": {
+        "command": "entity.add", "params": {"name": "Sniper", "at": [px, pz - 25.0],
+        "components": [{"type": "launcher", "dispersion_mrad": 0, "max_flight_s": 1}]}}});
+    let reply = game.control(&add.to_string()).unwrap();
+    assert!(reply.contains("\"ok\":true"), "{reply}");
+    let sniper = game
+        .session()
+        .current_world()
+        .entities()
+        .find(|e| e.name == "Sniper")
+        .unwrap()
+        .id;
+    let fire = serde_json::json!({"id": 2, "method": "engine.execute",
+        "params": {"command": "sim.fire", "params": {"entity": sniper.0, "yaw_deg": 180}}});
+    let alive = shoot(&device, &queue, &mut view, &texture, &mut game);
+    let reply = game.control(&fire.to_string()).unwrap();
+    assert!(reply.contains("\"ok\":true"), "{reply}");
+    let mut flash = None;
+    for _ in 0..60 {
+        game.frame(DT);
+        if flash.is_none() && game.hud().vignette.is_some() && !game.is_dead() {
+            flash = Some(shoot(&device, &queue, &mut view, &texture, &mut game));
+        }
+        if game.is_dead() {
+            break;
+        }
+    }
+    assert!(game.is_dead(), "the sniper's shot downs the player");
+    if let Some(flash) = flash {
+        save("hud-hit.png", &flash);
+    }
+    for _ in 0..120 {
+        game.frame(DT);
+    }
+    let dead = shoot(&device, &queue, &mut view, &texture, &mut game);
+    save("hud-death.png", &dead);
+    let (before, after) = (luminance_stats(&alive).0, luminance_stats(&dead).0);
+    assert!(
+        after < before * 0.5,
+        "the screen is dark: {before} -> {after}"
+    );
+    let [r, g, b] = mean_rgb(&dead);
+    assert!(r > g * 1.3 && r > b * 1.3, "and red: {r} {g} {b}");
+    // Enter: the world starts again from its document.
+    game.key(Key::Confirm, true);
+    game.key(Key::Confirm, false);
+    game.frame(DT);
+    assert!(!game.is_dead());
+    let restarted = shoot(&device, &queue, &mut view, &texture, &mut game);
+    assert!(luminance_stats(&restarted).0 > before * 0.7);
+}

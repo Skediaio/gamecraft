@@ -55,6 +55,10 @@ pub enum Key {
     Pause,
     /// Esc: release the pointer.
     Release,
+    /// T: check the magazine (the ammunition is shown for a few seconds).
+    CheckMagazine,
+    /// Enter: confirm; restarts the world on the death screen.
+    Confirm,
 }
 
 /// What a window key asks of the window, on its press.
@@ -68,6 +72,10 @@ pub enum Action {
     Pause,
     /// Release the pointer lock.
     Release,
+    /// Show the ammunition for a few seconds.
+    CheckAmmo,
+    /// Enter: restart when the player is dead.
+    Confirm,
 }
 
 /// What a character is asked to do: the fields of `sim.input`.
@@ -220,6 +228,8 @@ impl Controls {
             Key::Restart => return pressed.then_some(Action::Restart),
             Key::Pause => return pressed.then_some(Action::Pause),
             Key::Release => return pressed.then_some(Action::Release),
+            Key::CheckMagazine => return pressed.then_some(Action::CheckAmmo),
+            Key::Confirm => return pressed.then_some(Action::Confirm),
         };
         *held = pressed;
         None

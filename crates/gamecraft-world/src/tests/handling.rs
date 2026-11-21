@@ -54,6 +54,7 @@ fn default_handling_is_not_written() {
         "burst_count",
         "cyclic_rpm",
         "reload_empty_s",
+        "spare_magazines",
         "recoil",
         "sway",
         "ads_sway_factor",
@@ -122,6 +123,8 @@ fn bad_handling_values_name_the_field() {
     assert!(msg.contains("launcher.cyclic_rpm"), "{msg}");
     let msg = bad(&|l| l.reload_empty_s = Some(-1.0));
     assert!(msg.contains("launcher.reload_empty_s"), "{msg}");
+    let msg = bad(&|l| l.spare_magazines = Some(u32::MAX));
+    assert!(msg.contains("launcher.spare_magazines"), "{msg}");
     let msg = bad(&|l| l.recoil.kick_up_mrad = f64::INFINITY);
     assert!(msg.contains("launcher.recoil.kick_up_mrad"), "{msg}");
     let msg = bad(&|l| l.recoil.recovery_s = -0.1);

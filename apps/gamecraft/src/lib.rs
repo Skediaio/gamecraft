@@ -11,7 +11,7 @@
 //!   the JSON-lines control protocol on stdin (`--stdin`) so an agent drives the window a
 //!   person is watching.
 //!
-//! The pure parts ([`input`], [`freelook`], [`pad`], [`clock`], [`pose`], [`rig`], [`notices`],
+//! The pure parts ([`input`], [`hud`], [`freelook`], [`pad`], [`clock`], [`pose`], [`rig`], [`notices`],
 //! [`args`]) are tested without a GPU.
 
 // The window is outside the deterministic core (layers L0 to L3): its camera and interpolation
@@ -25,6 +25,7 @@ pub mod clock;
 pub mod freelook;
 pub mod game;
 pub mod gamepads;
+pub mod hud;
 pub mod input;
 pub mod notices;
 pub mod pad;

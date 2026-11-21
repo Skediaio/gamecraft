@@ -136,6 +136,12 @@ exact rules):
   keep firing.
 - **Reload**: the input's `reload` takes `reload_s`; from empty `reload_empty_s` (else
   `reload_s`).
+- **Spare magazines**: `spare_magazines` (a count, 0 to 100000; `null` or absent is unlimited, as
+  a launcher always was, and then the state hash is unchanged). A reload, asked for or after the
+  last shot, takes one at its start and refills the magazine when it ends; a partly used
+  magazine is simply discarded (no rounds are carried over). With none left a reload does
+  nothing and an empty launcher stays empty. `sim.state` and `entity.get` show `magazine.spare`
+  (null for unlimited). The window tells it as `NO MAGAZINES`, never as a round count.
 - **Recoil** `{kick_up_mrad, kick_side_mrad, recovery_s}`: a kick per shot on top of the aim,
   decaying exponentially (5 % left after `recovery_s`); fast shots stack. The window shows it
   as a climbing view the player pulls back with the mouse: the input's aim is the player's,

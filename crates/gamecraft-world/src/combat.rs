@@ -87,6 +87,11 @@ pub struct Launcher {
     /// Default null.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reload_empty_s: Option<f64>,
+    /// Spare magazines the shooter carries besides the one in the launcher, 0 to 100000. A
+    /// reload takes one (a partly used magazine is discarded); with none left a reload does
+    /// nothing. `null` carries unlimited ones, as a launcher always did. Default null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spare_magazines: Option<u32>,
     /// How each shot kicks the shooter's aim. Default no kick.
     #[serde(skip_serializing_if = "handling::is_default_recoil")]
     pub recoil: Recoil,
@@ -120,6 +125,7 @@ impl Default for Launcher {
             burst_count,
             cyclic_rpm: None,
             reload_empty_s: None,
+            spare_magazines: None,
             recoil: Recoil::default(),
             sway: Sway::default(),
             ads_sway_factor: ads_factor,

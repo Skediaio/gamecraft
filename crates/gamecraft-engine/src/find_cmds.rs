@@ -53,7 +53,7 @@ fn get_spec() -> CommandSpec {
              hold_breath, switch_mode, reload}} (the input \
              stored for a character while playing), health: null | {{max, current, armor, \
              down}}, behaviour: null | {BEHAVIOUR_DOC} (while playing), magazine: null | \
-             {{left, shots, ready_in_s, reloading, mode}} (a launcher while playing), handling: \
+             {{left, shots, ready_in_s, reloading, mode, spare}} (a launcher while playing), handling: \
              null | {{recoil_mrad, sway_mrad, aim_offset_deg, sway_amplitude_mrad, fatigue, \
              breath, breath_s, ads, stance, pulled}} (a character's launcher while playing)}}"
         ),

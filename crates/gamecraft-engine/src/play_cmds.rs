@@ -41,7 +41,7 @@ const MIN_FACE_DISTANCE_M: f64 = 1e-9;
 
 const CHARACTERS_DOC: &str = "[{id, name, position, rotation_y_deg, velocity, grounded, \
     health: {max, current, armor, down} | null, behaviour: {state, ...} | null, magazine: {left, \
-    shots, ready_in_s, reloading, mode} | null, handling: {recoil_mrad: [left, up], sway_mrad: \
+    shots, ready_in_s, reloading, mode, spare} | null, handling: {recoil_mrad: [left, up], sway_mrad: \
     [left, up], aim_offset_deg: [yaw, pitch], sway_amplitude_mrad, fatigue, breath, breath_s, \
     ads, stance, pulled} | null}]";
 

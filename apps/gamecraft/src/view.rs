@@ -68,9 +68,10 @@ impl GameView {
             game.view() == ViewMode::FirstPerson
                 && game.player().is_some()
                 && !game.is_freelooking()
-                && !game.is_aiming(),
+                && !game.is_aiming()
+                && !game.is_dead(),
         );
-        self.renderer.set_hud_text(game.hud_text().as_deref());
+        self.renderer.set_hud(&game.hud());
         let (width, height) = self.renderer.size();
         let camera = game.camera(f64::from(width) / f64::from(height));
         self.renderer

@@ -5,7 +5,7 @@
 use crate::WorldError;
 use crate::error::Ctx;
 use crate::limits::{
-    BURST_COUNT_MAX, CYCLIC_RPM_MAX, HANDLING_TIME_MAX_S, LAUNCHER_TIME_MAX_S,
+    BURST_COUNT_MAX, CYCLIC_RPM_MAX, HANDLING_TIME_MAX_S, LAUNCHER_TIME_MAX_S, MAGAZINE_MAX,
     RECOIL_KICK_MAX_MRAD, SWAY_FACTOR_MAX,
 };
 use crate::{Launcher, combat::above_zero};
@@ -228,7 +228,7 @@ pub(crate) fn is_default_ads_factor(factor: &f64) -> bool {
 }
 
 /// The defaults of the `launcher`'s handling fields as JSON (`modes`, `burst_count`,
-/// `cyclic_rpm`, `reload_empty_s`, `recoil`, `sway`, `ads_sway_factor`,
+/// `cyclic_rpm`, `reload_empty_s`, `spare_magazines`, `recoil`, `sway`, `ads_sway_factor`,
 /// `ads_dispersion_factor`): a document leaves them out while they are at their defaults, so a
 /// listing of the component's defaults adds them from here.
 pub fn launcher_handling_defaults() -> serde_json::Value {
@@ -238,6 +238,7 @@ pub fn launcher_handling_defaults() -> serde_json::Value {
         "burst_count": l.burst_count,
         "cyclic_rpm": l.cyclic_rpm,
         "reload_empty_s": l.reload_empty_s,
+        "spare_magazines": l.spare_magazines,
         "recoil": l.recoil,
         "sway": l.sway,
         "ads_sway_factor": l.ads_sway_factor,
@@ -298,6 +299,15 @@ impl Launcher {
                 LAUNCHER_TIME_MAX_S,
                 " seconds",
             )?;
+        }
+        if let Some(n) = self.spare_magazines
+            && n > MAGAZINE_MAX
+        {
+            return Err(ctx.invalid(
+                "launcher.spare_magazines",
+                n,
+                format!("it must be from 0 to {MAGAZINE_MAX}, or null for unlimited"),
+            ));
         }
         self.recoil.validate(ctx)?;
         self.sway.validate(ctx)?;

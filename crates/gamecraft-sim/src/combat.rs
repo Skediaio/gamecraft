@@ -83,6 +83,8 @@ pub struct Magazine {
     pub reloading: bool,
     /// Where the selector is: one of the launcher's `modes`.
     pub mode: FireMode,
+    /// Spare magazines left; `None` is unlimited. A reload uses one.
+    pub spare: Option<u32>,
 }
 
 impl Magazine {
@@ -94,13 +96,27 @@ impl Magazine {
             ready_in_s: 0.0,
             reloading: false,
             mode: launcher.first_mode(),
+            spare: launcher.spare_magazines,
+        }
+    }
+
+    /// Takes a spare magazine for a reload: false when there is none left.
+    fn take_spare(&mut self) -> bool {
+        match &mut self.spare {
+            None => true,
+            Some(0) => false,
+            Some(n) => {
+                *n = n.saturating_sub(1);
+                true
+            }
         }
     }
 
     /// Starts a reload of `reload_s` (after any wait still running) unless the magazine is
-    /// full or reloading already. Whether it started.
+    /// full or reloading already, or no spare magazine is left (the partly used one is
+    /// discarded for the next). Whether it started.
     pub(crate) fn reload(&mut self, launcher: &Launcher) -> bool {
-        if self.reloading || self.left >= launcher.magazine {
+        if self.reloading || self.left >= launcher.magazine || !self.take_spare() {
             return false;
         }
         self.reloading = true;
@@ -128,7 +144,7 @@ impl Magazine {
         self.left = self.left.saturating_sub(1);
         self.shots = self.shots.saturating_add(1);
         let interval = launcher.interval_s(self.mode);
-        if self.left == 0 {
+        if self.left == 0 && self.take_spare() {
             self.reloading = true;
             self.ready_in_s = launcher.empty_reload_s().max(interval);
         } else {

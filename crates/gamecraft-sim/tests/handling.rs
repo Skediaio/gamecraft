@@ -447,3 +447,70 @@ fn a_burst_with_recoil_and_sway_hashes_the_same_every_tick_of_two_runs() {
     assert_eq!(a, run(31), "same world, same inputs, same hash every tick");
     assert_ne!(a.last(), run(32).last(), "another seed, another history");
 }
+
+#[test]
+fn a_reload_takes_a_spare_magazine_and_with_none_left_does_nothing() {
+    let launcher = Launcher {
+        magazine: 5,
+        reload_s: 1.0,
+        modes: vec![FireMode::Auto],
+        spare_magazines: Some(2),
+        ..rifle()
+    };
+    let (w, id) = armed(launcher, 3);
+    let mut sim = Sim::new(w).unwrap();
+    assert_eq!(sim.magazine(id).unwrap().spare, Some(2));
+    // Five shots empty the magazine; the reload that follows uses the first spare one.
+    hold(&mut sim, id, trigger(true), 25);
+    let m = *sim.magazine(id).unwrap();
+    assert_eq!((m.left, m.reloading, m.spare), (0, true, Some(1)), "{m:?}");
+    // 60 ticks of reload (the trigger is let go), then a full magazine.
+    hold(&mut sim, id, Input::default(), 60);
+    let m = *sim.magazine(id).unwrap();
+    assert_eq!((m.left, m.reloading, m.spare), (5, false, Some(1)), "{m:?}");
+    // A partly used magazine is reloaded too, and discarded: one spare for it.
+    hold(&mut sim, id, trigger(true), 1);
+    hold(&mut sim, id, Input::default(), 1);
+    let reload = Input {
+        reload: true,
+        ..Input::default()
+    };
+    hold(&mut sim, id, reload, 1);
+    assert_eq!(sim.magazine(id).unwrap().spare, Some(0));
+    hold(&mut sim, id, Input::default(), 61);
+    assert_eq!(sim.magazine(id).unwrap().left, 5);
+    // Out of spares: firing it dry leaves it empty and a reload does nothing.
+    hold(&mut sim, id, trigger(true), 25);
+    let m = *sim.magazine(id).unwrap();
+    assert_eq!((m.left, m.reloading, m.spare), (0, false, Some(0)), "{m:?}");
+    hold(&mut sim, id, Input::default(), 1);
+    hold(&mut sim, id, reload, 120);
+    let m = *sim.magazine(id).unwrap();
+    assert_eq!((m.left, m.reloading, m.spare), (0, false, Some(0)), "{m:?}");
+    let before = shots(&sim, id);
+    hold(&mut sim, id, trigger(true), 60);
+    assert_eq!(shots(&sim, id), before, "an empty launcher does not fire");
+}
+
+#[test]
+fn unlimited_spare_magazines_are_the_default_and_a_counted_one_is_hashed() {
+    let run = |spare: Option<u32>| {
+        let launcher = Launcher {
+            magazine: 5,
+            spare_magazines: spare,
+            modes: vec![FireMode::Auto],
+            ..rifle()
+        };
+        let (w, id) = armed(launcher, 3);
+        let mut sim = Sim::new(w).unwrap();
+        hold(&mut sim, id, trigger(true), 400);
+        (sim.state_hash(), sim.magazine(id).unwrap().spare)
+    };
+    let (unlimited, spare) = run(None);
+    assert_eq!(spare, None, "unlimited never counts down");
+    assert_eq!(run(None).0, unlimited);
+    let (counted, left) = run(Some(3));
+    assert_eq!(left, Some(0));
+    assert_ne!(counted, unlimited);
+    assert_eq!(Launcher::default().spare_magazines, None);
+}

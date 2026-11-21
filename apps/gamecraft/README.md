@@ -23,8 +23,13 @@ without rules, which allows both), and F1 or select switches only among those li
 with `"modes": ["first"]` stays in first person. The camera's vertical field of view is the
 world's `fov_y_deg` (70 by default) unless `--fov` (natively) or `?fov=` (browser) sets the
 player's own. In first person the player's `held_model` (a weapon's view model) is drawn at the
-camera along the aim. While playing with a launcher, the bottom right corner shows the fire mode and the rounds
-left (`AUTO 27/30`, `RELOAD` while reloading). Keys:
+camera along the aim. While playing with a launcher, the bottom right corner shows, for about 3 seconds after a shot, a reload, a
+mode switch or a check (T), the fire mode, a rough magazine state (full, about half, low, almost empty,
+empty; never a round count) and the spare magazines (`NO MAGAZINES` when none are left; nothing for
+unlimited ones); otherwise it is hidden. A hit on the player flashes the screen edges red. When the
+player's health reaches 0 the screen fades to dark red with `YOU ARE DEAD`, who killed the player and
+from how far when the simulation knows it, and `PRESS ENTER TO RESTART`; input no longer drives the
+dead character. Keys:
 
 | Key | Does |
 |---|---|
@@ -39,6 +44,8 @@ left (`AUTO 27/30`, `RELOAD` while reloading). Keys:
 | right button, held | aim down the sights (`ads`): less sway and spread; in first person the held model comes up to its `ads_offset_m`, the view narrows by its `ads_fov_factor` (over its `ads_time_s`) and the crosshair is hidden |
 | B | switch the fire mode (`switch_mode`: the next of the launcher's `modes`) |
 | R | reload (`reload`) |
+| T | check the magazine: show the ammunition for about 3 seconds |
+| Enter | restart the world from its document, on the death screen only |
 | Esc | release the pointer |
 | F1 | the next view the world allows (first or third person) |
 | F5 | restart the simulation from the document |

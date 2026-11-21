@@ -1006,6 +1006,11 @@ impl Sim {
                     .copied()
                     .unwrap_or_else(|| Magazine::full(launcher));
                 magazine.left = magazine.left.min(launcher.magazine);
+                magazine.spare = match (launcher.spare_magazines, magazine.spare) {
+                    (None, _) => None,
+                    (Some(l), None) => Some(l),
+                    (Some(l), Some(m)) => Some(m.min(l)),
+                };
                 if !launcher.modes.contains(&magazine.mode) {
                     magazine.mode = launcher.first_mode();
                 }
@@ -1190,6 +1195,10 @@ impl Sim {
             hasher.write_u64(m.shots);
             hasher.write_f64(m.ready_in_s);
             hasher.write_bool(m.reloading);
+            // Written only when counted, so a launcher with unlimited magazines hashes as before.
+            if let Some(spare) = m.spare {
+                hasher.write_u64(u64::from(spare));
+            }
         }
         hasher.write_u64(healths.len() as u64);
         for (id, current) in healths {

@@ -7,6 +7,7 @@
 //! with `sim.step`, one tick per call so the picture can be interpolated between the last two.
 
 use crate::clock::FixedStep;
+use crate::hud::{self, AMMO_SHOW_S, Ammo, Death, HIT_FLASH_S, HudState, Killer};
 use crate::input::{Action, Controls, InputRecord, Key};
 use crate::notices::Notices;
 use crate::pad::{PadConfig, PadMapper, PadState};
@@ -15,6 +16,7 @@ use crate::rig::{self, ViewMode};
 use gamecraft_automation::{Access, Host, rpc};
 use gamecraft_engine::Session;
 use gamecraft_render::effects::IMPACT_LIFE_S;
+use gamecraft_render::hud::Hud;
 use gamecraft_render::{Camera, Effects, Impact, Tracer, ViewModelAim};
 use gamecraft_sim::{DT, Handling};
 use gamecraft_world::{EntityId, HeightField, World};
@@ -50,6 +52,16 @@ pub struct Game {
     assets: Vec<(String, Vec<u8>)>,
     /// How far the held model is up to the sights: 0 at the hip, 1 at the sights.
     ads_blend: f64,
+    /// Seconds the ammunition stays up still.
+    ammo_timer_s: f64,
+    /// What the ammunition showed last: (shots fired, selector, reloading); a change shows it.
+    ammo_seen: Option<(u64, String, bool)>,
+    /// Seconds of the red flash of a hit left.
+    hit_flash_s: f64,
+    /// Who shot the player down, noted from the `down` event.
+    killer: Option<Killer>,
+    /// Seconds since the player went down; `None` while alive.
+    dead_s: Option<f64>,
 }
 
 /// The steepest the camera tilts with the recoil on top of the aim, degrees.
@@ -106,6 +118,11 @@ impl Game {
             hits: Vec::new(),
             assets: Vec::new(),
             ads_blend: 0.0,
+            ammo_timer_s: 0.0,
+            ammo_seen: None,
+            hit_flash_s: 0.0,
+            killer: None,
+            dead_s: None,
         };
         game.start();
         game
@@ -183,6 +200,9 @@ impl Game {
     /// action is returned so the
     /// window can do its part (Esc releases the pointer).
     pub fn key(&mut self, key: Key, pressed: bool) -> Option<Action> {
+        if pressed && matches!(key, Key::Reload | Key::SwitchMode) {
+            self.ammo_timer_s = AMMO_SHOW_S;
+        }
         let action = self.controls.key(key, pressed);
         self.act(action);
         action
@@ -209,6 +229,12 @@ impl Game {
                 self.view = self.view().next_allowed(&rules);
             }
             Some(Action::Restart) => self.restart(),
+            Some(Action::Confirm) => {
+                if self.is_dead() {
+                    self.restart();
+                }
+            }
+            Some(Action::CheckAmmo) => self.ammo_timer_s = AMMO_SHOW_S,
             Some(Action::Pause) => {
                 self.paused = !self.paused;
                 self.step.reset();
@@ -226,7 +252,7 @@ impl Game {
 
     /// The fire button (left mouse) went down or up: the launcher's trigger.
     pub fn fire(&mut self, held: bool) {
-        self.controls.set_fire(held);
+        self.controls.set_fire(held && !self.is_dead());
     }
 
     /// The sights button (right mouse) went down or up: aim down the sights while held.
@@ -269,24 +295,75 @@ impl Game {
         }
     }
 
-    /// The line the window shows in its bottom right corner: the player's fire mode and rounds
-    /// left of the magazine (`AUTO 27/30`, `RELOAD` while reloading), while playing with a
-    /// launcher; `None` otherwise.
-    pub fn hud_text(&self) -> Option<String> {
+    /// Whether the player's character is down (its health is 0): the death screen shows and
+    /// Enter restarts.
+    pub fn is_dead(&self) -> bool {
+        self.dead_s.is_some()
+    }
+
+    /// The player's launcher as the HUD tells it, while playing with one.
+    fn ammo(&self) -> Option<Ammo> {
         let id = self.player()?;
         let sim = self.session().live()?;
         let magazine = sim.magazine(id)?;
         let launcher = sim.world().entity(id)?.launcher()?;
-        let mut line = format!(
-            "{} {}/{}",
-            magazine.mode.name().to_ascii_uppercase(),
-            magazine.left,
-            launcher.magazine
-        );
-        if magazine.reloading {
-            line.push_str(" RELOAD");
+        Some(Ammo {
+            mode: magazine.mode.name().to_string(),
+            left: magazine.left,
+            capacity: launcher.magazine,
+            spare: magazine.spare,
+            reloading: magazine.reloading,
+        })
+    }
+
+    /// What the window shows over the world: the ammunition for a few seconds after the weapon
+    /// did something, the red flash of a hit and the death screen.
+    pub fn hud(&self) -> Hud {
+        hud::build(&HudState {
+            ammo: self.ammo(),
+            ammo_visible: self.ammo_timer_s > 0.0,
+            hit_flash_s: self.hit_flash_s,
+            death: self.dead_s.map(|dead_s| Death {
+                killer: self.killer.clone(),
+                dead_s,
+            }),
+        })
+    }
+
+    /// Counts the HUD's clocks down by `frame_s`, shows the ammunition when the weapon changed
+    /// and notes the player's death.
+    fn tick_hud(&mut self, frame_s: f64) {
+        let step = if frame_s.is_finite() {
+            frame_s.max(0.0)
+        } else {
+            0.0
+        };
+        self.ammo_timer_s = (self.ammo_timer_s - step).max(0.0);
+        self.hit_flash_s = (self.hit_flash_s - step).max(0.0);
+        let seen = self.session().live().and_then(|sim| {
+            let m = sim.magazine(self.player()?)?;
+            Some((m.shots, m.mode.name().to_string(), m.reloading))
+        });
+        if seen.is_some() && seen != self.ammo_seen {
+            if self.ammo_seen.is_some() {
+                self.ammo_timer_s = AMMO_SHOW_S;
+            }
+            self.ammo_seen = seen;
         }
-        Some(line)
+        let down = self.session().is_playing()
+            && self
+                .player()
+                .and_then(|id| self.session().current_world().entity(id))
+                .and_then(|e| e.health())
+                .is_some_and(gamecraft_world::Health::is_down);
+        self.dead_s = match (down, self.dead_s) {
+            (true, Some(s)) => Some(s + step),
+            (true, None) => {
+                self.controls.set_fire(false);
+                Some(0.0)
+            }
+            (false, _) => None,
+        };
     }
 
     /// The window lost the keyboard: every key is let go.
@@ -300,6 +377,7 @@ impl Game {
     pub fn frame(&mut self, frame_s: f64) -> u32 {
         self.raise_sights(frame_s);
         if !self.session().is_playing() || self.paused {
+            self.tick_hud(if self.paused { 0.0 } else { frame_s });
             self.step.reset();
             let world = self.host.session().current_world();
             self.poses.observe(world);
@@ -322,6 +400,7 @@ impl Game {
             self.controls.ticked();
             self.send_input();
         }
+        self.tick_hud(frame_s);
         if ran == 0 {
             let world = self.host.session().current_world();
             self.poses.observe(world);
@@ -546,6 +625,7 @@ impl Game {
         };
         let events = answer.get("events").and_then(Value::as_array);
         for e in events.into_iter().flatten() {
+            self.note_player_event(e);
             if e.get("event").and_then(Value::as_str) != Some("hit") {
                 continue;
             }
@@ -554,6 +634,40 @@ impl Game {
             }
         }
         self.hits.retain(|&(_, _, at)| now - at < IMPACT_LIFE_S);
+    }
+
+    /// Notes a hit on the player (the red flash) and the shot that downed it (who and from how
+    /// far), from a `hit` or `down` event of a step.
+    fn note_player_event(&mut self, event: &Value) {
+        let Some(player) = self.player() else {
+            return;
+        };
+        let id_of = |key: &str| event.get(key).and_then(Value::as_u64).map(EntityId);
+        if id_of("target") != Some(player) {
+            return;
+        }
+        let shooter = id_of("shooter").or_else(|| id_of("who"));
+        match event.get("event").and_then(Value::as_str) {
+            Some("hit") if shooter != Some(player) => self.hit_flash_s = HIT_FLASH_S,
+            Some("down") => {
+                let world = self.session().current_world();
+                self.killer = shooter.and_then(|who| {
+                    let (a, b) = (world.entity(who)?, world.entity(player)?);
+                    let distance_m = a
+                        .position
+                        .iter()
+                        .zip(&b.position)
+                        .map(|(x, y)| (x - y) * (x - y))
+                        .sum::<f64>()
+                        .sqrt();
+                    Some(Killer {
+                        name: a.name.clone(),
+                        distance_m,
+                    })
+                });
+            }
+            _ => {}
+        }
     }
 
     /// Starts the simulation and puts the controls, the step and the poses at its start.
@@ -574,6 +688,11 @@ impl Game {
         self.noticed = false;
         self.hits.clear();
         self.ads_blend = 0.0;
+        self.ammo_timer_s = 0.0;
+        self.ammo_seen = None;
+        self.hit_flash_s = 0.0;
+        self.killer = None;
+        self.dead_s = None;
         // A character's first input starts from standing still facing its rotation: that is
         // what the controls ask for now, so nothing is sent until they change (and an agent's
         // input is not overwritten meanwhile).

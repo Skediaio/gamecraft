@@ -79,7 +79,7 @@ pub(crate) fn behaviour_json(sim: &Sim, id: EntityId) -> Value {
     v
 }
 
-/// `{left, shots, ready_in_s, reloading, mode}` of a launcher while playing, null without one.
+/// `{left, shots, ready_in_s, reloading, mode, spare}` of a launcher while playing, null without one.
 pub(crate) fn magazine_json(sim: &Sim, id: EntityId) -> Value {
     match sim.magazine(id) {
         Some(m) => json!({
@@ -88,6 +88,7 @@ pub(crate) fn magazine_json(sim: &Sim, id: EntityId) -> Value {
             "ready_in_s": m.ready_in_s,
             "reloading": m.reloading,
             "mode": m.mode.name(),
+            "spare": m.spare,
         }),
         None => Value::Null,
     }
@@ -145,7 +146,7 @@ fn fire_spec() -> CommandSpec {
             )
             .unit("deg"),
         ],
-        "{entity, projectile (its id), magazine: {left, shots, ready_in_s, reloading, mode}}",
+        "{entity, projectile (its id), magazine: {left, shots, ready_in_s, reloading, mode, spare}}",
         json!({"entity": "Scout", "yaw_deg": 0, "pitch_deg": 2}),
     )
     .play()

@@ -28,7 +28,7 @@ const SETTLE_FRAMES: u8 = 2;
 #[cfg(not(target_arch = "wasm32"))]
 const START_SIZE: (f64, f64) = (1280.0, 720.0);
 
-/// The game key of a physical key: WASD, Shift, Space, E, B, R, Left Alt, F1, F5, P and Esc.
+/// The game key of a physical key: WASD, Shift, Space, E, B, R, Left Alt, F1, F5, P, T, Enter and Esc.
 pub fn key_of(code: KeyCode) -> Option<Key> {
     Some(match code {
         KeyCode::KeyW => Key::Forward,
@@ -45,6 +45,8 @@ pub fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::F5 => Key::Restart,
         KeyCode::KeyP => Key::Pause,
         KeyCode::Escape => Key::Release,
+        KeyCode::KeyT => Key::CheckMagazine,
+        KeyCode::Enter | KeyCode::NumpadEnter => Key::Confirm,
         _ => return None,
     })
 }
