@@ -6,7 +6,7 @@ use crate::error::{CommandError, bad, failed};
 use crate::params::Params;
 use crate::session::{Handler, Registration, Session};
 use crate::spec::{CommandSpec, ParamType as T, param, spec};
-use gamecraft_sim::{Handling, MAX_FIRE_PITCH_DEG, Sim};
+use gamecraft_sim::{Handling, MAX_FIRE_PITCH_DEG, Magazine, Sim};
 use gamecraft_world::{Entity, EntityId};
 use serde_json::{Value, json};
 
@@ -79,7 +79,7 @@ pub(crate) fn behaviour_json(sim: &Sim, id: EntityId) -> Value {
     v
 }
 
-/// `{left, shots, ready_in_s, reloading, mode, spare}` of a launcher while playing, null without one.
+/// `{left, shots, ready_in_s, reloading, mode, spare, pouch, loading}` of a launcher while playing, null without one.
 pub(crate) fn magazine_json(sim: &Sim, id: EntityId) -> Value {
     match sim.magazine(id) {
         Some(m) => json!({
@@ -89,6 +89,8 @@ pub(crate) fn magazine_json(sim: &Sim, id: EntityId) -> Value {
             "reloading": m.reloading,
             "mode": m.mode.name(),
             "spare": m.spare,
+            "pouch": m.pouch_rounds(),
+            "loading": m.loading,
         }),
         None => Value::Null,
     }
@@ -102,6 +104,7 @@ pub(crate) fn handling_json(sim: &Sim, id: EntityId) -> Value {
         return Value::Null;
     };
     let (yaw, pitch) = Handling::to_deg(h.offset_mrad());
+    let magazine = sim.magazine(id);
     json!({
         "recoil_mrad": h.recoil_mrad,
         "sway_mrad": h.sway_mrad,
@@ -111,6 +114,9 @@ pub(crate) fn handling_json(sim: &Sim, id: EntityId) -> Value {
         "breath": h.breath.name(),
         "breath_s": h.breath_s,
         "ads": h.ads,
+        "ads_amount": h.ads_amount,
+        "reloading": magazine.is_some_and(|m| m.reloading),
+        "reload_progress": magazine.map_or(0.0, Magazine::reload_progress),
         "stance": h.stance,
         "pulled": h.pulled,
     })
@@ -146,7 +152,7 @@ fn fire_spec() -> CommandSpec {
             )
             .unit("deg"),
         ],
-        "{entity, projectile (its id), magazine: {left, shots, ready_in_s, reloading, mode, spare}}",
+        "{entity, projectile (its id), magazine: {left, shots, ready_in_s, reloading, mode, spare, pouch: [rounds] | null, loading}}",
         json!({"entity": "Scout", "yaw_deg": 0, "pitch_deg": 2}),
     )
     .play()

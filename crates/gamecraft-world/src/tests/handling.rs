@@ -55,6 +55,7 @@ fn default_handling_is_not_written() {
         "cyclic_rpm",
         "reload_empty_s",
         "spare_magazines",
+        "auto_reload",
         "recoil",
         "sway",
         "ads_sway_factor",
@@ -68,6 +69,16 @@ fn default_handling_is_not_written() {
     }
     let held = serde_json::to_string(&crate::HeldModel::of("models/rifle.glb")).unwrap();
     assert!(!held.contains("ads_"), "{held}");
+    assert!(
+        !held.contains("muzzle_m") && !held.contains("zero_m"),
+        "{held}"
+    );
+    for field in ["muzzle_m", "zero_m"] {
+        assert!(
+            crate::held_model_sights_defaults().get(field).is_some(),
+            "{field}"
+        );
+    }
     let sights = crate::held_model_sights_defaults();
     assert_eq!(sights["ads_fov_factor"], 0.85);
 }

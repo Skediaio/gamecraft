@@ -215,6 +215,10 @@ pub(crate) fn is_default_burst(count: &u32) -> bool {
     *count == DEFAULT_BURST_COUNT
 }
 
+pub(crate) fn is_true(v: &bool) -> bool {
+    *v
+}
+
 pub(crate) fn is_default_recoil(recoil: &Recoil) -> bool {
     *recoil == Recoil::default()
 }
@@ -228,7 +232,7 @@ pub(crate) fn is_default_ads_factor(factor: &f64) -> bool {
 }
 
 /// The defaults of the `launcher`'s handling fields as JSON (`modes`, `burst_count`,
-/// `cyclic_rpm`, `reload_empty_s`, `spare_magazines`, `recoil`, `sway`, `ads_sway_factor`,
+/// `cyclic_rpm`, `reload_empty_s`, `spare_magazines`, `auto_reload`, `recoil`, `sway`, `ads_sway_factor`,
 /// `ads_dispersion_factor`): a document leaves them out while they are at their defaults, so a
 /// listing of the component's defaults adds them from here.
 pub fn launcher_handling_defaults() -> serde_json::Value {
@@ -239,6 +243,7 @@ pub fn launcher_handling_defaults() -> serde_json::Value {
         "cyclic_rpm": l.cyclic_rpm,
         "reload_empty_s": l.reload_empty_s,
         "spare_magazines": l.spare_magazines,
+        "auto_reload": l.auto_reload,
         "recoil": l.recoil,
         "sway": l.sway,
         "ads_sway_factor": l.ads_sway_factor,

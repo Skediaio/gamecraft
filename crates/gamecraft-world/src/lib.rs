@@ -48,9 +48,9 @@ pub use environment::{Environment, STANDARD_TEMPERATURE_C, SunPosition};
 pub use error::WorldError;
 pub use handling::{FireMode, Recoil, Sway, launcher_handling_defaults};
 pub use model::{
-    DEFAULT_ADS_FOV_FACTOR, DEFAULT_ADS_TIME_S, DEFAULT_HELD_OFFSET_M, HeldAttachment, HeldModel,
-    MAX_ASSET_PATH_CHARS, MODEL_EXTENSIONS, Model, ModelBounds, ModelBox, ModelCollider, Reticle,
-    held_model_sights_defaults, is_asset_path, is_model_path,
+    AimAxes, DEFAULT_ADS_FOV_FACTOR, DEFAULT_ADS_TIME_S, DEFAULT_HELD_OFFSET_M, DEFAULT_ZERO_M,
+    HeldAttachment, HeldModel, MAX_ASSET_PATH_CHARS, MODEL_EXTENSIONS, Model, ModelBounds,
+    ModelBox, ModelCollider, Reticle, held_model_sights_defaults, is_asset_path, is_model_path,
 };
 pub use prefab::{Prefab, PrefabChild, Spawn, Spawned};
 pub use scenario::{

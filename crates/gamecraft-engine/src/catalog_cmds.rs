@@ -386,6 +386,24 @@ const HELD_MODEL_FIELDS: &[Field] = &[
          0.05]), radius_mrad 0.05 to 20 (default 0.6, drawn at least a few pixels wide), \
          brightness 0 to 1 (default 1). Null draws none.",
     ),
+    field(
+        "muzzle_m",
+        "[right, up, forward] | null",
+        Some("m"),
+        "The barrel's mouth in the held model's own axes, metres before the model's scale from \
+         its origin, each -5 to 5 (forward is glTF's -Z, where the model points: a barrel along \
+         the model's -Z has a positive forward). Set: a character's shot leaves from this \
+         point as the view model carries it (hip or sights, sway and recoil included), along the \
+         barrel zeroed at zero_m. Null shoots from the eye.",
+    ),
+    field(
+        "zero_m",
+        "number | null",
+        Some("m"),
+        "The distance the sights are zeroed at, 1 to 10000: the barrel is tilted once, so a shot \
+         with the model at the sights crosses the line of sight there (still standard air). \
+         Only with muzzle_m. Null zeroes at 100.",
+    ),
 ];
 
 const LAUNCHER_FIELDS: &[Field] = &[
@@ -491,9 +509,19 @@ const LAUNCHER_FIELDS: &[Field] = &[
         "spare_magazines",
         "integer | null",
         None,
-        "Spare magazines carried besides the one in the launcher, 0 to 100000; a reload takes \
-         one (a partly used magazine is discarded) and with none left does nothing; null is \
-         unlimited.",
+        "Full spare magazines carried besides the one in the launcher, 0 to 100000, in a pouch \
+         where each keeps its own rounds: a reload puts the launcher's magazine back (an empty \
+         one is dropped) and loads the fullest of the pouch; with none in it that holds more \
+         rounds than the launcher does, it does nothing. Null is unlimited full ones (the \
+         partly used magazine is lost).",
+    ),
+    field(
+        "auto_reload",
+        "boolean",
+        None,
+        "Whether the launcher reloads by itself when its magazine runs dry (default true). \
+         False: it clicks until a reload is asked for (the input's `reload`); behaviours ask by \
+         themselves.",
     ),
     field(
         "recoil",

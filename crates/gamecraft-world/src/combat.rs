@@ -87,11 +87,19 @@ pub struct Launcher {
     /// Default null.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reload_empty_s: Option<f64>,
-    /// Spare magazines the shooter carries besides the one in the launcher, 0 to 100000. A
-    /// reload takes one (a partly used magazine is discarded); with none left a reload does
-    /// nothing. `null` carries unlimited ones, as a launcher always did. Default null.
+    /// Full spare magazines the shooter carries besides the one in the launcher, 0 to 100000.
+    /// They sit in a pouch, each with its own round count: a reload puts the magazine from the
+    /// launcher back in the pouch (an empty one is dropped) and loads the fullest one of the
+    /// pouch; with no magazine in the pouch that holds more rounds than the launcher's, a
+    /// reload does nothing. `null` carries unlimited full ones (a reload fills the launcher
+    /// and the partly used magazine is lost), as a launcher always did. Default null.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spare_magazines: Option<u32>,
+    /// Whether the launcher reloads by itself when its magazine runs dry. With `false` an
+    /// empty launcher clicks: nothing fires until a reload is asked for (the input's `reload`;
+    /// behaviours ask by themselves). Default true.
+    #[serde(skip_serializing_if = "handling::is_true")]
+    pub auto_reload: bool,
     /// How each shot kicks the shooter's aim. Default no kick.
     #[serde(skip_serializing_if = "handling::is_default_recoil")]
     pub recoil: Recoil,
@@ -126,6 +134,7 @@ impl Default for Launcher {
             cyclic_rpm: None,
             reload_empty_s: None,
             spare_magazines: None,
+            auto_reload: true,
             recoil: Recoil::default(),
             sway: Sway::default(),
             ads_sway_factor: ads_factor,

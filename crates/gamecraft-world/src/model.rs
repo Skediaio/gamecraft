@@ -10,8 +10,8 @@
 
 use crate::error::Ctx;
 use crate::limits::{
-    ADS_FOV_FACTOR_MIN, ADS_TIME_MAX_S, HELD_ATTACHMENTS_MAX, HELD_OFFSET_MAX_M,
-    RETICLE_RADIUS_MAX_MRAD, RETICLE_RADIUS_MIN_MRAD, SCALE_MAX, SCALE_MIN,
+    ADS_FOV_FACTOR_MIN, ADS_TIME_MAX_S, HELD_ATTACHMENTS_MAX, HELD_OFFSET_MAX_M, MUZZLE_MAX_M,
+    RETICLE_RADIUS_MAX_MRAD, RETICLE_RADIUS_MIN_MRAD, SCALE_MAX, SCALE_MIN, ZERO_MAX_M, ZERO_MIN_M,
 };
 use crate::{Entity, WorldError};
 use gamecraft_math::{Portable, deg_to_rad};
@@ -163,6 +163,64 @@ pub struct HeldModel {
     /// infinity shows it. `null` draws none. Default null.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reticle: Option<Reticle>,
+    /// Where the barrel's mouth is, in the held model's own axes `[right, up, forward]`: metres
+    /// before the model's scale, from the model's origin, each -5 to 5. Forward is glTF's -Z
+    /// (the model's -Z axis points where the character aims, so a barrel pointing down the
+    /// model's -Z has a positive forward). When set, a character's shot leaves from this point
+    /// as the view model carries it (hip or sights, with the sway and the recoil), along the
+    /// barrel, instead of from the eye; characters without it (and without a `held_model`) shoot
+    /// from the eye. `null` shoots from the eye. Default null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muzzle_m: Option<[f64; 3]>,
+    /// The distance, metres, 1 to 10000, at which the sights are zeroed: the barrel is tilted
+    /// up (and to the side) relative to the sight line, once for the weapon, so that a shot
+    /// fired with the model at the sights crosses the line of sight there, in still air at the
+    /// standard atmosphere; it only matters with `muzzle_m`. `null` zeroes at 100. Default null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zero_m: Option<f64>,
+}
+
+/// The zeroing distance of a [`HeldModel`] that leaves `zero_m` out, metres.
+pub const DEFAULT_ZERO_M: f64 = 100.0;
+
+/// The axes of an aim in world coordinates: where the model's right (+X), up (+Y) and back
+/// (+Z, opposite its forward) point for an aim of `yaw_deg` (counter-clockwise from north seen
+/// from above) and `pitch_deg` (up from level). The model is turned by yaw about Y, then pitch
+/// about X, as the first-person view model is drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AimAxes {
+    /// The aim's right.
+    pub right: [f64; 3],
+    /// The aim's up.
+    pub up: [f64; 3],
+    /// Opposite the aim's forward.
+    pub back: [f64; 3],
+}
+
+impl AimAxes {
+    /// The axes of an aim, with portable sines and cosines.
+    pub fn of(yaw_deg: f64, pitch_deg: f64) -> AimAxes {
+        let (sy, cy) = deg_to_rad(yaw_deg).psin_cos();
+        let (sp, cp) = deg_to_rad(pitch_deg).psin_cos();
+        AimAxes {
+            right: [cy, 0.0, -sy],
+            up: [sy * sp, cp, cy * sp],
+            back: [sy * cp, -sp, cy * cp],
+        }
+    }
+
+    /// The world vector of `local` = (right, up, back) in these axes.
+    pub fn vector(&self, local: [f64; 3]) -> [f64; 3] {
+        let [r, u, b] = local;
+        let [rx, ry, rz] = self.right;
+        let [ux, uy, uz] = self.up;
+        let [bx, by, bz] = self.back;
+        [
+            r * rx + u * ux + b * bx,
+            r * ry + u * uy + b * by,
+            r * rz + u * uz + b * bz,
+        ]
+    }
 }
 
 /// A model drawn rigidly with a [`HeldModel`]: an optic, a light, a grip.
@@ -226,7 +284,7 @@ fn is_default_ads_time_s(v: &f64) -> bool {
 }
 
 /// The defaults of the `held_model`'s sights fields as JSON (`ads_offset_m`,
-/// `ads_fov_factor`, `ads_time_s`): a document leaves them out while they are at their
+/// `ads_fov_factor`, `ads_time_s`, `attachments`, `reticle`, `muzzle_m`, `zero_m`): a document leaves them out while they are at their
 /// defaults, so a listing of the component's defaults adds them from here.
 pub fn held_model_sights_defaults() -> serde_json::Value {
     serde_json::json!({
@@ -235,6 +293,8 @@ pub fn held_model_sights_defaults() -> serde_json::Value {
         "ads_time_s": DEFAULT_ADS_TIME_S,
         "attachments": [],
         "reticle": null,
+        "muzzle_m": null,
+        "zero_m": null,
     })
 }
 
@@ -250,7 +310,41 @@ impl HeldModel {
             ads_time_s: DEFAULT_ADS_TIME_S,
             attachments: Vec::new(),
             reticle: None,
+            muzzle_m: None,
+            zero_m: None,
         }
+    }
+
+    /// The zeroing distance, metres: `zero_m`, else [`DEFAULT_ZERO_M`].
+    pub fn zero_distance_m(&self) -> f64 {
+        self.zero_m.unwrap_or(DEFAULT_ZERO_M)
+    }
+
+    /// The barrel's mouth `ads` of the way to the sights, from the eye, in the aim's axes
+    /// `[right, up, back]` (metres): the model's offset ([`HeldModel::offset_at`]) plus the
+    /// muzzle point times the scale. `None` without `muzzle_m` or when a number is not finite.
+    pub fn muzzle_local(&self, ads: f64) -> Option<[f64; 3]> {
+        let [mr, mu, mf] = self.muzzle_m?;
+        let [r, u, f] = self.offset_at(ads);
+        let s = self.scale;
+        let local = [r + mr * s, u + mu * s, -f - mf * s];
+        local.iter().all(|v| v.is_finite()).then_some(local)
+    }
+
+    /// The barrel's mouth in the world for an eye at `eye` and an aim of `yaw_deg` and
+    /// `pitch_deg` (recoil and sway included), `ads` of the way to the sights: exactly where
+    /// the view model carries it. `None` without `muzzle_m` or when a number is not finite.
+    pub fn muzzle_point(
+        &self,
+        eye: [f64; 3],
+        yaw_deg: f64,
+        pitch_deg: f64,
+        ads: f64,
+    ) -> Option<[f64; 3]> {
+        let local = self.muzzle_local(ads)?;
+        let v = AimAxes::of(yaw_deg, pitch_deg).vector(local);
+        let out = [eye[0] + v[0], eye[1] + v[1], eye[2] + v[2]];
+        out.iter().all(|c| c.is_finite()).then_some(out)
     }
 
     /// The assets it draws: its own, then its attachments'.
@@ -380,6 +474,22 @@ impl HeldModel {
                 " mrad",
             )?;
             ctx.range("held_model.reticle.brightness", r.brightness, 0.0, 1.0, "")?;
+        }
+        if let Some(muzzle) = self.muzzle_m {
+            for (axis, v) in ["right", "up", "forward"].iter().zip(muzzle) {
+                let name = format!("held_model.muzzle_m ({axis})");
+                ctx.range(name.clone(), v, -MUZZLE_MAX_M, MUZZLE_MAX_M, " metres")?;
+                ctx.range(
+                    format!("{name} times held_model.scale"),
+                    v * self.scale,
+                    -MUZZLE_MAX_M,
+                    MUZZLE_MAX_M,
+                    " metres",
+                )?;
+            }
+        }
+        if let Some(zero) = self.zero_m {
+            ctx.range("held_model.zero_m", zero, ZERO_MIN_M, ZERO_MAX_M, " metres")?;
         }
         Ok(())
     }

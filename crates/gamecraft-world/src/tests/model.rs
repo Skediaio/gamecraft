@@ -339,3 +339,76 @@ fn bad_attachments_and_reticles_name_the_field() {
     let e = bad(|h| h.reticle.as_mut().unwrap().color_srgb = [1.0, -0.1, 0.0]).unwrap();
     assert!(e.contains("held_model.reticle.color_srgb (green)"), "{e}");
 }
+
+#[test]
+fn a_muzzle_is_read_back_and_bad_ones_name_the_field() {
+    let c: Component = serde_json::from_str(
+        r#"{"type": "held_model", "asset": "models/rifle.glb",
+            "muzzle_m": [0, 0.02, 0.9], "zero_m": 50}"#,
+    )
+    .unwrap();
+    let Component::HeldModel(h) = c else { panic!() };
+    assert_eq!((h.muzzle_m, h.zero_m), (Some([0.0, 0.02, 0.9]), Some(50.0)));
+    assert_eq!(h.zero_distance_m(), 50.0);
+    assert_eq!(HeldModel::of("models/rifle.glb").zero_distance_m(), 100.0);
+    let back: HeldModel = serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap();
+    assert_eq!(back, h);
+    let bad = |change: fn(&mut HeldModel)| {
+        let mut h = HeldModel::of("models/rifle.glb");
+        change(&mut h);
+        let mut w = World::new("h", 1);
+        w.add_entity(EntityDraft {
+            components: vec![Component::HeldModel(h)],
+            ..EntityDraft::default()
+        })
+        .unwrap_err()
+        .to_string()
+    };
+    let e = bad(|h| h.muzzle_m = Some([0.0, 0.0, 9.0]));
+    assert!(e.contains("held_model.muzzle_m (forward)"), "{e}");
+    let e = bad(|h| h.muzzle_m = Some([0.0, f64::NAN, 1.0]));
+    assert!(e.contains("held_model.muzzle_m (up)"), "{e}");
+    let e = bad(|h| {
+        h.muzzle_m = Some([0.0, 0.0, 1.0]);
+        h.scale = 100.0;
+    });
+    assert!(
+        e.contains("held_model.muzzle_m (forward) times held_model.scale"),
+        "{e}"
+    );
+    let e = bad(|h| h.zero_m = Some(0.0));
+    assert!(e.contains("held_model.zero_m"), "{e}");
+    let e = bad(|h| h.zero_m = Some(f64::INFINITY));
+    assert!(e.contains("held_model.zero_m"), "{e}");
+}
+
+#[test]
+fn the_muzzle_follows_the_model_in_closed_form() {
+    let h = HeldModel {
+        offset_m: [0.1, -0.2, 0.3],
+        ads_offset_m: Some([0.0, -0.05, 0.25]),
+        scale: 2.0,
+        muzzle_m: Some([0.0, 0.01, 0.4]),
+        ..HeldModel::of("models/rifle.glb")
+    };
+    let eye = [10.0, 1.6, -5.0];
+    let near = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-12);
+    // Facing north, level: right is +x, up +y, forward -z. Hip: the offset plus the muzzle
+    // point times the scale, forward 0.3 + 0.8.
+    let hip = h.muzzle_point(eye, 0.0, 0.0, 0.0).unwrap();
+    assert!(near(hip, [10.1, 1.6 - 0.2 + 0.02, -5.0 - 1.1]), "{hip:?}");
+    let sights = h.muzzle_point(eye, 0.0, 0.0, 1.0).unwrap();
+    assert!(
+        near(sights, [10.0, 1.6 - 0.05 + 0.02, -5.0 - 1.05]),
+        "{sights:?}"
+    );
+    // Turned to face west (yaw 90): forward is -x, right is -z.
+    let west = h.muzzle_point(eye, 90.0, 0.0, 0.0).unwrap();
+    assert!(near(west, [10.0 - 1.1, 1.6 - 0.18, -5.0 - 0.1]), "{west:?}");
+    // Pitched 90 up: forward is +y, up is back (+z).
+    let up = h.muzzle_point(eye, 0.0, 90.0, 0.0).unwrap();
+    assert!(near(up, [10.1, 1.6 + 1.1, -5.0 - 0.18]), "{up:?}");
+    let plain = HeldModel::of("models/rifle.glb");
+    assert_eq!(plain.muzzle_point(eye, 0.0, 0.0, 0.0), None);
+    assert_eq!(h.muzzle_point([f64::NAN, 0.0, 0.0], 0.0, 0.0, 0.0), None);
+}

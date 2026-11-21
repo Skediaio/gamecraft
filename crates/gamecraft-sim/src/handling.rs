@@ -6,6 +6,10 @@
 //! - **Selector and reload.** The input's `switch_mode` going from false to true moves the
 //!   selector to the next of the launcher's `modes`; `reload` going true starts a reload of
 //!   `reload_s` when the magazine is not full and not reloading already.
+//! - **Sights.** `ads` held lifts the weapon to the sights, and a reload takes it off them: while
+//!   the launcher reloads, `ads` counts as not held (the sway and the dispersion are the hip's),
+//!   and when the reload ends a still held `ads` brings it up again. How far up it is
+//!   (`ads_amount`, 0 to 1) moves by `DT / ads_time_s` a tick.
 //! - **Recoil.** The kick left of earlier shots decays: it is multiplied by
 //!   `exp(-DT * RECOVERY_TIME_CONSTANTS / recovery_s)` (0 when `recovery_s` is 0), so after
 //!   `recovery_s` about 5 % of it is left.
@@ -120,8 +124,13 @@ pub struct Handling {
     pub breath: Breath,
     /// Seconds the breath has been held (holding), or seconds left of recovering.
     pub breath_s: f64,
-    /// Aiming down the sights.
+    /// Aiming down the sights: the input holds `ads` and the launcher is not being reloaded
+    /// (a reload takes the weapon off the sights, whatever the input holds).
     pub ads: bool,
+    /// How far up to the sights the weapon is, 0 (hip) to 1: it follows `ads` over the held
+    /// model's `ads_time_s` (the default's without one), so a reload lowers it and the end of
+    /// the reload raises it again while `ads` is still held.
+    pub ads_amount: f64,
     /// The stance the sway was taken for.
     pub stance: Stance,
 }
@@ -138,6 +147,10 @@ pub(crate) struct Moment<'a> {
     pub(crate) time_s: f64,
     /// The phases of its sway ([`sway_phases`]).
     pub(crate) phases: &'a [f64; 6],
+    /// Its launcher is being reloaded.
+    pub(crate) reloading: bool,
+    /// Seconds the weapon takes to come up to the sights (and back), 0 for at once.
+    pub(crate) ads_time_s: f64,
 }
 
 /// The six phases of a character's sway, radians: three for the left drift, three for the up.
@@ -201,6 +214,15 @@ impl Handling {
         )
     }
 
+    /// Whether the handling is at rest apart from how far up to the sights it is (a value the
+    /// state hash only holds for a weapon whose muzzle follows it).
+    pub(crate) fn at_rest_but_sights(&self) -> bool {
+        Handling {
+            ads_amount: 0.0,
+            ..*self
+        } == Handling::default()
+    }
+
     /// Counts a shot of the current pull: in `semi` and `burst`, which fire a number of shots
     /// per pull (`auto` does not count them).
     pub(crate) fn count_shot(&mut self, mode: FireMode) {
@@ -227,7 +249,23 @@ impl Handling {
         if !input.fire {
             self.pulled = 0;
         }
-        self.ads = input.ads;
+        self.ads = input.ads && !now.reloading;
+        let step = if now.ads_time_s > 0.0 {
+            DT / now.ads_time_s
+        } else {
+            1.0
+        };
+        let target = if self.ads { 1.0 } else { 0.0 };
+        let amount = if target > self.ads_amount {
+            (self.ads_amount + step).min(target)
+        } else {
+            (self.ads_amount - step).max(target)
+        };
+        self.ads_amount = if amount.is_finite() {
+            amount.clamp(0.0, 1.0)
+        } else {
+            target
+        };
         self.stance = now.stance;
         let sway = &launcher.sway;
         let moving = now.speed_mps.is_finite() && now.speed_mps > MOVING_SPEED_MPS;

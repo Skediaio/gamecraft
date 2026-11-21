@@ -6,8 +6,11 @@
 //!   mode's interval after the last shot (`rate_s`, or the cyclic rate's in `auto` and
 //!   `burst`), and after the last shot of a magazine `reload_empty_s` (else `reload_s`; or the
 //!   interval when longer) before a full magazine; a reload asked for (the input's `reload`)
-//!   takes `reload_s`. The muzzle is at a character's eyes, or `muzzle_height_m` above any
-//!   other entity's position. The direction is the yaw and pitch asked for (plus a character's
+//!   takes `reload_s`; the magazines of a counted pouch keep their rounds (see [`Magazine`]) and
+//!   a launcher with `auto_reload` off waits for that request. The muzzle is at a character's
+//!   eyes, or `muzzle_height_m` above any other entity's position; a character whose
+//!   `held_model` has a `muzzle_m` shoots from the barrel's mouth as the view model carries it,
+//!   along a barrel zeroed at `zero_m` (`held_shot`). The direction is the yaw and pitch asked for (plus a character's
 //!   recoil and sway), turned by the dispersion: a uniform draw in a cone of `dispersion_mrad`
 //!   (times `ads_dispersion_factor` while aiming down the sights) from the world's seeded
 //!   stream forked by [`LABEL_DISPERSION`], the launcher's entity id and its shot number. The
@@ -26,11 +29,16 @@
 //!   `health` of the entity hit, `energy_j` being `mass * speed^2 / 2` at the hit; the hit that
 //!   brings it to 0 produces a `down` event. A downed character takes no input and stops.
 
-use gamecraft_math::{Portable, Rng, deg_to_rad, yaw_forward};
+use std::collections::BTreeMap;
+
+use gamecraft_math::{Portable, Rng, deg_to_rad, rad_to_deg, yaw_forward};
 use gamecraft_world::limits::MAX_COORDINATE_M;
-use gamecraft_world::{Entity, EntityId, Environment, FireMode, HeightField, Launcher, World};
+use gamecraft_world::{
+    AimAxes, Entity, EntityId, Environment, FireMode, HeightField, HeldModel, Launcher, World,
+};
 use serde::Serialize;
 
+use crate::aim;
 use crate::ballistics::{Flight, SUBSTEP_S, advance, air_at};
 use crate::ray::{self, RayHit};
 use crate::trunk::Trunks;
@@ -72,7 +80,15 @@ pub struct Projectile {
 }
 
 /// The state of one launcher that is not in the document.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+///
+/// With `spare_magazines` the shooter carries a pouch of magazines, each with its own round
+/// count (`pouch`: round count to number of magazines; magazines of equal counts are alike, so
+/// that is all there is to remember). A reload puts the magazine of the launcher back in the
+/// pouch (an empty one is dropped) and fits the fullest one of the pouch, which takes
+/// `reload_s`; the launcher holds no rounds meanwhile (`left` is 0, `loading` are the rounds
+/// being fitted). Without `spare_magazines` the pouch is unlimited and full: a reload fills the
+/// launcher after its time and the partly used magazine is lost.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Magazine {
     /// Shots left before a reload.
     pub left: u32,
@@ -84,45 +100,163 @@ pub struct Magazine {
     pub reloading: bool,
     /// Where the selector is: one of the launcher's `modes`.
     pub mode: FireMode,
-    /// Spare magazines left; `None` is unlimited. A reload uses one.
+    /// Magazines in the pouch; `None` is unlimited. Always the pouch's count.
     pub spare: Option<u32>,
+    /// The pouch: round count to the number of magazines holding that many; `None` is
+    /// unlimited full magazines. Never holds an empty magazine.
+    pub pouch: Option<BTreeMap<u32, u32>>,
+    /// Rounds of the magazine being fitted while a reload with a pouch runs, else 0.
+    pub loading: u32,
+    /// Seconds the running reload takes in all (0 while not reloading).
+    pub reload_total_s: f64,
 }
 
 impl Magazine {
-    /// A full magazine, ready, the selector at the launcher's first mode.
+    /// A full magazine, ready, the selector at the launcher's first mode, a full pouch.
     pub(crate) fn full(launcher: &Launcher) -> Magazine {
-        Magazine {
+        let pouch = launcher.spare_magazines.map(|n| {
+            let mut p = BTreeMap::new();
+            if n > 0 {
+                p.insert(launcher.magazine, n);
+            }
+            p
+        });
+        let mut m = Magazine {
             left: launcher.magazine,
             shots: 0,
             ready_in_s: 0.0,
             reloading: false,
             mode: launcher.first_mode(),
-            spare: launcher.spare_magazines,
-        }
+            spare: None,
+            pouch,
+            loading: 0,
+            reload_total_s: 0.0,
+        };
+        m.sync();
+        m
     }
 
-    /// Takes a spare magazine for a reload: false when there is none left.
-    fn take_spare(&mut self) -> bool {
-        match &mut self.spare {
-            None => true,
-            Some(0) => false,
-            Some(n) => {
-                *n = n.saturating_sub(1);
-                true
+    /// Keeps `spare` the count of the pouch.
+    fn sync(&mut self) {
+        self.spare = self
+            .pouch
+            .as_ref()
+            .map(|p| p.values().fold(0u32, |a, n| a.saturating_add(*n)));
+    }
+
+    /// Takes a changed launcher into account: no more rounds than its magazine holds, no more
+    /// magazines in the pouch than `spare_magazines` (the emptiest go first), and a pouch that
+    /// appears or goes.
+    pub(crate) fn fit(&mut self, launcher: &Launcher) {
+        let cap = launcher.magazine;
+        self.left = self.left.min(cap);
+        self.loading = self.loading.min(cap);
+        match (launcher.spare_magazines, self.pouch.take()) {
+            (None, _) => {}
+            (Some(_), None) => self.pouch = Self::full(launcher).pouch,
+            (Some(n), Some(old)) => {
+                let mut merged: BTreeMap<u32, u32> = BTreeMap::new();
+                for (rounds, count) in old {
+                    let slot = merged.entry(rounds.min(cap)).or_insert(0);
+                    *slot = slot.saturating_add(count);
+                }
+                let mut over = merged
+                    .values()
+                    .fold(0u32, |a, c| a.saturating_add(*c))
+                    .saturating_sub(n);
+                while over > 0 {
+                    let Some((&rounds, &count)) = merged.first_key_value() else {
+                        break;
+                    };
+                    let drop = count.min(over);
+                    over -= drop;
+                    if drop == count {
+                        merged.remove(&rounds);
+                    } else {
+                        merged.insert(rounds, count - drop);
+                    }
+                }
+                self.pouch = Some(merged);
             }
         }
+        self.sync();
     }
 
-    /// Starts a reload of `reload_s` (after any wait still running) unless the magazine is
-    /// full or reloading already, or no spare magazine is left (the partly used one is
-    /// discarded for the next). Whether it started.
-    pub(crate) fn reload(&mut self, launcher: &Launcher) -> bool {
-        if self.reloading || self.left >= launcher.magazine || !self.take_spare() {
+    /// The rounds of the fullest magazine of the pouch (`None` for an unlimited or an empty
+    /// one).
+    fn fullest(&self) -> Option<u32> {
+        self.pouch
+            .as_ref()?
+            .last_key_value()
+            .map(|(rounds, _)| *rounds)
+            .filter(|rounds| *rounds > 0)
+    }
+
+    /// The magazines of the pouch, fullest first (`None` for an unlimited pouch).
+    pub fn pouch_rounds(&self) -> Option<Vec<u32>> {
+        let pouch = self.pouch.as_ref()?;
+        let mut out = Vec::new();
+        for (rounds, count) in pouch.iter().rev() {
+            for _ in 0..*count {
+                out.push(*rounds);
+            }
+        }
+        Some(out)
+    }
+
+    /// Whether a reload may start: not reloading already, the launcher not full, and with a
+    /// counted pouch a magazine in it that holds more rounds than the launcher does.
+    fn can_reload(&self, launcher: &Launcher) -> bool {
+        if self.reloading || self.left >= launcher.magazine {
             return false;
         }
+        match &self.pouch {
+            None => true,
+            Some(_) => self.fullest().is_some_and(|rounds| rounds > self.left),
+        }
+    }
+
+    /// Starts a reload of `seconds` (after any wait still running); the caller has checked
+    /// [`Magazine::can_reload`]. With a pouch the launcher's magazine goes back in it (an empty
+    /// one is dropped) and the fullest one is taken out to be fitted.
+    fn begin_reload(&mut self, seconds: f64) {
+        let fitted = self.fullest();
+        if let (Some(pouch), Some(rounds)) = (&mut self.pouch, fitted) {
+            if let Some(count) = pouch.get_mut(&rounds) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    pouch.remove(&rounds);
+                }
+            }
+            if self.left > 0 {
+                let slot = pouch.entry(self.left).or_insert(0);
+                *slot = slot.saturating_add(1);
+            }
+            self.loading = rounds;
+            self.left = 0;
+            self.sync();
+        }
         self.reloading = true;
-        self.ready_in_s = self.ready_in_s.max(launcher.reload_s);
+        self.ready_in_s = self.ready_in_s.max(seconds);
+        self.reload_total_s = self.ready_in_s;
+    }
+
+    /// Starts a reload of `reload_s` unless the launcher is full or reloading already, or its
+    /// pouch has no better magazine. Whether it started.
+    pub(crate) fn reload(&mut self, launcher: &Launcher) -> bool {
+        if !self.can_reload(launcher) {
+            return false;
+        }
+        self.begin_reload(launcher.reload_s);
         true
+    }
+
+    /// How far the running reload is, 0 to 1 (0 while not reloading).
+    pub fn reload_progress(&self) -> f64 {
+        if !self.reloading || self.reload_total_s.is_nan() || self.reload_total_s <= 0.0 {
+            return 0.0;
+        }
+        (1.0 - self.ready_in_s / self.reload_total_s).clamp(0.0, 1.0)
     }
 
     /// Whether it can fire now.
@@ -134,22 +268,27 @@ impl Magazine {
     pub(crate) fn wait(&mut self, dt: f64, launcher: &Launcher) {
         self.ready_in_s = (self.ready_in_s - dt).max(0.0);
         if self.reloading && self.ready_in_s <= READY_EPSILON_S {
-            self.left = launcher.magazine;
+            self.left = if self.pouch.is_some() {
+                self.loading.min(launcher.magazine)
+            } else {
+                launcher.magazine
+            };
+            self.loading = 0;
             self.reloading = false;
+            self.reload_total_s = 0.0;
             self.ready_in_s = 0.0;
         }
     }
 
-    /// Counts a shot and starts the wait for the next one.
+    /// Counts a shot and starts the wait for the next one; an emptied magazine starts a reload
+    /// by itself when the launcher's `auto_reload` is on and a magazine is to be had.
     fn shoot(&mut self, launcher: &Launcher) {
         self.left = self.left.saturating_sub(1);
         self.shots = self.shots.saturating_add(1);
         let interval = launcher.interval_s(self.mode);
-        if self.left == 0 && self.take_spare() {
-            self.reloading = true;
-            self.ready_in_s = launcher.empty_reload_s().max(interval);
-        } else {
-            self.ready_in_s = interval;
+        self.ready_in_s = interval;
+        if self.left == 0 && launcher.auto_reload && self.can_reload(launcher) {
+            self.begin_reload(launcher.empty_reload_s().max(interval));
         }
     }
 }
@@ -233,6 +372,52 @@ pub(crate) struct Aim {
     pub(crate) pitch_deg: f64,
     /// Spread, milliradians.
     pub(crate) dispersion_mrad: f64,
+    /// How far up to the sights the held model is, 0 (hip) to 1.
+    pub(crate) ads_amount: f64,
+    /// The shooter's own velocity, metres per second; a shot from a held model's muzzle
+    /// carries it (the muzzle velocity is the launcher's, relative to the shooter).
+    pub(crate) shooter_velocity_mps: [f64; 3],
+}
+
+/// The eye height of the zeroing's air, metres.
+const ZERO_EYE_Y_M: f64 = 1.6;
+/// How close the zeroed barrel crosses the line of sight at the zeroing distance, metres.
+const ZERO_TOLERANCE_M: f64 = 1e-3;
+
+/// The direction of the barrel of `held` relative to its aim, as (right, up, back) in the aim's
+/// axes, when the weapon is zeroed: the sights (the model at `ads_offset_m`, else `offset_m`)
+/// are on the line of sight, and the barrel, which sits below and beside it, is tilted so that
+/// a shot crosses the line of sight at `zero_m` in still standard air (the firing solution of
+/// [`crate::aim`], to a millimetre). Once per weapon: it does not move with the sights' blend.
+/// `None` without `muzzle_m`.
+fn zeroed_bore(held: &HeldModel, launcher: &Launcher) -> Option<[f64; 3]> {
+    held.muzzle_m?;
+    let [right, up, back] = held.muzzle_local(1.0)?;
+    let distance = held.zero_distance_m();
+    let mut still = World::new("zero", 0);
+    still.environment.wind_speed_mps = 0.0;
+    let eye = [0.0, ZERO_EYE_Y_M, 0.0];
+    let from = [eye[0] + right, eye[1] + up, eye[2] + back];
+    let target = [eye[0], eye[1], eye[2] - distance];
+    let solution = aim::solve_within(&still, None, from, launcher, target, ZERO_TOLERANCE_M);
+    let d = aim_direction(solution.yaw_deg, solution.pitch_deg);
+    d.iter().all(|v| v.is_finite()).then_some(d)
+}
+
+/// Where a character's shot leaves and along what (yaw and pitch, degrees) when it holds a
+/// model with a `muzzle_m`: from the barrel's mouth as the view model carries it at `aim`'s
+/// sights blend, along the zeroed barrel. `None` for everyone else (they shoot from the eye).
+fn held_shot(shooter: &Entity, launcher: &Launcher, aim: &Aim) -> Option<([f64; 3], f64, f64)> {
+    let held = shooter.held_model()?;
+    let character = shooter.character()?;
+    let [x, y, z] = shooter.position;
+    let eye = [x, y + character.eye_height_m, z];
+    let from = held.muzzle_point(eye, aim.yaw_deg, aim.pitch_deg, aim.ads_amount)?;
+    let bore = zeroed_bore(held, launcher)?;
+    let [dx, dy, dz] = AimAxes::of(aim.yaw_deg, aim.pitch_deg).vector(bore);
+    let yaw = rad_to_deg((-dx).patan2(-dz));
+    let pitch = rad_to_deg(dy.patan2((dx * dx + dz * dz).sqrt()));
+    (yaw.is_finite() && pitch.is_finite()).then_some((from, yaw, pitch))
 }
 
 /// Fires `launcher` of `shooter` along `aim` if it is ready and not on `safe`: the projectile
@@ -249,17 +434,26 @@ pub(crate) fn try_fire(
     if !magazine.ready() || magazine.mode == FireMode::Safe {
         return None;
     }
-    let from = muzzle(shooter, launcher);
+    let held = held_shot(shooter, launcher, aim);
+    let (from, yaw_deg, pitch_deg) =
+        held.unwrap_or_else(|| (muzzle(shooter, launcher), aim.yaw_deg, aim.pitch_deg));
     let shot = Shot {
         shooter: shooter.id,
         from,
-        yaw_deg: aim.yaw_deg,
-        pitch_deg: aim.pitch_deg,
+        yaw_deg,
+        pitch_deg,
         number: magazine.shots,
         id,
         dispersion_mrad: aim.dispersion_mrad,
     };
-    let projectile = launch(world, launcher, &shot);
+    let mut projectile = launch(world, launcher, &shot);
+    if held.is_some() {
+        for (v, own) in projectile.velocity.iter_mut().zip(aim.shooter_velocity_mps) {
+            if own.is_finite() {
+                *v += own;
+            }
+        }
+    }
     magazine.shoot(launcher);
     Some((
         projectile,

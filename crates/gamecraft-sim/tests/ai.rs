@@ -618,3 +618,51 @@ fn a_changed_alertness_while_playing_takes_effect_and_holds() {
         "never calmer than its behaviour's alertness"
     );
 }
+
+#[test]
+fn a_soldier_whose_launcher_does_not_reload_by_itself_reloads_when_dry() {
+    let run = |auto_reload: bool| {
+        let mut w = field();
+        let red = soldier(
+            &mut w,
+            "red",
+            [0.0, 0.0, 0.0],
+            0.0,
+            vec![
+                Component::Launcher(Launcher {
+                    magazine: 3,
+                    reload_s: 0.5,
+                    auto_reload,
+                    spare_magazines: Some(5),
+                    ..rifle()
+                }),
+                Component::Behaviour(Behaviour {
+                    team: "red".into(),
+                    reaction_s: 0.1,
+                    ..Behaviour::default()
+                }),
+            ],
+        );
+        // A target that takes a lot of hits keeps it shooting for a while.
+        let target = soldier(&mut w, "blue", [0.0, 0.0, -60.0], 0.0, vec![blue()]);
+        w.entity_mut(target)
+            .unwrap()
+            .set_component(Component::Health(Health {
+                max: 1e9,
+                current: 1e9,
+                armor: 0.0,
+            }));
+        let mut sim = Sim::new(w).unwrap();
+        sim.step(60 * 20);
+        sim.magazine(red).unwrap().shots
+    };
+    // Reloading by itself or by asking as a player would: the same number of shots to
+    // within the time the request takes, far more than one magazine.
+    let by_itself = run(true);
+    let asked = run(false);
+    assert!(by_itself > 6, "{by_itself}");
+    assert!(
+        asked > 6,
+        "the soldier is not stuck on an empty magazine: {asked}"
+    );
+}

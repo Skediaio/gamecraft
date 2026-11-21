@@ -200,6 +200,19 @@ pub fn solve(
     launcher: &Launcher,
     target: [f64; 3],
 ) -> AimSolution {
+    solve_within(world, heights, from, launcher, target, AIM_TOLERANCE_M)
+}
+
+/// [`solve`] that stops once a trial passes within `tolerance_m` of the target (the zeroing of
+/// a weapon is finer than a shot at a person).
+pub(crate) fn solve_within(
+    world: &World,
+    heights: Option<&HeightField>,
+    from: [f64; 3],
+    launcher: &Launcher,
+    target: [f64; 3],
+    tolerance_m: f64,
+) -> AimSolution {
     let (dx, dz) = (target[0] - from[0], target[2] - from[2]);
     let range = (dx * dx + dz * dz).sqrt();
     let finite = from.iter().chain(&target).all(|c| c.is_finite());
@@ -258,7 +271,7 @@ pub fn solve(
                         miss,
                     });
                 }
-                if miss <= AIM_TOLERANCE_M {
+                if miss <= tolerance_m {
                     break;
                 }
                 if dy > 0.0 {
@@ -300,6 +313,6 @@ pub fn solve(
         drop_m: drop,
         drift_m: drift,
         miss_m: Some(b.miss),
-        reachable: b.miss <= AIM_TOLERANCE_M,
+        reachable: b.miss <= tolerance_m,
     }
 }

@@ -165,13 +165,13 @@ fn a_reload_takes_reload_s_and_one_from_empty_reload_empty_s() {
     let mut sim = Sim::new(w).unwrap();
     // Five shots at ticks 1, 7, 13, 19, 25; the magazine is then empty and reloads for 2 s.
     hold(&mut sim, id, trigger(true), 25);
-    let m = *sim.magazine(id).unwrap();
+    let m = sim.magazine(id).unwrap().clone();
     assert_eq!((m.shots, m.left, m.reloading), (5, 0, true));
     assert!((m.ready_in_s - 2.0).abs() < 1e-9, "{m:?}");
     hold(&mut sim, id, trigger(true), 119);
     assert_eq!(shots(&sim, id), 5, "still reloading after 119 ticks");
     hold(&mut sim, id, trigger(true), 1);
-    let m = *sim.magazine(id).unwrap();
+    let m = sim.magazine(id).unwrap().clone();
     assert_eq!((m.shots, m.left, m.reloading), (6, 4, false), "{m:?}");
     // Asked for with rounds left: reload_s, once per press.
     let reload = Input {
@@ -179,12 +179,12 @@ fn a_reload_takes_reload_s_and_one_from_empty_reload_empty_s() {
         ..Input::default()
     };
     hold(&mut sim, id, reload, 1);
-    let m = *sim.magazine(id).unwrap();
+    let m = sim.magazine(id).unwrap().clone();
     assert!(m.reloading && (m.ready_in_s - 1.0).abs() < 1e-9, "{m:?}");
     hold(&mut sim, id, reload, 59);
     assert_eq!(sim.magazine(id).unwrap().left, 4, "held, it reloads once");
     hold(&mut sim, id, reload, 1);
-    let m = *sim.magazine(id).unwrap();
+    let m = sim.magazine(id).unwrap().clone();
     assert_eq!((m.left, m.reloading), (5, false), "{m:?}");
     // Full: a reload asked for changes nothing.
     hold(&mut sim, id, Input::default(), 1);
@@ -462,13 +462,14 @@ fn a_reload_takes_a_spare_magazine_and_with_none_left_does_nothing() {
     assert_eq!(sim.magazine(id).unwrap().spare, Some(2));
     // Five shots empty the magazine; the reload that follows uses the first spare one.
     hold(&mut sim, id, trigger(true), 25);
-    let m = *sim.magazine(id).unwrap();
+    let m = sim.magazine(id).unwrap().clone();
     assert_eq!((m.left, m.reloading, m.spare), (0, true, Some(1)), "{m:?}");
     // 60 ticks of reload (the trigger is let go), then a full magazine.
     hold(&mut sim, id, Input::default(), 60);
-    let m = *sim.magazine(id).unwrap();
+    let m = sim.magazine(id).unwrap().clone();
     assert_eq!((m.left, m.reloading, m.spare), (5, false, Some(1)), "{m:?}");
-    // A partly used magazine is reloaded too, and discarded: one spare for it.
+    // A partly used magazine goes back in the pouch, and the fullest one is loaded: the
+    // pouch keeps the four rounds, the spare count stays.
     hold(&mut sim, id, trigger(true), 1);
     hold(&mut sim, id, Input::default(), 1);
     let reload = Input {
@@ -476,16 +477,29 @@ fn a_reload_takes_a_spare_magazine_and_with_none_left_does_nothing() {
         ..Input::default()
     };
     hold(&mut sim, id, reload, 1);
-    assert_eq!(sim.magazine(id).unwrap().spare, Some(0));
+    let m = sim.magazine(id).unwrap().clone();
+    assert_eq!(m.pouch_rounds(), Some(vec![4]), "{m:?}");
+    assert_eq!((m.left, m.loading, m.spare), (0, 5, Some(1)), "{m:?}");
     hold(&mut sim, id, Input::default(), 61);
-    assert_eq!(sim.magazine(id).unwrap().left, 5);
-    // Out of spares: firing it dry leaves it empty and a reload does nothing.
+    let m = sim.magazine(id).unwrap().clone();
+    assert_eq!(
+        (m.left, m.reloading, m.pouch_rounds()),
+        (5, false, Some(vec![4]))
+    );
+    // Fired dry, the reload that follows takes the four-round magazine: the pouch is empty.
     hold(&mut sim, id, trigger(true), 25);
-    let m = *sim.magazine(id).unwrap();
+    let m = sim.magazine(id).unwrap().clone();
+    assert_eq!((m.left, m.reloading, m.spare), (0, true, Some(0)), "{m:?}");
+    assert_eq!((m.loading, m.pouch_rounds()), (4, Some(vec![])), "{m:?}");
+    hold(&mut sim, id, Input::default(), 61);
+    assert_eq!(sim.magazine(id).unwrap().left, 4);
+    // Out of magazines: firing it dry leaves it empty and a reload does nothing.
+    hold(&mut sim, id, trigger(true), 25);
+    let m = sim.magazine(id).unwrap().clone();
     assert_eq!((m.left, m.reloading, m.spare), (0, false, Some(0)), "{m:?}");
     hold(&mut sim, id, Input::default(), 1);
     hold(&mut sim, id, reload, 120);
-    let m = *sim.magazine(id).unwrap();
+    let m = sim.magazine(id).unwrap().clone();
     assert_eq!((m.left, m.reloading, m.spare), (0, false, Some(0)), "{m:?}");
     let before = shots(&sim, id);
     hold(&mut sim, id, trigger(true), 60);

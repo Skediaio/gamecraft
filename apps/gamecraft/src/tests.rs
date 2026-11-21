@@ -1139,12 +1139,12 @@ fn the_ammunition_shows_after_a_shot_a_reload_or_a_check_and_hides_after_three_s
     assert!(!game.hud().is_empty(), "2.5 s after the shot");
     frames(&mut game, 60);
     assert!(game.hud().is_empty());
-    // A reload shows it, with the reload and one spare magazine less.
+    // A reload shows it; the partly used magazine went back in the pouch, so the count stays.
     game.key(Key::Reload, true);
     game.key(Key::Reload, false);
     frames(&mut game, 2);
     let lines: Vec<String> = game.hud().corner.iter().map(|l| l.text.clone()).collect();
-    assert_eq!(lines, ["SEMI", "RELOADING", "1 SPARE MAGAZINE"]);
+    assert_eq!(lines, ["SEMI", "RELOADING", "2 SPARE MAGAZINES"]);
 }
 
 #[test]

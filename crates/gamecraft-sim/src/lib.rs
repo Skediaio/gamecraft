@@ -177,6 +177,10 @@ const HASH_MARK_FACE: u64 = 0xFACE_FACE_FACE_FACE;
 const HASH_MARK_AI: u64 = 0xA1A1_A1A1_A1A1_A1A1;
 /// Marks the launchers in characters' hands (trigger, recoil, sway) in the state hash.
 const HASH_MARK_HANDLING: u64 = 0x4A7D_4A7D_4A7D_4A7D;
+/// Written before the pouch of a launcher that has partly used magazines in it.
+const HASH_MARK_POUCH: u64 = 0x90C4_90C4_90C4_90C4;
+/// Written before how far up to the sights the weapons are whose muzzle follows it.
+const HASH_MARK_SIGHTS: u64 = 0x5167_5167_5167_5167;
 
 /// What a character keeps facing, turned towards at the start of every tick (see the crate
 /// docs, *Facing*).
@@ -629,7 +633,7 @@ impl Sim {
         let mut magazine = self
             .magazines
             .get(&id)
-            .copied()
+            .cloned()
             .unwrap_or_else(|| Magazine::full(launcher));
         if magazine.mode == FireMode::Safe {
             return Err(SimError::NotReady(format!(
@@ -641,6 +645,8 @@ impl Sim {
         if !magazine.ready() {
             let what = if magazine.reloading {
                 "it is reloading"
+            } else if magazine.left == 0 {
+                "its magazine is empty; reload it (the input's `reload`)"
             } else {
                 "it fired a moment ago"
             };
@@ -651,7 +657,10 @@ impl Sim {
         }
         let projectile_id = self.next_projectile;
         let number = magazine.shots;
-        let ads = self.handlings.get(&id).is_some_and(|h| h.ads);
+        let (ads, ads_amount) = self
+            .handlings
+            .get(&id)
+            .map_or((false, 0.0), |h| (h.ads, h.ads_amount));
         let fired = combat::try_fire(
             &self.world,
             entity,
@@ -661,6 +670,8 @@ impl Sim {
                 yaw_deg: wrap_deg(yaw),
                 pitch_deg: pitch,
                 dispersion_mrad: dispersion_of(launcher, ads),
+                ads_amount,
+                shooter_velocity_mps: self.bodies.get(&id).map_or([0.0; 3], |b| b.velocity),
             },
             projectile_id,
         );
@@ -741,7 +752,16 @@ impl Sim {
                 brains: &self.brains,
             };
             let mut next = brain.clone();
-            let input = mind.decide(&mut next);
+            let mut input = mind.decide(&mut next);
+            // A launcher that does not reload by itself is reloaded by the one holding it: a
+            // behaviour asks as a player would, with the input's `reload`, when it is dry.
+            let dry = self
+                .magazines
+                .get(&id)
+                .is_some_and(|m| m.left == 0 && !m.reloading);
+            if dry && me.launcher().is_some_and(|l| !l.auto_reload) {
+                input.reload = true;
+            }
             decided.push((id, next, input));
         }
         for (id, brain, input) in decided {
@@ -769,7 +789,7 @@ impl Sim {
             let Some(launcher) = entity.launcher() else {
                 continue;
             };
-            let Some(mut magazine) = self.magazines.get(&id).copied() else {
+            let Some(mut magazine) = self.magazines.get(&id).cloned() else {
                 continue;
             };
             magazine.wait(DT, launcher);
@@ -804,6 +824,10 @@ impl Sim {
                     stance: handling::stance_of(entity),
                     time_s: end_s,
                     phases: &phases,
+                    reloading: magazine.reloading,
+                    ads_time_s: entity
+                        .held_model()
+                        .map_or(gamecraft_world::DEFAULT_ADS_TIME_S, |h| h.ads_time_s),
                 },
             );
             let wants = pressed.fire
@@ -822,6 +846,8 @@ impl Sim {
                         pitch_deg: (pressed.pitch_deg + up)
                             .clamp(-MAX_FIRE_PITCH_DEG, MAX_FIRE_PITCH_DEG),
                         dispersion_mrad: dispersion_of(launcher, handling.ads),
+                        ads_amount: handling.ads_amount,
+                        shooter_velocity_mps: self.bodies.get(&id).map_or([0.0; 3], |b| b.velocity),
                     },
                     self.next_projectile,
                 );
@@ -860,7 +886,7 @@ impl Sim {
         let mut magazine = self
             .magazines
             .get(&id)
-            .copied()
+            .cloned()
             .unwrap_or_else(|| Magazine::full(launcher));
         magazine.mode = mode;
         self.magazines.insert(id, magazine);
@@ -1047,14 +1073,9 @@ impl Sim {
                 let mut magazine = self
                     .magazines
                     .get(&entity.id)
-                    .copied()
+                    .cloned()
                     .unwrap_or_else(|| Magazine::full(launcher));
-                magazine.left = magazine.left.min(launcher.magazine);
-                magazine.spare = match (launcher.spare_magazines, magazine.spare) {
-                    (None, _) => None,
-                    (Some(l), None) => Some(l),
-                    (Some(l), Some(m)) => Some(m.min(l)),
-                };
+                magazine.fit(launcher);
                 if !launcher.modes.contains(&magazine.mode) {
                     magazine.mode = launcher.first_mode();
                 }
@@ -1251,6 +1272,25 @@ impl Sim {
             if let Some(spare) = m.spare {
                 hasher.write_u64(u64::from(spare));
             }
+            // The pouch's magazines that are not full, and the one being fitted: only once
+            // there are any, so a pouch of full magazines hashes as its count did.
+            if let Some(pouch) = &m.pouch {
+                let cap = self
+                    .world
+                    .entity(*id)
+                    .and_then(Entity::launcher)
+                    .map_or(u32::MAX, |l| l.magazine);
+                let partial: Vec<(&u32, &u32)> = pouch.iter().filter(|(r, _)| **r < cap).collect();
+                if !partial.is_empty() || m.loading > 0 {
+                    hasher.write_u64(HASH_MARK_POUCH);
+                    hasher.write_u64(partial.len() as u64);
+                    for (rounds, count) in partial {
+                        hasher.write_u64(u64::from(*rounds));
+                        hasher.write_u64(u64::from(*count));
+                    }
+                    hasher.write_u64(u64::from(m.loading));
+                }
+            }
         }
         hasher.write_u64(healths.len() as u64);
         for (id, current) in healths {
@@ -1339,8 +1379,23 @@ impl Sim {
         let moved: Vec<(EntityId, &Handling)> = self
             .handlings
             .iter()
-            .filter(|(_, h)| **h != Handling::default())
+            .filter(|(_, h)| !h.at_rest_but_sights())
             .map(|(id, h)| (*id, h))
+            .collect();
+        // How far up to the sights a weapon is only matters for one whose shot leaves from a
+        // muzzle that moves with it (`muzzle_m`): the others hash as before.
+        let sights: Vec<(EntityId, f64)> = self
+            .handlings
+            .iter()
+            .filter(|(id, h)| {
+                h.ads_amount != 0.0
+                    && self
+                        .world
+                        .entity(**id)
+                        .and_then(Entity::held_model)
+                        .is_some_and(|m| m.muzzle_m.is_some())
+            })
+            .map(|(id, h)| (*id, h.ads_amount))
             .collect();
         let switched: Vec<(EntityId, FireMode)> = self
             .magazines
@@ -1353,7 +1408,7 @@ impl Sim {
             })
             .map(|(id, m)| (*id, m.mode))
             .collect();
-        if moved.is_empty() && held.is_empty() && switched.is_empty() {
+        if moved.is_empty() && held.is_empty() && switched.is_empty() && sights.is_empty() {
             return;
         }
         hasher.write_u64(HASH_MARK_HANDLING);
@@ -1382,6 +1437,14 @@ impl Sim {
             hasher.write_u64(id.0);
             for b in bits {
                 hasher.write_bool(b);
+            }
+        }
+        if !sights.is_empty() {
+            hasher.write_u64(HASH_MARK_SIGHTS);
+            hasher.write_u64(sights.len() as u64);
+            for (id, amount) in sights {
+                hasher.write_u64(id.0);
+                hasher.write_f64(amount);
             }
         }
     }

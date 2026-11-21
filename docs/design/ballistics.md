@@ -136,12 +136,26 @@ exact rules):
   keep firing.
 - **Reload**: the input's `reload` takes `reload_s`; from empty `reload_empty_s` (else
   `reload_s`).
-- **Spare magazines**: `spare_magazines` (a count, 0 to 100000; `null` or absent is unlimited, as
-  a launcher always was, and then the state hash is unchanged). A reload, asked for or after the
-  last shot, takes one at its start and refills the magazine when it ends; a partly used
-  magazine is simply discarded (no rounds are carried over). With none left a reload does
-  nothing and an empty launcher stays empty. `sim.state` and `entity.get` show `magazine.spare`
-  (null for unlimited). The window tells it as `NO MAGAZINES`, never as a round count.
+- **Magazines keep their rounds**: `spare_magazines` (a count of full spares, 0 to 100000)
+  fills a pouch where each magazine has its own round count; `null` or absent is unlimited full
+  magazines, as a launcher always was (the partly used one is lost, the state hash unchanged).
+  A reload, asked for or after the last shot, puts the launcher's magazine back in the pouch (an
+  empty one is dropped) and fits the fullest one (ties are alike, so the choice is
+  deterministic); the launcher holds no rounds while it is fitted (`magazine.left` is 0,
+  `loading` the rounds coming) and has them when `reload_s` (from empty `reload_empty_s`) ends.
+  A reload does nothing when no magazine in the pouch holds more rounds than the launcher does.
+  `sim.state` and `entity.get` show `magazine.pouch` (rounds of each magazine, fullest first)
+  and `spare` (their count); both null for unlimited. The pouch is hashed only once it holds a
+  used magazine, so a pouch of full ones hashes as the count did. The window tells it as `NO
+  MAGAZINES`, never as a round count.
+- **No automatic reload**: `auto_reload` (default true, as before). False: the empty launcher
+  clicks, firing does nothing until the input's `reload`; a behaviour whose launcher is dry
+  sets `reload` by itself, as a player would.
+- **A reload takes the weapon off the sights**: while reloading, `handling.ads` is false
+  whatever the input's `ads` holds (sway and dispersion are the hip's), and `handling.ads_amount`
+  (0 hip to 1 sights) goes down at `1 / ads_time_s` a second; when the reload ends a still held
+  `ads` brings it up again. Nothing fires while reloading. `handling.reloading` and
+  `handling.reload_progress` (0 to 1) tell it for the view model.
 - **Recoil** `{kick_up_mrad, kick_side_mrad, recovery_s}`: a kick per shot on top of the aim,
   decaying exponentially (5 % left after `recovery_s`); fast shots stack. The window shows it
   as a climbing view the player pulls back with the mouse: the input's aim is the player's,
@@ -155,6 +169,18 @@ exact rules):
   view model to the sights and narrows the view in the window. Its `attachments` (an optic)
   ride on it, and its `reticle` is a collimated dot: at infinity along the barrel, so it shows
   the aim with its sway and recoil and wanders within the optic while the camera stays.
+- **Muzzle**: `held_model.muzzle_m` is the barrel's mouth in the model's own axes `[right, up,
+  forward]` (metres before `scale`; forward is glTF's -Z, the way the model points, so a barrel
+  along -Z has a positive forward). With it, a character's shot starts at the eye plus the
+  model's offset at the current sights blend (`offset_m` towards `ads_offset_m` by
+  `handling.ads_amount`) plus the muzzle times `scale`, turned by the aim with sway and recoil,
+  exactly as the view model is placed (`HeldModel::muzzle_point`, `AimAxes`). The bore is
+  zeroed once per weapon: with the model at the sights, the barrel is tilted relative to the aim
+  (up and sideways) so a shot crosses the line of sight at `zero_m` (default 100 m) in still
+  standard air; the same tilt holds at the hip. The tilt is solved with the firing solution of
+  `aim::solve` (drag and gravity, to a millimetre), not a flat angle. Without `muzzle_m`, and
+  for characters without a held model (the AI), the shot leaves from the eye as before. With a muzzle the bullet also carries the shooter's own velocity (the muzzle velocity is relative to the rifle); the shot starts at the muzzle of the tick it is fired in (bodies move before launchers fire). A
+  muzzle pushed through a wall (leaning on it) is not detected yet.
 - Every handling field is left out of a document while at its default, so old worlds keep
   their text and their state hashes.
 

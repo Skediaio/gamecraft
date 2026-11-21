@@ -118,9 +118,12 @@ fn the_selector_the_trigger_and_a_reload_through_sim_input() {
     s.run("sim.step", &json!({"ticks": 1})).unwrap();
     let me = rifleman(&mut s);
     assert_eq!(me["magazine"]["reloading"], true);
-    assert_eq!(me["handling"]["ads"], true);
+    assert_eq!(
+        me["handling"]["ads"], false,
+        "a reload takes the weapon off the sights"
+    );
     let got = s.run("entity.get", &json!({"id": "Rifleman"})).unwrap();
-    assert_eq!(got["handling"]["ads"], true);
+    assert_eq!(got["handling"]["ads"], false);
     assert_eq!(got["magazine"]["mode"], "auto");
     assert_eq!(got["input"]["reload"], true);
     // A character without a launcher has no handling.
@@ -232,5 +235,109 @@ fn a_held_model_takes_an_optic_and_a_reticle_and_refuses_bad_ones() {
         "entity.add",
         held(json!({"reticle": {"glow": 1}})),
         &["glow"],
+    );
+}
+
+#[test]
+fn the_pouch_the_reload_and_the_muzzle_show_in_the_state_and_bad_values_name_the_field() {
+    let mut s = Session::new(World::new("Range", 3));
+    s.run(
+        "terrain.set",
+        &json!({"kind": "flat", "size_m": 256, "cell_m": 4}),
+    )
+    .unwrap();
+    s.run(
+        "entity.add",
+        &json!({"name": "Rifleman", "position": [0, 0, 0], "components": [
+            {"type": "character"},
+            {"type": "launcher", "magazine": 10, "reload_s": 1, "rate_s": 0.1,
+             "dispersion_mrad": 0, "spare_magazines": 2, "auto_reload": false},
+            {"type": "held_model", "asset": "models/rifle.glb",
+             "muzzle_m": [0, 0.01, 0.8], "zero_m": 100}]}),
+    )
+    .unwrap();
+    s.run("sim.start", &json!({})).unwrap();
+    let me = rifleman(&mut s);
+    assert_eq!(me["magazine"]["pouch"], json!([10, 10]));
+    assert_eq!(me["magazine"]["spare"], 2);
+    assert_eq!(me["handling"]["reloading"], false);
+    assert_eq!(me["handling"]["reload_progress"], 0.0);
+    // Three rounds, then a reload: the used magazine goes in the pouch.
+    s.run("sim.input", &json!({"entity": "Rifleman", "fire": true}))
+        .unwrap();
+    s.run("sim.step", &json!({"ticks": 13})).unwrap();
+    s.run(
+        "sim.input",
+        &json!({"entity": "Rifleman", "fire": false, "reload": true, "ads": true}),
+    )
+    .unwrap();
+    s.run("sim.step", &json!({"ticks": 31})).unwrap();
+    let me = rifleman(&mut s);
+    assert_eq!(me["magazine"]["pouch"], json!([10, 7]), "{me}");
+    assert_eq!(me["magazine"]["reloading"], true);
+    assert_eq!(me["magazine"]["loading"], 10);
+    let progress = me["handling"]["reload_progress"].as_f64().unwrap();
+    assert!((progress - 0.5).abs() < 0.05, "{progress}");
+    assert_eq!(me["handling"]["reloading"], true);
+    assert_eq!(me["handling"]["ads"], false);
+    let got = s.run("entity.get", &json!({"id": "Rifleman"})).unwrap();
+    assert_eq!(got["handling"]["reloading"], true);
+    assert_eq!(got["magazine"]["pouch"], json!([10, 7]));
+    // The new fields are listed with their defaults.
+    let list = s.run("component.list", &json!({})).unwrap();
+    let default = |kind: &str, name: &str| -> Value {
+        let k = list["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|k| k["type"] == kind)
+            .unwrap();
+        k["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == name)
+            .unwrap_or_else(|| panic!("{kind}.{name}"))["default"]
+            .clone()
+    };
+    assert_eq!(default("launcher", "auto_reload"), true);
+    assert_eq!(default("held_model", "muzzle_m"), Value::Null);
+    assert_eq!(default("held_model", "zero_m"), Value::Null);
+    // Bad values name the field.
+    let add = |h: Value, l: Value| {
+        json!({"name": "Bad", "position": [0, 0, 0], "components": [
+            {"type": "character"}, l, h]})
+    };
+    let held = |extra: Value| {
+        let mut h = json!({"type": "held_model", "asset": "models/rifle.glb"});
+        if let (Value::Object(h), Value::Object(extra)) = (&mut h, extra) {
+            h.extend(extra);
+        }
+        h
+    };
+    let launcher = |extra: Value| {
+        let mut l = json!({"type": "launcher"});
+        if let (Value::Object(l), Value::Object(extra)) = (&mut l, extra) {
+            l.extend(extra);
+        }
+        l
+    };
+    refuse(
+        &mut s,
+        "entity.add",
+        add(held(json!({"muzzle_m": [0, 0, 20]})), launcher(json!({}))),
+        &["held_model.muzzle_m (forward)"],
+    );
+    refuse(
+        &mut s,
+        "entity.add",
+        add(held(json!({"zero_m": 0})), launcher(json!({}))),
+        &["held_model.zero_m"],
+    );
+    refuse(
+        &mut s,
+        "entity.add",
+        add(held(json!({})), launcher(json!({"auto_reload": "no"}))),
+        &["auto_reload"],
     );
 }

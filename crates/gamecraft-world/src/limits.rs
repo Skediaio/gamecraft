@@ -173,6 +173,13 @@ pub const COVER_SEARCH_MAX_M: f64 = 100.0;
 pub const ADS_FOV_FACTOR_MIN: f64 = 0.2;
 /// Longest a `held_model` takes to come up to the sights, seconds.
 pub const ADS_TIME_MAX_S: f64 = 5.0;
+/// Farthest a `held_model`'s muzzle point sits from the model's origin (before and after the
+/// model's scale), along any axis, metres.
+pub const MUZZLE_MAX_M: f64 = 5.0;
+/// Shortest zeroing distance of a `held_model`, metres.
+pub const ZERO_MIN_M: f64 = 1.0;
+/// Longest zeroing distance of a `held_model`, metres.
+pub const ZERO_MAX_M: f64 = 10000.0;
 /// Most `attachments` of a `held_model`.
 pub const HELD_ATTACHMENTS_MAX: usize = 8;
 /// Smallest radius of a `held_model`'s reticle dot, milliradians.
