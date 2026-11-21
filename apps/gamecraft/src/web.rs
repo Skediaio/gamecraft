@@ -153,14 +153,19 @@ fn assets_base() -> Option<String> {
     })
 }
 
-/// Fetches the files of every model `world` shows (a `.gltf` with the files it refers to) from
-/// [`assets_base`], measures each model and gives `world` their bounding boxes, as a native
+/// Fetches the files of every model `world` shows, `held_model`s included (a `.gltf` with the
+/// files it refers to) from [`assets_base`], measures each model and gives `world` their
+/// bounding boxes, as a native
 /// host does from a project (so solid models collide in the browser too). A model that cannot
 /// be fetched or read is told on the console and left out: the renderer draws its stand-in.
 pub async fn load_assets(world: &mut World) -> Vec<(String, Vec<u8>)> {
     let used: std::collections::BTreeSet<String> = world
         .entities()
-        .filter_map(|e| e.model().map(|m| m.asset.clone()))
+        .flat_map(|e| {
+            let model = e.model().map(|m| m.asset.clone());
+            let held = e.held_model().map(|h| h.asset.clone());
+            model.into_iter().chain(held)
+        })
         .collect();
     let Some(base) = assets_base().filter(|_| !used.is_empty()) else {
         return Vec::new();

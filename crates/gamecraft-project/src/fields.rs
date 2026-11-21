@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 pub const WORLD_FORMAT: u32 = 1;
 
 /// The keys a `world.json` may hold, in the order they are written.
-pub(crate) const WORLD_KEYS: [&str; 10] = [
+pub(crate) const WORLD_KEYS: [&str; 11] = [
     "gamecraft_world",
     "name",
     "seed",
@@ -19,6 +19,7 @@ pub(crate) const WORLD_KEYS: [&str; 10] = [
     "layers",
     "terrain",
     "environment",
+    "view",
     "vars",
     "objectives",
     "triggers",
@@ -130,7 +131,8 @@ pub(crate) fn diff(base: &Map<String, Value>, current: &Map<String, Value>) -> M
 }
 
 /// The fields of `world` that a `world.json` holds, as the `.gamecraft` format writes them,
-/// without the terrain's edits (they have a file of their own).
+/// without the terrain's edits (they have a file of their own). The view rules are left out
+/// when they are the default, as the `.gamecraft` format leaves them out.
 pub(crate) fn world_fields(world: &World) -> Result<Map<String, Value>, ProjectError> {
     let to = |v: Result<Value, serde_json::Error>| {
         v.map_err(|e| ProjectError::new(format!("cannot write the world's fields: {e}")))
@@ -148,6 +150,9 @@ pub(crate) fn world_fields(world: &World) -> Result<Map<String, Value>, ProjectE
         "environment".into(),
         to(serde_json::to_value(&world.environment))?,
     );
+    if !world.view.is_default() {
+        map.insert("view".into(), to(serde_json::to_value(&world.view))?);
+    }
     map.insert("vars".into(), to(serde_json::to_value(&world.vars))?);
     map.insert(
         "objectives".into(),

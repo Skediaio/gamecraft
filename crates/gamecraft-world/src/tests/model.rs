@@ -1,8 +1,8 @@
 //! The `model` component: its JSON form, its checks, the derived bounds and the collider box.
 
 use crate::{
-    Component, EntityDraft, Model, ModelBounds, ModelBox, ModelCollider, World, is_asset_path,
-    is_model_path,
+    Component, DEFAULT_HELD_OFFSET_M, EntityDraft, HeldModel, Model, ModelBounds, ModelBox,
+    ModelCollider, World, is_asset_path, is_model_path,
 };
 use std::collections::BTreeMap;
 
@@ -140,4 +140,81 @@ fn the_collider_box_is_the_bounds_scaled_and_turned_about_the_base() {
     none.collider = ModelCollider::None;
     let w = world_with(none, 0.0, 1.0);
     assert_eq!(ModelBox::of(w.entities().next().unwrap(), &bounds), None);
+}
+
+#[test]
+fn a_held_model_reads_with_its_defaults_and_round_trips() {
+    let c: Component =
+        serde_json::from_str(r#"{"type": "held_model", "asset": "models/rifle.glb"}"#).unwrap();
+    assert_eq!(c.kind(), "held_model");
+    assert!(Component::KINDS.contains(&"held_model"));
+    let Component::HeldModel(h) = &c else {
+        panic!()
+    };
+    assert_eq!(h.offset_m, [0.12, -0.14, 0.32]);
+    assert_eq!(h.offset_m, DEFAULT_HELD_OFFSET_M);
+    assert_eq!(h.scale, 1.0);
+    let text = serde_json::to_string(&c).unwrap();
+    assert_eq!(
+        text,
+        r#"{"type":"held_model","asset":"models/rifle.glb","offset_m":[0.12,-0.14,0.32],"scale":1.0}"#
+    );
+    assert!(
+        serde_json::from_str::<Component>(
+            r#"{"type": "held_model", "asset": "a.glb", "ofset_m": [0, 0, 0]}"#
+        )
+        .is_err()
+    );
+    // In a world, through the file and back.
+    let mut w = World::new("h", 1);
+    let id = w
+        .add_entity(EntityDraft {
+            name: "Player".into(),
+            components: vec![Component::HeldModel(HeldModel {
+                asset: "models/rifle.glb".into(),
+                offset_m: [0.2, -0.1, 0.5],
+                scale: 0.5,
+            })],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    let back = World::from_json(&w.to_json().unwrap()).unwrap();
+    assert_eq!(back, w);
+    let held = back.entity(id).unwrap().held_model().unwrap();
+    assert_eq!((held.offset_m, held.scale), ([0.2, -0.1, 0.5], 0.5));
+}
+
+#[test]
+fn a_bad_held_model_names_the_field_and_what_is_allowed() {
+    let bad = |change: fn(&mut HeldModel)| {
+        let mut h = HeldModel {
+            asset: "models/rifle.glb".into(),
+            offset_m: DEFAULT_HELD_OFFSET_M,
+            scale: 1.0,
+        };
+        change(&mut h);
+        let mut w = World::new("h", 1);
+        w.add_entity(EntityDraft {
+            components: vec![Component::HeldModel(h)],
+            ..EntityDraft::default()
+        })
+        .unwrap_err()
+        .to_string()
+    };
+    let e = bad(|h| h.asset = "../escape.glb".into());
+    assert!(
+        e.contains("held_model.asset") && e.contains("models/rifle.glb"),
+        "{e}"
+    );
+    let e = bad(|h| h.asset = "models/rifle.obj".into());
+    assert!(e.contains("held_model.asset"), "{e}");
+    let e = bad(|h| h.offset_m = [0.0, f64::NAN, 0.0]);
+    assert!(e.contains("held_model.offset_m (up)"), "{e}");
+    let e = bad(|h| h.offset_m = [0.0, 0.0, 2.5]);
+    assert!(
+        e.contains("held_model.offset_m (forward)") && e.contains("-2 to 2"),
+        "{e}"
+    );
+    let e = bad(|h| h.scale = 0.0);
+    assert!(e.contains("held_model.scale"), "{e}");
 }

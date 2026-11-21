@@ -60,9 +60,14 @@ impl GameView {
             .cloned()
             .collect();
         self.problems = problems;
+        self.renderer.set_view_model(game.view_model_aim());
         self.renderer.set_effects(&game.effects());
-        self.renderer
-            .set_crosshair(game.view() == ViewMode::FirstPerson && game.player().is_some());
+        // The crosshair marks the aim, which the camera leaves while free look is held.
+        self.renderer.set_crosshair(
+            game.view() == ViewMode::FirstPerson
+                && game.player().is_some()
+                && !game.is_freelooking(),
+        );
         let (width, height) = self.renderer.size();
         let camera = game.camera(f64::from(width) / f64::from(height));
         self.renderer

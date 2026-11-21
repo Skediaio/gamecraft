@@ -3,7 +3,8 @@
 //! missing or broken model drawn as a magenta box with a problem line. The GPU tests skip
 //! without an adapter (and fail with `GAMECRAFT_REQUIRE_GPU=1`); `models_in_a_yard` writes
 //! `out/render-models.png`. A character with a model is drawn as that model, which follows it
-//! without a rebuild.
+//! without a rebuild. A held model (a first-person weapon) is drawn at the aim of the hidden
+//! character only, and follows the aim without a rebuild.
 
 #![allow(
     clippy::unwrap_used,
@@ -14,10 +15,12 @@
 )]
 
 use gamecraft_render::model::{self, Alpha};
-use gamecraft_render::{Camera, Picture, PictureRequest, WorldRenderer, encode_png, headless_gpu};
+use gamecraft_render::{
+    Camera, Picture, PictureRequest, ViewModelAim, WorldRenderer, encode_png, headless_gpu,
+};
 use gamecraft_world::{
-    Character, Component, EntityDraft, HeightField, Model, ModelCollider, Terrain, TerrainSource,
-    World,
+    Character, Component, EntityDraft, HeightField, HeldModel, Model, ModelCollider, Terrain,
+    TerrainSource, World,
 };
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -406,4 +409,89 @@ fn a_character_with_a_missing_model_is_a_magenta_box_that_follows_it() {
         red > 1.5 * green && blue > 1.5 * green,
         "magenta where the character went: {red} {green} {blue}"
     );
+}
+
+/// A view from `eye` along the aim of `yaw_deg` (level), as a first-person camera looks.
+fn eyes(eye: [f64; 3], yaw_deg: f64) -> Camera {
+    let (s, c) = yaw_deg.to_radians().sin_cos();
+    Camera {
+        position: eye,
+        target: [eye[0] - 10.0 * s, eye[1], eye[2] - 10.0 * c],
+        fov_y_deg: 70.0,
+    }
+}
+
+fn is_wood([red, green, blue]: [f64; 3]) -> bool {
+    red > 1.3 * blue && green > 0.6 * blue
+}
+
+#[test]
+fn a_held_model_is_drawn_at_the_aim_of_the_hidden_character_and_moves_without_a_rebuild() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let (mut world, hf) = flat();
+    let player = world
+        .add_entity(EntityDraft {
+            name: "Player".into(),
+            components: vec![
+                Component::Character(Character::default()),
+                Component::HeldModel(HeldModel {
+                    asset: "models/crate.glb".into(),
+                    offset_m: [0.0, -0.2, 1.0],
+                    scale: 0.5,
+                }),
+            ],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    r.provide_asset("models/crate.glb", CRATE.to_vec());
+    r.set_hidden_character(Some(player));
+    assert_eq!(r.sync(&world, Some(&hf)), Vec::<String>::new());
+    let eye_height = Character::default().eye_height_m;
+    let eye = [0.0, eye_height, 0.0];
+    // No aim yet: nothing in front of the eyes.
+    let empty = centre(&picture(&mut r, eyes(eye, 0.0)), 6);
+    assert!(!is_wood(empty), "no view model without an aim: {empty:?}");
+    r.set_view_model(Some(ViewModelAim {
+        eye,
+        yaw_deg: 0.0,
+        pitch_deg: 0.0,
+    }));
+    let held = centre(&picture(&mut r, eyes(eye, 0.0)), 6);
+    assert!(
+        is_wood(held),
+        "the crate is held in front of the eyes: {held:?}"
+    );
+    assert_eq!(r.model_uploads(), 1);
+    let rebuilds = r.rebuild_count();
+    // The player walks and turns; the aim follows every frame.
+    for step in 1..=10 {
+        let at = [f64::from(step), 0.0, -f64::from(step)];
+        world.entity_mut(player).unwrap().position = at;
+        world.entity_mut(player).unwrap().rotation_y_deg = 9.0 * f64::from(step);
+        r.sync(&world, Some(&hf));
+        r.set_view_model(Some(ViewModelAim {
+            eye: [at[0], eye_height, at[2]],
+            yaw_deg: 9.0 * f64::from(step),
+            pitch_deg: 0.0,
+        }));
+    }
+    assert_eq!(
+        r.rebuild_count(),
+        rebuilds,
+        "following the aim is no rebuild"
+    );
+    let moved = [10.0, eye_height, -10.0];
+    let followed = centre(&picture(&mut r, eyes(moved, 90.0)), 6);
+    assert!(
+        is_wood(followed),
+        "the crate followed the aim: {followed:?}"
+    );
+    // Without an aim (third person) it is gone again.
+    r.set_view_model(None);
+    r.sync(&world, Some(&hf));
+    let gone = centre(&picture(&mut r, eyes(moved, 90.0)), 6);
+    assert!(!is_wood(gone), "no aim, no view model: {gone:?}");
+    assert_eq!(r.rebuild_count(), rebuilds);
 }

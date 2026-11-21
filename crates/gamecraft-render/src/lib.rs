@@ -14,6 +14,9 @@
 //!   ([`WorldRenderer::provide_asset`]), read with their PBR materials and PNG or JPEG textures
 //!   ([`model`]), uploaded once per asset and drawn as one item with an instance per entity. A
 //!   model that cannot be drawn is a small magenta box with a problem line.
+//! - **Held models**: a character's `held_model` (a weapon's view model), drawn at the
+//!   first-person camera along the aim for the hidden character only
+//!   ([`WorldRenderer::set_view_model`]), moved every frame without a rebuild.
 //! - **Characters**: a body (cylinder and head) with a small dark visor at eye height on the
 //!   side the character faces.
 //! - **Sky and light**: the physical sky, the sun from the environment, clouds, mist, rain, wind
@@ -55,9 +58,9 @@ pub use camera::{Camera, FOV_MAX_DEG, FOV_MIN_DEG};
 pub use effects::{Effects, Impact, Tracer};
 pub use image::encode_png;
 pub use light::wind_towards;
-pub use renderer::WorldRenderer;
 #[cfg(not(target_arch = "wasm32"))]
 pub use renderer::headless_gpu;
+pub use renderer::{ViewModelAim, WorldRenderer};
 
 /// Smallest picture side, pixels.
 pub const PICTURE_MIN_SIDE: u32 = 16;

@@ -120,6 +120,7 @@ degrees, times seconds; an entity is its id or its name.
 | `terrain.edits` | `{}` | `{size_m, cell_m, source, layers, paint_rules, edits: [{index, op, ...}], ops, tiles, samples}`; the terrain recipe in full |
 | `terrain.remove_edit` | `{index}` | `{removed, edits, tiles_rebuilt, ...}`; later edits move up one; works on a running world |
 | `environment.set` | `{time_of_day_h?, day_of_year?, latitude_deg?, wind_direction_deg?, wind_speed_mps?, cloud_cover?, mist?, rain?, temperature_c?, sea_level_m?}` | `{environment: {time_of_day_h, day_of_year, latitude_deg, wind_direction_deg, wind_speed_mps, cloud_cover, mist, rain, temperature_c, sea_level_m}, sun: {azimuth_deg, elevation_deg}}`; only the fields given change; `temperature_c` (at world y = 0, default 15) and `sea_level_m` (the height of y = 0 above sea level, default 0) give the air density projectiles fly through |
+| `view.set` | `{modes?, fov_y_deg?}` | `{view: {modes, fov_y_deg}}`; which views a player may use, in order (a window starts in the first and switches only among those listed; `["first"]` forbids the third-person view), and the player camera's vertical field of view in degrees, 30 to 120; only the fields given change; without view rules a world allows `["third", "first"]` at 70 degrees; works on a running world |
 
 ### Entities
 
@@ -216,7 +217,8 @@ false`, `trigger_errors`) and changes nothing. Triggers fired by triggers nest a
 `world.inspect` (MCP: `doc_inspect`, and the resource `gamecraft://world`) describes the current
 world, the running world while playing: `{name, seed, revision, playing, tick (null when not
 playing), terrain: null | {size_m, cell_m, source, cols, rows, min_height_m, max_height_m},
-environment, sun: {azimuth_deg, elevation_deg, direction, above_horizon}, entity_count, vars,
+environment, sun: {azimuth_deg, elevation_deg, direction, above_horizon}, view: {modes,
+fov_y_deg}, entity_count, vars,
 objectives, trigger_count, prefabs: [{id, name, components, children, instances,
 instance_count}], entities: [{id, name, position, rotation_y_deg, scale, prefab?, parent?,
 components}], truncated, history: {can_undo, can_redo}}`. An entity placed from a prefab shows

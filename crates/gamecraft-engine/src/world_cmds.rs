@@ -1,10 +1,11 @@
-//! World-wide settings: `world.set`, `terrain.set`, `terrain.clear`, `environment.set`.
+//! World-wide settings: `world.set`, `terrain.set`, `terrain.clear`, `environment.set`,
+//! `view.set`.
 
 use crate::error::{CommandError, bad, failed};
 use crate::params::Params;
 use crate::session::{Edit, Handler, Registration};
 use crate::spec::{CommandSpec, ParamType as T, param, spec};
-use gamecraft_world::{Environment, Terrain, TerrainSource, World};
+use gamecraft_world::{Environment, Terrain, TerrainSource, ViewMode, ViewRules, World};
 use serde_json::{Value, json};
 
 /// The commands of this module.
@@ -24,6 +25,10 @@ pub(crate) const SPECS: &[Registration] = &[
     Registration {
         spec: environment_set_spec,
         handler: Handler::World(environment_set),
+    },
+    Registration {
+        spec: view_set_spec,
+        handler: Handler::World(view_set),
     },
 ];
 
@@ -290,4 +295,54 @@ fn environment_set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandE
         "environment": environment,
         "sun": {"azimuth_deg": sun.azimuth_deg, "elevation_deg": sun.elevation_deg},
     }))
+}
+
+/// Most characters of a wrong value quoted in an error.
+const MAX_SHOWN_CHARS: usize = 80;
+
+fn view_set_spec() -> CommandSpec {
+    spec(
+        "view.set",
+        "Set View Rules",
+        "Sets which views a player may use and how wide the player's camera sees; only the \
+         fields given change. A window starts in the first view listed and switches only \
+         among those listed; [\"first\"] forbids the third-person view. A player may still \
+         widen or narrow the field of view for themselves (the window's --fov).",
+        vec![
+            param(
+                "modes",
+                T::Array,
+                "The views allowed, in order, at least one and none twice: \"first\" (from the \
+                 eyes) and \"third\" (behind and above).",
+            ),
+            param(
+                "fov_y_deg",
+                T::Number,
+                "Vertical field of view of the player's camera, 30 to 120.",
+            )
+            .unit("deg"),
+        ],
+        "{view: {modes, fov_y_deg}}",
+        json!({"modes": ["first"], "fov_y_deg": 65}),
+    )
+}
+
+fn view_set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
+    let mut rules: ViewRules = edit.world.view.clone();
+    if let Some(modes) = p.value("modes") {
+        rules.modes = serde_json::from_value::<Vec<ViewMode>>(modes.clone()).map_err(|_| {
+            let shown: String = modes.to_string().chars().take(MAX_SHOWN_CHARS).collect();
+            bad(format!(
+                "`modes` must be a list of views, \"first\" and \"third\", such as \
+                 [\"first\"] or [\"third\", \"first\"]; got {shown}"
+            ))
+        })?;
+    }
+    if let Some(fov) = p.f64("fov_y_deg")? {
+        rules.fov_y_deg = fov;
+    }
+    probe(|w| w.view = rules.clone())?;
+    let view = serde_json::to_value(&rules).map_err(failed)?;
+    edit.world.view = rules;
+    Ok(json!({ "view": view }))
 }

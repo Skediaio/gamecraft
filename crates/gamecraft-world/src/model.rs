@@ -9,7 +9,7 @@
 //! by rays.
 
 use crate::error::Ctx;
-use crate::limits::{SCALE_MAX, SCALE_MIN};
+use crate::limits::{HELD_OFFSET_MAX_M, SCALE_MAX, SCALE_MIN};
 use crate::{Entity, WorldError};
 use gamecraft_math::{Portable, deg_to_rad};
 use serde::{Deserialize, Serialize};
@@ -103,6 +103,61 @@ impl Model {
             ));
         }
         ctx.range("model.scale", self.scale, SCALE_MIN, SCALE_MAX, "")
+    }
+}
+
+/// Where a [`HeldModel`] sits when its component leaves `offset_m` out: right, up and
+/// forward of the camera, metres.
+pub const DEFAULT_HELD_OFFSET_M: [f64; 3] = [0.12, -0.14, 0.32];
+
+fn default_held_offset() -> [f64; 3] {
+    DEFAULT_HELD_OFFSET_M
+}
+
+/// What a character holds as seen from its own eyes: a glTF model of a pack drawn at the
+/// first-person camera (a weapon's view model). It follows the aim, not the body: the model's
+/// own forward (-Z, as glTF faces) points where the character aims, `offset_m` to the right,
+/// up and forward of the eye. It is drawn only while the character is seen in first person.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HeldModel {
+    /// The asset's path inside the pack's `assets/` folder, ending in `.glb` or `.gltf`
+    /// (`models/rifle.glb`).
+    pub asset: String,
+    /// Where the model's origin sits from the eye along the aim: `[right, up, forward]`,
+    /// metres, each -2 to 2. Default `[0.12, -0.14, 0.32]`.
+    #[serde(default = "default_held_offset")]
+    pub offset_m: [f64; 3],
+    /// Uniform scale of the asset, 0.001 to 1000 (the entity's scale does not apply).
+    /// Default 1.
+    #[serde(default = "default_model_scale")]
+    pub scale: f64,
+}
+
+impl HeldModel {
+    pub(crate) fn validate(&self, ctx: Ctx) -> Result<(), WorldError> {
+        if !is_model_path(&self.asset) {
+            let shown: String = self.asset.chars().take(MAX_ASSET_PATH_CHARS + 8).collect();
+            return Err(ctx.invalid(
+                "held_model.asset",
+                format!("{shown:?}"),
+                format!(
+                    "it must be a path inside the pack's assets/ folder ending in .glb or \
+                     .gltf, 1 to {MAX_ASSET_PATH_CHARS} ASCII letters, digits, `-`, `_`, `.` \
+                     and `/`, without `..`, such as \"models/rifle.glb\""
+                ),
+            ));
+        }
+        for (axis, v) in ["right", "up", "forward"].iter().zip(self.offset_m) {
+            ctx.range(
+                format!("held_model.offset_m ({axis})"),
+                v,
+                -HELD_OFFSET_MAX_M,
+                HELD_OFFSET_MAX_M,
+                " metres",
+            )?;
+        }
+        ctx.range("held_model.scale", self.scale, SCALE_MIN, SCALE_MAX, "")
     }
 }
 

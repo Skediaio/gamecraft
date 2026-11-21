@@ -11,6 +11,7 @@ mod sculpt;
 mod sun;
 mod terrain;
 mod validation;
+mod view;
 
 use crate::{
     Character, Component, EntityDraft, Environment, Plant, Shape, ShapeKind, Terrain,

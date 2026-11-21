@@ -23,7 +23,7 @@
 <body>
   <canvas id="gamecraft_canvas" tabindex="0"></canvas>
   <div id="gc-status"><div id="gc-card"><h1>Loading GameCraft…</h1></div></div>
-  <div id="gc-keys">Click to look around · W A S D walk · Shift run · Space jump · E interact · F1 view · F5 restart · P pause · Esc frees the mouse</div>
+  <div id="gc-keys">Click to look around · W A S D walk · Shift run · Space jump · E interact · click fire · hold Alt free look · F1 view · F5 restart · P pause · Esc frees the mouse</div>
   <script>
     // All texts together so they can be translated.
     const T = {
@@ -40,6 +40,11 @@
       ],
       desktop: "The desktop version of GameCraft does not need a browser.",
     };
+    // Alt is free look (held, the head turns and the aim stays): the browser must not take it
+    // (focusing the menu bar, or a shortcut with the next key).
+    for (const type of ['keydown', 'keyup']) {
+      window.addEventListener(type, e => { if (e.key === 'Alt' || e.code === 'AltLeft') e.preventDefault(); }, { capture: true });
+    }
     const card = document.getElementById('gc-card');
     const status = document.getElementById('gc-status');
     const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));

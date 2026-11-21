@@ -28,7 +28,7 @@ const SETTLE_FRAMES: u8 = 2;
 #[cfg(not(target_arch = "wasm32"))]
 const START_SIZE: (f64, f64) = (1280.0, 720.0);
 
-/// The game key of a physical key: WASD, Shift, Space, E, F1, F5, P and Esc.
+/// The game key of a physical key: WASD, Shift, Space, E, Left Alt, F1, F5, P and Esc.
 pub fn key_of(code: KeyCode) -> Option<Key> {
     Some(match code {
         KeyCode::KeyW => Key::Forward,
@@ -38,6 +38,7 @@ pub fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::ShiftLeft | KeyCode::ShiftRight => Key::Run,
         KeyCode::Space => Key::Jump,
         KeyCode::KeyE => Key::Interact,
+        KeyCode::AltLeft => Key::Freelook,
         KeyCode::F1 => Key::ToggleView,
         KeyCode::F5 => Key::Restart,
         KeyCode::KeyP => Key::Pause,
@@ -384,6 +385,7 @@ impl ApplicationHandler for App {
                     let files = crate::web::load_assets(&mut world).await;
                     let gpu = Gpu::new(window.clone(), quality).await?;
                     let mut game = Game::new(world);
+                    game.set_fov(web_fov());
                     game.provide_assets(files);
                     Ok((game, gpu))
                 }
@@ -461,7 +463,8 @@ impl ApplicationHandler for App {
 /// Opens the window natively on `world` and runs until it is closed. With `stdin`, a thread
 /// reads control lines (at most the protocol's request size each) for the frames to run.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn run_native(game: Game, args: &crate::args::Args) -> Result<(), String> {
+pub fn run_native(mut game: Game, args: &crate::args::Args) -> Result<(), String> {
+    game.set_fov(args.fov);
     let event_loop = EventLoop::new()
         .map_err(|e| format!("no window can be opened here ({e}); GameCraft needs a display"))?;
     let mut app = App::new(
@@ -519,8 +522,19 @@ pub fn load_world_file(path: &std::path::Path) -> Result<gamecraft_world::World,
         .map_err(|e| format!("the world {} is not a valid world: {e}", path.display()))
 }
 
+/// The player's own field of view of `?fov=<degrees>` (30 to 120); a bad value is told on the
+/// console and the world's is used.
+#[cfg(target_arch = "wasm32")]
+fn web_fov() -> Option<f64> {
+    let text = crate::web::query("fov")?;
+    crate::args::parse_fov(&text)
+        .map_err(|e| tell(&format!("?fov={e}; the world's field of view is used")))
+        .ok()
+}
+
 /// Starts the window in the browser: the canvas `gamecraft_canvas`, the world of `?world=<url>`
-/// (else the example world), the quality of `?quality=` (else medium).
+/// (else the example world), the quality of `?quality=` (else medium), the field of view of
+/// `?fov=` (else the world's).
 #[cfg(target_arch = "wasm32")]
 pub fn run_web() {
     use winit::platform::web::EventLoopExtWebSys;

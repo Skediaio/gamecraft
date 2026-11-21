@@ -2,8 +2,8 @@
 //! folder of text files, and how mods change it.
 //!
 //! A **pack** is a folder: a manifest (`pack.json`), prefab files (`prefabs/<id>.json`, one
-//! prefab each) and worlds (`worlds/<world>/world.json` for the terrain recipe, environment
-//! and scenario, and `worlds/<world>/layers/<layer>.json`, each a list of entities with string
+//! prefab each) and worlds (`worlds/<world>/world.json` for the terrain recipe, environment,
+//! view rules and scenario, and `worlds/<world>/layers/<layer>.json`, each a list of entities with string
 //! ids, one entity per line). A game is a pack with worlds; a mod is a pack that depends on
 //! the game. A project is a root pack and its dependencies.
 //!

@@ -151,3 +151,9 @@ pub const BEHAVIOUR_RANGE_MAX_M: f64 = 10_000.0;
 pub const AIM_ERROR_MAX_MRAD: f64 = 1000.0;
 /// Longest reaction or search time of a `behaviour`, seconds.
 pub const BEHAVIOUR_TIME_MAX_S: f64 = 3600.0;
+/// Narrowest vertical field of view of a world's player camera, degrees.
+pub const VIEW_FOV_MIN_DEG: f64 = 30.0;
+/// Widest vertical field of view of a world's player camera, degrees.
+pub const VIEW_FOV_MAX_DEG: f64 = 120.0;
+/// Farthest a `held_model` sits from the camera along any axis, metres.
+pub const HELD_OFFSET_MAX_M: f64 = 2.0;

@@ -330,6 +330,28 @@ const MODEL_FIELDS: &[Field] = &[
     ),
 ];
 
+const HELD_MODEL_FIELDS: &[Field] = &[
+    field(
+        "asset",
+        "string",
+        None,
+        "Required. The glTF asset's path inside the pack's assets/ folder, ending in .glb or \
+         .gltf (`models/rifle.glb`); its forward is -Z, as glTF faces.",
+    ),
+    field(
+        "offset_m",
+        "[right, up, forward]",
+        Some("m"),
+        "Where the model's origin sits from the eye along the aim, each -2 to 2.",
+    ),
+    field(
+        "scale",
+        "number",
+        None,
+        "Uniform scale of the asset, 0.001 to 1000; the entity's scale does not apply.",
+    ),
+];
+
 const LAUNCHER_FIELDS: &[Field] = &[
     field(
         "muzzle_velocity_mps",
@@ -577,6 +599,16 @@ const KINDS: &[Kind] = &[
         fields: MODEL_FIELDS,
         minimal: || json!({"type": "model", "asset": "models/crate.glb"}),
         example: || json!({"type": "model", "asset": "models/crate.glb", "scale": 1, "solid": true, "collider": "box"}),
+    },
+    Kind {
+        kind: "held_model",
+        summary: "What a character holds as seen from its own eyes (a weapon's view model): a \
+                  glTF model of a pack drawn at the first-person camera, pointing where the \
+                  character aims (not where a free-looking head turns), only while the \
+                  character is seen in first person.",
+        fields: HELD_MODEL_FIELDS,
+        minimal: || json!({"type": "held_model", "asset": "models/rifle.glb"}),
+        example: || json!({"type": "held_model", "asset": "models/rifle.glb", "offset_m": [0.12, -0.14, 0.32], "scale": 1}),
     },
 ];
 

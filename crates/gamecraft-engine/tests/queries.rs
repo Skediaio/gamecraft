@@ -726,7 +726,8 @@ fn component_list_describes_every_component_and_its_examples_parse() {
             "launcher",
             "health",
             "behaviour",
-            "model"
+            "model",
+            "held_model"
         ]
     );
     for c in list {

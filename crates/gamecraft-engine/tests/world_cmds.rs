@@ -1,4 +1,4 @@
-//! `world.set`, `terrain.set`, `terrain.clear`, `environment.set`.
+//! `world.set`, `terrain.set`, `terrain.clear`, `environment.set`, `view.set`.
 
 // Test code: clippy.toml allows these inside #[test] functions only, not in the helpers of an
 // integration test crate.
@@ -11,9 +11,9 @@
 
 mod common;
 
-use common::{example, refuse};
+use common::{example, playing, refuse};
 use gamecraft_engine::Session;
-use gamecraft_world::{TerrainSource, World};
+use gamecraft_world::{TerrainSource, ViewMode, World};
 use serde_json::json;
 
 #[test]
@@ -237,5 +237,88 @@ fn environment_set_refuses_out_of_range_values() {
         "environment.set",
         json!({"cloud": 0.5}),
         &["did you mean `cloud_cover`"],
+    );
+}
+
+#[test]
+fn view_set_changes_only_the_fields_given_and_world_inspect_shows_it() {
+    let mut s = example();
+    let before = s.run("world.inspect", &json!({"entities": false})).unwrap();
+    assert_eq!(
+        before["view"],
+        json!({"modes": ["third", "first"], "fov_y_deg": 70.0})
+    );
+    let r = s.run("view.set", &json!({"modes": ["first"]})).unwrap();
+    assert_eq!(r, json!({"view": {"modes": ["first"], "fov_y_deg": 70.0}}));
+    assert_eq!(s.document().view.modes, [ViewMode::First]);
+    let r = s.run("view.set", &json!({"fov_y_deg": 55.5})).unwrap();
+    assert_eq!(
+        r["view"]["modes"],
+        json!(["first"]),
+        "untouched fields keep their value"
+    );
+    assert_eq!(s.document().view.fov_y_deg, 55.5);
+    let after = s.run("world.inspect", &json!({"entities": false})).unwrap();
+    assert_eq!(
+        after["view"],
+        json!({"modes": ["first"], "fov_y_deg": 55.5})
+    );
+    // It is part of the document: in the file, and undone like any edit.
+    assert!(s.document().to_json().unwrap().contains("\"view\""));
+    s.undo().unwrap();
+    assert_eq!(s.document().view.fov_y_deg, 70.0);
+}
+
+#[test]
+fn view_set_acts_on_a_running_world_until_it_is_kept() {
+    let mut s = playing();
+    s.run("view.set", &json!({"modes": ["first"], "fov_y_deg": 90}))
+        .unwrap();
+    assert_eq!(s.current_world().view.modes, [ViewMode::First]);
+    assert_eq!(s.current_world().view.fov_y_deg, 90.0);
+    assert_eq!(s.document().view.modes, [ViewMode::Third, ViewMode::First]);
+    s.run("sim.stop", &json!({"keep": true})).unwrap();
+    assert_eq!(s.document().view.modes, [ViewMode::First]);
+}
+
+#[test]
+fn view_set_refuses_bad_values_naming_the_parameter() {
+    let mut s = example();
+    refuse(
+        &mut s,
+        "view.set",
+        json!({"modes": []}),
+        &["view.modes", "at least one"],
+    );
+    refuse(
+        &mut s,
+        "view.set",
+        json!({"modes": ["first", "first"]}),
+        &["view.modes", "once"],
+    );
+    refuse(
+        &mut s,
+        "view.set",
+        json!({"modes": ["second"]}),
+        &["`modes`", "\"first\""],
+    );
+    refuse(&mut s, "view.set", json!({"modes": "first"}), &["`modes`"]);
+    refuse(
+        &mut s,
+        "view.set",
+        json!({"fov_y_deg": 20}),
+        &["fov_y_deg", "30 to 120"],
+    );
+    refuse(
+        &mut s,
+        "view.set",
+        json!({"fov_y_deg": "wide"}),
+        &["`fov_y_deg`"],
+    );
+    refuse(
+        &mut s,
+        "view.set",
+        json!({"fov": 60}),
+        &["did you mean `fov_y_deg`"],
     );
 }

@@ -32,6 +32,7 @@ mod scenario;
 pub mod sculpt;
 mod terrain;
 pub mod tiles;
+mod view;
 mod world;
 
 #[cfg(test)]
@@ -45,8 +46,8 @@ pub use entity::{Entity, EntityDraft, EntityId, MAX_LAYER_CHARS, is_layer_name};
 pub use environment::{Environment, STANDARD_TEMPERATURE_C, SunPosition};
 pub use error::WorldError;
 pub use model::{
-    MAX_ASSET_PATH_CHARS, MODEL_EXTENSIONS, Model, ModelBounds, ModelBox, ModelCollider,
-    is_asset_path, is_model_path,
+    DEFAULT_HELD_OFFSET_M, HeldModel, MAX_ASSET_PATH_CHARS, MODEL_EXTENSIONS, Model, ModelBounds,
+    ModelBox, ModelCollider, is_asset_path, is_model_path,
 };
 pub use prefab::{Prefab, PrefabChild, Spawn, Spawned};
 pub use scenario::{
@@ -56,4 +57,5 @@ pub use scenario::{
 pub use sculpt::{PaintRule, TerrainEdit, TerrainLayer, is_terrain_layer_name};
 pub use terrain::{HeightField, Rebuilt, Terrain, TerrainSource};
 pub use tiles::CachedBuild;
+pub use view::{DEFAULT_FOV_Y_DEG, ViewMode, ViewRules};
 pub use world::{FORMAT_VERSION, World};

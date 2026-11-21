@@ -186,7 +186,7 @@ children with it, `entity.remove` removes them too.
 
 A game on disk is a **project**: a folder of text files you can read, diff and merge
 (`design/projects.md`). A pack has `pack.json` (`id`, `name`, `depends`, `worlds`), one
-`prefabs/<id>.json` per prefab, and per world `worlds/<world>/world.json` (terrain, environment,
+`prefabs/<id>.json` per prefab, and per world `worlds/<world>/world.json` (terrain, environment, view,
 scenario; `default_layer`, `layers` order) and `worlds/<world>/layers/<layer>.json`, one entity
 per line with a string `id` unique in its pack. A mod is a pack that depends on the game:
 packs load in dependency order and a later one changes an earlier one by id (a prefab file

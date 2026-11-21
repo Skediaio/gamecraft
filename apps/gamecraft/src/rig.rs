@@ -4,10 +4,10 @@
 use crate::pose::Pose;
 use gamecraft_math::{DVec3, deg_to_rad, yaw_forward};
 use gamecraft_render::Camera;
-use gamecraft_world::HeightField;
+use gamecraft_world::{HeightField, ViewRules};
 
-/// Vertical field of view of both views, degrees.
-pub const FOV_DEG: f64 = 70.0;
+/// Vertical field of view of both views unless the world or the player sets one, degrees.
+pub const FOV_DEG: f64 = gamecraft_world::DEFAULT_FOV_Y_DEG;
 /// How far ahead of the eyes the first-person camera looks, metres.
 const LOOK_AHEAD_M: f64 = 10.0;
 /// The third-person boom's full length from the point looked at, metres.
@@ -40,6 +40,47 @@ impl ViewMode {
         match self {
             ViewMode::FirstPerson => ViewMode::ThirdPerson,
             ViewMode::ThirdPerson => ViewMode::FirstPerson,
+        }
+    }
+
+    /// The camera of a world's view mode.
+    pub fn of(mode: gamecraft_world::ViewMode) -> ViewMode {
+        match mode {
+            gamecraft_world::ViewMode::First => ViewMode::FirstPerson,
+            gamecraft_world::ViewMode::Third => ViewMode::ThirdPerson,
+        }
+    }
+
+    /// The first view the world's `rules` allow (the one a window starts in); third person
+    /// for rules that allow none (an invalid world).
+    pub fn first_allowed(rules: &ViewRules) -> ViewMode {
+        rules
+            .modes
+            .first()
+            .map_or(ViewMode::ThirdPerson, |m| ViewMode::of(*m))
+    }
+
+    /// This view if `rules` allow it, else the first they allow (the rules changed while
+    /// playing).
+    pub fn allowed(self, rules: &ViewRules) -> ViewMode {
+        if rules.modes.iter().any(|m| ViewMode::of(*m) == self) {
+            self
+        } else {
+            ViewMode::first_allowed(rules)
+        }
+    }
+
+    /// The view after this one among those `rules` allow, in their order, round again after
+    /// the last; with only one allowed, that one.
+    pub fn next_allowed(self, rules: &ViewRules) -> ViewMode {
+        let modes: Vec<ViewMode> = rules.modes.iter().map(|m| ViewMode::of(*m)).collect();
+        match modes.iter().position(|m| *m == self) {
+            Some(i) => modes
+                .get(i + 1)
+                .or_else(|| modes.first())
+                .copied()
+                .unwrap_or(self),
+            None => ViewMode::first_allowed(rules),
         }
     }
 }

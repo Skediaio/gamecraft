@@ -12,8 +12,8 @@ use crate::{Camera, Quality, RenderError};
 use crate::{Picture, PictureRequest, PictureStats};
 use gamecraft_math::{DQuat, DVec3, deg_to_rad};
 use gamecraft_world::{
-    Character, Entity, EntityId, Environment, HeightField, Model, Plant, Shape, ShapeKind, Terrain,
-    TerrainLayer, World,
+    Character, Entity, EntityId, Environment, HeightField, HeldModel, Model, Plant, Shape,
+    ShapeKind, Terrain, TerrainLayer, World,
 };
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
@@ -62,6 +62,9 @@ const GLTF_EMISSIVE_CD_M2: f32 = 1_000.0;
 const MISSING_MODEL_COLOR: [f32; 3] = [1.0, 0.0, 1.0];
 /// The stand-in's side, metres (times the entity's and the model's scale).
 const MISSING_MODEL_SIZE_M: f64 = 0.5;
+/// The stand-in of a held model that cannot be drawn: a magenta box this wide, metres (times
+/// the held model's scale), small enough not to fill a first-person view.
+const MISSING_HELD_SIZE_M: f64 = 0.06;
 /// Most entities a problem line about one model names.
 const MAX_NAMED_ENTITIES: usize = 8;
 
@@ -101,6 +104,56 @@ struct Built {
     textures: Vec<vc::TextureId>,
     /// The character items, whose instances follow the characters without a rebuild.
     characters: Vec<CharacterGroup>,
+    /// The held-model items, whose single instance follows the first-person aim without a
+    /// rebuild.
+    held: Vec<HeldGroup>,
+}
+
+/// One held-model item: the entities whose `held_model` it draws (one asset, or the stand-in
+/// for those that cannot be drawn), and where it drew one now (none, or the hidden character's
+/// at the aim).
+struct HeldGroup {
+    item: vc::ItemId,
+    held: Vec<(EntityId, HeldModel)>,
+    /// The model's size on top of its scale: 1, or the stand-in's side.
+    size: f64,
+    instances: Vec<Mat4>,
+}
+
+/// Where a first-person view model is held: the eye, and the aim's yaw (degrees
+/// counter-clockwise from north seen from above) and pitch (degrees up from level). The aim
+/// is where the character points, not where a free-looking head turns.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewModelAim {
+    /// The eye, world metres.
+    pub eye: [f64; 3],
+    /// The aim's facing, degrees.
+    pub yaw_deg: f64,
+    /// The aim's tilt, degrees up.
+    pub pitch_deg: f64,
+}
+
+/// Where a held model is drawn for `aim`: turned to the aim (its -Z forward along it), its
+/// origin `offset_m` (right, up, forward) from the eye in the aim's axes, scaled by its scale
+/// times `size`. `None` when a number is not finite.
+fn held_pose(aim: &ViewModelAim, held: &HeldModel, size: f64) -> Option<Mat4> {
+    let finite = aim
+        .eye
+        .iter()
+        .chain(&held.offset_m)
+        .chain(&[aim.yaw_deg, aim.pitch_deg, held.scale, size])
+        .all(|v| v.is_finite());
+    if !finite {
+        return None;
+    }
+    let turn = DQuat::from_rotation_y(deg_to_rad(aim.yaw_deg))
+        * DQuat::from_rotation_x(deg_to_rad(aim.pitch_deg));
+    let [right, up, forward] = held.offset_m;
+    let at = DVec3::from_array(aim.eye) + turn * DVec3::new(right, up, -forward);
+    Some(
+        glam::DMat4::from_scale_rotation_translation(DVec3::splat(held.scale * size), turn, at)
+            .as_mat4(),
+    )
 }
 
 /// One character item: the characters it draws, in instance order, and where it drew them.
@@ -151,11 +204,16 @@ struct DrawnEntity {
     plant: Option<Plant>,
     character: Option<Character>,
     model: Option<Model>,
+    held: Option<HeldModel>,
 }
 
 /// Whether an entity draws anything (a zone, a light or tags alone draw nothing).
 fn draws(e: &Entity) -> bool {
-    e.shape().is_some() || e.plant().is_some() || e.character().is_some() || e.model().is_some()
+    e.shape().is_some()
+        || e.plant().is_some()
+        || e.character().is_some()
+        || e.model().is_some()
+        || e.held_model().is_some()
 }
 
 impl DrawnEntity {
@@ -174,6 +232,7 @@ impl DrawnEntity {
             plant: plant.cloned(),
             character: character.cloned(),
             model: e.model().cloned(),
+            held: e.held_model().cloned(),
         })
     }
 
@@ -186,6 +245,7 @@ impl DrawnEntity {
             && self.plant.as_ref() == e.plant()
             && self.character.as_ref() == e.character()
             && self.model.as_ref() == e.model()
+            && self.held.as_ref() == e.held_model()
             && (walks || self.pose == Some((e.position, e.rotation_y_deg)))
     }
 }
@@ -277,6 +337,8 @@ pub struct WorldRenderer {
     light_problem: Option<String>,
     /// The character left out of the picture (a first-person view's own body).
     hidden: Option<EntityId>,
+    /// Where the hidden character's held model is drawn, if anywhere.
+    view_model: Option<ViewModelAim>,
     /// How many times the scene's geometry was built.
     rebuilds: u64,
     units: Option<UnitMeshes>,
@@ -397,6 +459,7 @@ impl WorldRenderer {
             spots: Vec::new(),
             light_problem: None,
             hidden: None,
+            view_model: None,
             rebuilds: 0,
             units,
             terrain_material,
@@ -460,6 +523,7 @@ impl WorldRenderer {
             self.synced = Some(GeometryKey::of(world, heights, self.assets_revision));
             self.move_characters(world);
         }
+        self.move_view_model();
         self.problems()
     }
 
@@ -475,6 +539,16 @@ impl WorldRenderer {
     /// light still shines. No rebuild.
     pub fn set_hidden_character(&mut self, id: Option<EntityId>) {
         self.hidden = id;
+        self.move_view_model();
+    }
+
+    /// Draws the `held_model` of the hidden character ([`WorldRenderer::set_hidden_character`])
+    /// at `aim`, or no held model with `None` (the default; pictures never carry one). A
+    /// first-person view's weapon: the window sets the aim every frame, which moves one
+    /// instance; no rebuild. A held model whose asset cannot be drawn is a small magenta box.
+    pub fn set_view_model(&mut self, aim: Option<ViewModelAim>) {
+        self.view_model = aim;
+        self.move_view_model();
     }
 
     /// Hands the renderer what is in flight and what just hit: tracers become thin bright
@@ -652,6 +726,27 @@ impl WorldRenderer {
         }
     }
 
+    /// Puts the hidden character's held model at the view model's aim, and every other held
+    /// model nowhere.
+    fn move_view_model(&mut self) {
+        let (hidden, aim) = (self.hidden, self.view_model);
+        for group in &mut self.built.held {
+            let instances: Vec<Mat4> = match (hidden, aim.as_ref()) {
+                (Some(id), Some(aim)) => group
+                    .held
+                    .iter()
+                    .filter(|(e, _)| *e == id)
+                    .filter_map(|(_, held)| held_pose(aim, held, group.size))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            if instances != group.instances {
+                self.renderer.set_instances(group.item, &instances);
+                group.instances = instances;
+            }
+        }
+    }
+
     /// Draws the synced scene and waits for the pixels (native only).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn render(&mut self, request: &PictureRequest) -> Result<Picture, RenderError> {
@@ -796,6 +891,13 @@ impl WorldRenderer {
             &mut self.model_uploads,
             self.units,
         );
+        scene.held_models(
+            world,
+            &mut self.models,
+            &self.asset_files,
+            &mut self.model_uploads,
+            self.units,
+        );
         scene.characters(world);
         scene.plants(world);
         self.problems = problems;
@@ -840,6 +942,7 @@ fn vc_light(s: &light::Spot) -> vc::Light {
 /// Removes everything a build added.
 fn free(r: &mut vc::Renderer, built: &mut Built) {
     built.characters.clear();
+    built.held.clear();
     for id in built.items.drain(..) {
         r.remove_item(id);
     }
@@ -851,6 +954,23 @@ fn free(r: &mut vc::Renderer, built: &mut Built) {
     }
     for id in built.textures.drain(..) {
         r.remove_texture(id);
+    }
+}
+
+/// Reads and uploads the model `asset` unless it is resident (or known not to be drawable).
+fn ensure_resident(
+    r: &mut vc::Renderer,
+    resident: &mut BTreeMap<String, Result<ResidentModel, String>>,
+    asset: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+    uploads: &mut u64,
+) {
+    if !resident.contains_key(asset) {
+        let made = upload_model(r, asset, files);
+        if made.is_ok() {
+            *uploads += 1;
+        }
+        resident.insert(asset.to_string(), made);
     }
 }
 
@@ -1259,13 +1379,7 @@ impl Scene<'_> {
                 .iter()
                 .copied()
                 .partition(|e| e.character().is_some());
-            if !resident.contains_key(&asset) {
-                let made = upload_model(self.r, &asset, files);
-                if made.is_ok() {
-                    *uploads += 1;
-                }
-                resident.insert(asset.clone(), made);
-            }
+            ensure_resident(self.r, resident, &asset, files, uploads);
             match resident.get(&asset) {
                 None => {}
                 Some(Ok(m)) => {
@@ -1345,6 +1459,88 @@ impl Scene<'_> {
                 ids: missing_characters.iter().map(|e| e.id).collect(),
                 instances,
                 body,
+            });
+        }
+    }
+
+    /// Held models: one item per asset (sharing the upload of [`Scene::models`]) holding every
+    /// entity that holds it, with no instance until a view model's aim is set
+    /// ([`WorldRenderer::set_view_model`]); the entities whose asset cannot be drawn share a
+    /// small magenta box, with a problem line.
+    fn held_models(
+        &mut self,
+        world: &World,
+        resident: &mut BTreeMap<String, Result<ResidentModel, String>>,
+        files: &BTreeMap<String, Vec<u8>>,
+        uploads: &mut u64,
+        units: Option<UnitMeshes>,
+    ) {
+        let mut groups: BTreeMap<String, Vec<&Entity>> = BTreeMap::new();
+        for e in world.entities() {
+            if let Some(h) = e.held_model() {
+                groups.entry(h.asset.clone()).or_default().push(e);
+            }
+        }
+        let held_of = |entities: &[&Entity]| -> Vec<(EntityId, HeldModel)> {
+            entities
+                .iter()
+                .filter_map(|e| e.held_model().map(|h| (e.id, h.clone())))
+                .collect()
+        };
+        let mut missing: Vec<(EntityId, HeldModel)> = Vec::new();
+        for (asset, entities) in groups {
+            ensure_resident(self.r, resident, &asset, files, uploads);
+            match resident.get(&asset) {
+                None => {}
+                Some(Ok(m)) => {
+                    let shown_as_model = world
+                        .entities()
+                        .any(|e| e.model().is_some_and(|shown| shown.asset == asset));
+                    if let (Some(note), false) = (&m.note, shown_as_model) {
+                        self.problems.push(format!("Model `{asset}`: {note}"));
+                    }
+                    let lods: Vec<(vc::MeshId, vc::MaterialId, f32)> = m
+                        .parts
+                        .iter()
+                        .map(|&(mesh, material)| (mesh, material, f32::INFINITY))
+                        .collect();
+                    let item = self.r.add_lod_item(&lods, &[]);
+                    self.built.items.push(item);
+                    self.built.held.push(HeldGroup {
+                        item,
+                        held: held_of(&entities),
+                        size: 1.0,
+                        instances: Vec::new(),
+                    });
+                }
+                Some(Err(why)) => {
+                    let named: Vec<String> = entities
+                        .iter()
+                        .take(MAX_NAMED_ENTITIES)
+                        .map(|e| format!("{} \"{}\"", e.id, e.name))
+                        .collect();
+                    let more = match entities.len().saturating_sub(MAX_NAMED_ENTITIES) {
+                        0 => String::new(),
+                        n => format!(" and {n} more"),
+                    };
+                    self.problems.push(format!(
+                        "Held model `{asset}` of entity {}{more} cannot be drawn: {why}; in \
+                         first person it is drawn as a small magenta box.",
+                        named.join(", ")
+                    ));
+                    missing.extend(held_of(&entities));
+                }
+            }
+        }
+        let Some(units) = units else { return };
+        if !missing.is_empty() {
+            let material = self.color(MISSING_MODEL_COLOR);
+            let item = self.add_item(&[(units.cube, material)], &[]);
+            self.built.held.push(HeldGroup {
+                item,
+                held: missing,
+                size: MISSING_HELD_SIZE_M,
+                instances: Vec::new(),
             });
         }
     }
@@ -1624,6 +1820,79 @@ mod tests {
             !still_matches_while_walking(&mut world, id),
             "a model without a character is static geometry"
         );
+    }
+
+    fn rifle(offset_m: [f64; 3], scale: f64) -> HeldModel {
+        HeldModel {
+            asset: "models/rifle.glb".into(),
+            offset_m,
+            scale,
+        }
+    }
+
+    #[test]
+    fn a_held_model_follows_the_aim_without_a_rebuild_but_a_new_one_rebuilds() {
+        let (mut world, id) = world_with(vec![
+            Component::Character(Character::default()),
+            Component::HeldModel(rifle([0.12, -0.14, 0.32], 1.0)),
+        ]);
+        assert!(
+            still_matches_while_walking(&mut world, id),
+            "walking with a held model keeps the geometry"
+        );
+        let key = GeometryKey::of(&world, None, 0);
+        world
+            .entity_mut(id)
+            .unwrap()
+            .set_component(Component::HeldModel(rifle([0.2, -0.14, 0.32], 1.0)));
+        assert!(!key.matches(&world, None, 0), "another offset rebuilds");
+    }
+
+    #[test]
+    fn a_held_model_sits_at_its_offset_along_the_aim() {
+        let close = |a: Vec3, b: Vec3| (a - b).length() < 1e-5;
+        let held = rifle([0.1, -0.2, 0.5], 2.0);
+        let level = ViewModelAim {
+            eye: [1.0, 1.6, 3.0],
+            yaw_deg: 0.0,
+            pitch_deg: 0.0,
+        };
+        let m = held_pose(&level, &held, 1.0).unwrap();
+        // Facing north (-Z): right is +X, forward -Z.
+        assert!(close(
+            m.transform_point3(Vec3::ZERO),
+            Vec3::new(1.1, 1.4, 2.5)
+        ));
+        assert!(close(
+            m.transform_vector3(Vec3::NEG_Z),
+            Vec3::new(0.0, 0.0, -2.0)
+        ));
+        // Turned 90 degrees counter-clockwise (west, -X) and tilted 30 degrees up: the model's
+        // forward is the aim's direction, its origin forward and to the right along it.
+        let aim = ViewModelAim {
+            yaw_deg: 90.0,
+            pitch_deg: 30.0,
+            ..level
+        };
+        let m = held_pose(&aim, &rifle([0.0, 0.0, 1.0], 1.0), 1.0).unwrap();
+        let (s, c) = (0.5_f32, 3.0_f32.sqrt() / 2.0);
+        let forward = Vec3::new(-c, s, 0.0);
+        assert!(close(m.transform_vector3(Vec3::NEG_Z), forward));
+        assert!(close(
+            m.transform_point3(Vec3::ZERO),
+            Vec3::new(1.0, 1.6, 3.0) + forward
+        ));
+        let m = held_pose(&aim, &rifle([1.0, 0.0, 0.0], 1.0), 1.0).unwrap();
+        assert!(close(
+            m.transform_point3(Vec3::ZERO),
+            Vec3::new(1.0, 1.6, 2.0)
+        ));
+        // Not finite: nowhere.
+        let bad = ViewModelAim {
+            pitch_deg: f64::NAN,
+            ..level
+        };
+        assert!(held_pose(&bad, &held, 1.0).is_none());
     }
 
     #[test]

@@ -105,12 +105,21 @@ pub(crate) fn bounds(catalog: &Catalog) -> BTreeMap<String, ModelBounds> {
         .collect()
 }
 
-/// The model assets `world` refers to, each with the entities that use it, in id order.
+/// The model assets `world` refers to (`model` and `held_model` components), each with the
+/// entities that use it, in id order.
 fn used(world: &World) -> BTreeMap<String, Vec<EntityId>> {
     let mut out: BTreeMap<String, Vec<EntityId>> = BTreeMap::new();
     for e in world.entities() {
-        if let Some(m) = e.model() {
-            out.entry(m.asset.clone()).or_default().push(e.id);
+        let assets = e
+            .model()
+            .map(|m| &m.asset)
+            .into_iter()
+            .chain(e.held_model().map(|h| &h.asset));
+        for asset in assets {
+            let ids = out.entry(asset.clone()).or_default();
+            if ids.last() != Some(&e.id) {
+                ids.push(e.id);
+            }
         }
     }
     out

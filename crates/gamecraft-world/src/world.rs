@@ -5,7 +5,7 @@ use crate::limits::{MAX_ENTITIES, MAX_HIERARCHY_DEPTH, MAX_PREFABS};
 use crate::prefab::{check_components, place_child, relative};
 use crate::{
     Component, Entity, EntityDraft, EntityId, Environment, ModelBounds, ModelBox, Objective,
-    Prefab, Spawn, Spawned, Terrain, Trigger, VarValue, WorldError,
+    Prefab, Spawn, Spawned, Terrain, Trigger, VarValue, ViewRules, WorldError,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -34,6 +34,8 @@ pub struct World {
     pub terrain: Option<Terrain>,
     /// Time, place and weather.
     pub environment: Environment,
+    /// Which views a player may use and how wide the player's camera sees.
+    pub view: ViewRules,
     /// The scenario's variables, by name: numbers, booleans or strings. Commands set them;
     /// trigger conditions read them.
     pub vars: BTreeMap<String, VarValue>,
@@ -65,6 +67,9 @@ struct WorldFile {
     terrain: Option<Terrain>,
     #[serde(default)]
     environment: Environment,
+    /// Written only when not the default.
+    #[serde(default, skip_serializing_if = "ViewRules::is_default")]
+    view: ViewRules,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     prefabs: Vec<Prefab>,
     /// Absent: one more than the highest entity id.
@@ -240,6 +245,7 @@ impl World {
             seed,
             terrain: None,
             environment: Environment::default(),
+            view: ViewRules::default(),
             vars: BTreeMap::new(),
             objectives: Vec::new(),
             triggers: Vec::new(),
@@ -619,7 +625,7 @@ impl World {
 
     /// Checks every invariant of the document and reports the first violation, naming the
     /// entity (if any), the field, the value and what is allowed: the world name, the
-    /// terrain, the environment, the entity count, `next_entity_id`, every entity (in id
+    /// terrain, the environment, the view rules, the entity count, `next_entity_id`, every entity (in id
     /// order) with its components, and the scenario: variables, objectives and triggers.
     pub fn validate(&self) -> Result<(), WorldError> {
         let ctx = Ctx::WORLD;
@@ -628,6 +634,7 @@ impl World {
             terrain.validate()?;
         }
         self.environment.validate()?;
+        self.view.validate()?;
         if self.entities.len() > MAX_ENTITIES {
             return Err(WorldError::TooManyEntities {
                 count: self.entities.len(),
@@ -759,6 +766,7 @@ impl World {
             seed: self.seed,
             terrain: self.terrain.clone(),
             environment: self.environment.clone(),
+            view: self.view.clone(),
             prefabs: self.prefabs.clone(),
             next_entity_id: Some(self.next_entity_id),
             entities: self
@@ -829,6 +837,7 @@ impl World {
             seed: file.seed,
             terrain: file.terrain,
             environment: file.environment,
+            view: file.view,
             vars: file.vars,
             objectives: file.objectives,
             triggers: file.triggers,

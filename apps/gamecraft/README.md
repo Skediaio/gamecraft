@@ -13,9 +13,17 @@ cargo run -p gamecraft --release                      # the engine's example val
 cargo run -p gamecraft --release -- my.gamecraft      # a world file
 cargo run -p gamecraft --release -- --quality low     # low, medium (default) or high
 cargo run -p gamecraft --release -- --invert-look     # a gamepad's right stick up looks down
+cargo run -p gamecraft --release -- --fov 90          # your own vertical field of view, 30 to 120
 ```
 
-The first character in id order is the player. Keys:
+The first character in id order is the player. The world's view rules (`view.set`, the `view`
+section of the document: `modes` and `fov_y_deg`) say which views the player may use and how
+wide the camera sees. The window starts in the first view listed (third person for a world
+without rules, which allows both), and F1 or select switches only among those listed: a world
+with `"modes": ["first"]` stays in first person. The camera's vertical field of view is the
+world's `fov_y_deg` (70 by default) unless `--fov` (natively) or `?fov=` (browser) sets the
+player's own. In first person the player's `held_model` (a weapon's view model) is drawn at the
+camera along the aim. Keys:
 
 | Key | Does |
 |---|---|
@@ -25,9 +33,10 @@ The first character in id order is the player. Keys:
 | Space | jump |
 | E | interact (`sim.input`'s `interact`) |
 | mouse | turn (the input's `yaw_deg`) and look up and down (the camera, and the input's `pitch_deg` for a launcher); click the window to lock the pointer |
+| Left Alt, held | free look: the mouse (and the right stick) turns only the head, at most 100 degrees to either side and within the usual tilt; the character's facing, its aim and its held model stay; let go and the camera is back on the aim |
 | left button | fire the character's launcher (`fire`) once the pointer is locked; tracers, impact puffs and, in first person, a crosshair are drawn |
 | Esc | release the pointer |
-| F1 | first or third person |
+| F1 | the next view the world allows (first or third person) |
 | F5 | restart the simulation from the document |
 | P | pause |
 
@@ -47,7 +56,7 @@ and the right stick adds to the mouse's look.
 | west button (X, square) | interact |
 | right trigger | fire |
 | start | pause |
-| select | first or third person |
+| select | the next view the world allows |
 
 New scenario messages and objective changes are printed to stderr, and the newest message is
 in the window's title.
@@ -84,8 +93,10 @@ trunk serve --release                 # http://127.0.0.1:8080
 trunk build --release                 # or a static build in apps/gamecraft/dist
 ```
 
-The page takes three query parameters: `?world=<url>` fetches a `.gamecraft` file (same origin,
-or one that allows it), otherwise the example world opens; `?quality=low|medium|high`; `?invert_look=1` inverts a gamepad's look. Click
+The page takes these query parameters: `?world=<url>` fetches a `.gamecraft` file (same origin,
+or one that allows it), otherwise the example world opens; `?quality=low|medium|high`; `?invert_look=1` inverts a gamepad's look; `?fov=90` sets your own
+vertical field of view, 30 to 120 degrees (a bad value is told on the console and the world's is
+used). Click
 the canvas to look around with the mouse; the keys are the same as natively, and messages go
 to the browser's console. When the browser offers no WebGPU, the page says so and how to turn
 it on.

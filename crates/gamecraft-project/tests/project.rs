@@ -14,7 +14,7 @@ mod common;
 
 use common::{apply, canonical, load_one, pack, pack_of, packs, village};
 use gamecraft_project::{Manifest, PackSource, Project, dependency_order};
-use gamecraft_world::{Component, Health, Light, World};
+use gamecraft_world::{Component, Health, Light, ViewMode, ViewRules, World};
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -411,6 +411,77 @@ fn a_mod_world_change_is_a_minimal_patch() {
         json!({"gamecraft_world": 1, "environment": {"rain": 0.3, "wind_speed_mps": 12.0}}),
         "{text}"
     );
+}
+
+#[test]
+fn a_mod_world_json_sets_the_view_rules_and_the_export_keeps_them() {
+    let mut all = three_packs();
+    // Without view rules anywhere the world has the default ones.
+    let (_, world) = Project::load("night", &all, None).unwrap();
+    assert_eq!(world.view, ViewRules::default());
+    all.get_mut("night").unwrap().files.insert(
+        "worlds/village/world.json".into(),
+        r#"{"gamecraft_world": 1, "environment": {"rain": 0.3}, "view": {"modes": ["first"]}}"#
+            .into(),
+    );
+    let (project, world) = Project::load("night", &all, None).unwrap();
+    assert_eq!(world.view.modes, [ViewMode::First]);
+    assert_eq!(
+        world.view.fov_y_deg, 70.0,
+        "a field left out keeps its default"
+    );
+    assert_eq!(world.environment.rain, 0.3);
+    assert_eq!(project.provenance().world_fields["view"], "night");
+    assert!(project.plan_save(&world).unwrap().plan.is_empty());
+    // The `.gamecraft` file of the layered world keeps them (project.export writes to_json).
+    let exported = World::from_json(&world.to_json().unwrap()).unwrap();
+    assert_eq!(exported.view, world.view);
+    // A mod over the mod changes one field: the patch holds only that field.
+    let (project, mut world) = Project::load("night", &all, None).unwrap();
+    world.view.fov_y_deg = 85.0;
+    let saving = project.plan_save(&world).unwrap();
+    let patch: serde_json::Value =
+        serde_json::from_str(&saving.plan.writes["worlds/village/world.json"]).unwrap();
+    assert_eq!(
+        patch,
+        json!({"gamecraft_world": 1, "environment": {"rain": 0.3},
+               "view": {"modes": ["first"], "fov_y_deg": 85.0}})
+    );
+    apply(all.get_mut("night").unwrap(), &saving.plan);
+    let (_, reloaded) = Project::load("night", &all, None).unwrap();
+    assert_eq!(reloaded.view.fov_y_deg, 85.0);
+    assert_eq!(reloaded.view.modes, [ViewMode::First]);
+    // A bad value in a mod is refused with the field.
+    all.get_mut("night").unwrap().files.insert(
+        "worlds/village/world.json".into(),
+        r#"{"gamecraft_world": 1, "view": {"modes": []}}"#.into(),
+    );
+    let e = Project::load("night", &all, None).unwrap_err().to_string();
+    assert!(e.contains("view.modes"), "{e}");
+}
+
+#[test]
+fn a_game_saves_its_view_rules_into_its_own_world_json() {
+    let (mut source, _, _) = game();
+    let (mut project, mut world) = load_one("game", &source);
+    let text = source.files["worlds/village/world.json"].clone();
+    assert!(
+        !text.contains("view"),
+        "default rules are not written: {text}"
+    );
+    world.view = ViewRules {
+        modes: vec![ViewMode::First],
+        fov_y_deg: 60.0,
+    };
+    let saving = project.plan_save(&world).unwrap();
+    assert_eq!(
+        saving.plan.writes.keys().collect::<Vec<_>>(),
+        vec!["worlds/village/world.json"]
+    );
+    apply(&mut source, &saving.plan);
+    project.finish_save(saving);
+    let (_, reloaded) = load_one("game", &source);
+    assert_eq!(reloaded.view, world.view);
 }
 
 #[test]

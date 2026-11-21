@@ -15,7 +15,7 @@ use crate::rig::{self, ViewMode};
 use gamecraft_automation::{Access, Host, rpc};
 use gamecraft_engine::Session;
 use gamecraft_render::effects::IMPACT_LIFE_S;
-use gamecraft_render::{Camera, Effects, Impact, Tracer};
+use gamecraft_render::{Camera, Effects, Impact, Tracer, ViewModelAim};
 use gamecraft_sim::DT;
 use gamecraft_world::{EntityId, HeightField, World};
 use serde_json::{Value, json};
@@ -30,7 +30,10 @@ pub struct Game {
     pad: PadMapper,
     step: FixedStep,
     poses: Poses,
+    /// The view chosen; [`Game::view`] is what the world's rules allow of it.
     view: ViewMode,
+    /// The player's own vertical field of view (`--fov`, `?fov=`), over the world's.
+    fov_override: Option<f64>,
     paused: bool,
     /// The input record last stored for the player: a record is sent only when it changes.
     sent: Option<(EntityId, InputRecord)>,
@@ -77,15 +80,18 @@ impl Game {
         Ok(Game::with_host(host))
     }
 
-    /// A game on `host`'s document, the simulation started.
+    /// A game on `host`'s document, the simulation started, in the first view the world
+    /// allows.
     fn with_host(host: Host) -> Game {
+        let view = ViewMode::first_allowed(&host.session().current_world().view);
         let mut game = Game {
             host,
             controls: Controls::default(),
             pad: PadMapper::default(),
             step: FixedStep::new(DT),
             poses: Poses::default(),
-            view: ViewMode::default(),
+            view,
+            fov_override: None,
             paused: false,
             sent: None,
             notices: Notices::default(),
@@ -138,9 +144,28 @@ impl Game {
             .map(|e| e.id)
     }
 
-    /// The camera that follows the player.
+    /// The camera that follows the player: the one chosen, if the world's view rules allow it
+    /// (they may change while playing), else the first they allow.
     pub fn view(&self) -> ViewMode {
-        self.view
+        self.view.allowed(&self.session().current_world().view)
+    }
+
+    /// The player's own vertical field of view in degrees (30 to 120, checked by the caller:
+    /// `args::parse_fov`), over the world's `view.fov_y_deg`; `None` uses the world's.
+    pub fn set_fov(&mut self, fov_y_deg: Option<f64>) {
+        self.fov_override = fov_y_deg.filter(|f| f.is_finite());
+    }
+
+    /// The vertical field of view of the player's camera, degrees: the player's own, else the
+    /// world's.
+    pub fn fov_y_deg(&self) -> f64 {
+        self.fov_override
+            .unwrap_or(self.session().current_world().view.fov_y_deg)
+    }
+
+    /// Whether free look is held (Left Alt): the camera may look away from the aim.
+    pub fn is_freelooking(&self) -> bool {
+        self.controls.is_freelooking()
     }
 
     /// Whether the simulation is paused (P).
@@ -148,7 +173,8 @@ impl Game {
         self.paused
     }
 
-    /// A key went down or up. Window keys act here (F1, F5, P); the action is returned so the
+    /// A key went down or up. Window keys act here (F1, F5, P; Left Alt holds free look); the
+    /// action is returned so the
     /// window can do its part (Esc releases the pointer).
     pub fn key(&mut self, key: Key, pressed: bool) -> Option<Action> {
         let action = self.controls.key(key, pressed);
@@ -172,7 +198,10 @@ impl Game {
     /// Does what a window action asks of the game itself.
     fn act(&mut self, action: Option<Action>) {
         match action {
-            Some(Action::ToggleView) => self.view = self.view.toggled(),
+            Some(Action::ToggleView) => {
+                let rules = self.session().current_world().view.clone();
+                self.view = self.view().next_allowed(&rules);
+            }
             Some(Action::Restart) => self.restart(),
             Some(Action::Pause) => {
                 self.paused = !self.paused;
@@ -253,36 +282,56 @@ impl Game {
         self.told.push("Restarted".to_string());
     }
 
+    /// The player's interpolated pose and eye height, if there is a player.
+    fn player_pose(&self) -> Option<(Pose, f64)> {
+        let world = self.session().current_world();
+        let id = self.player()?;
+        let entity = world.entity(id)?;
+        let character = entity.character()?;
+        let pose = self.poses.at(id, self.step.alpha()).unwrap_or(Pose {
+            position: entity.position,
+            yaw_deg: entity.rotation_y_deg,
+        });
+        Some((pose, character.eye_height_m))
+    }
+
     /// The camera of the view, for a picture of width / height `aspect`: the player's eyes or
-    /// boom at its interpolated pose; without a player, a view of the whole world.
+    /// boom at its interpolated pose, looking where the head looks (the aim, unless free look
+    /// is held), as wide as [`Game::fov_y_deg`]; without a player, a view of the whole world.
     pub fn camera(&self, aspect: f64) -> Camera {
         let session = self.session();
         let world = session.current_world();
         let heights = session.current_heights();
-        let alpha = self.step.alpha();
-        let player = self
-            .player()
-            .and_then(|id| world.entity(id).map(|e| (id, e)))
-            .and_then(|(id, e)| e.character().map(|c| (id, e, c)));
-        let Some((id, entity, character)) = player else {
+        let Some((pose, eye_height_m)) = self.player_pose() else {
             return Camera::framing(world, heights, aspect);
         };
-        let pose = self.poses.at(id, alpha).unwrap_or(Pose {
-            position: entity.position,
-            yaw_deg: entity.rotation_y_deg,
-        });
-        let (yaw, pitch) = (self.controls.yaw_deg(), self.controls.pitch_deg());
-        let camera = match self.view {
-            ViewMode::FirstPerson => rig::first_person(&pose, character.eye_height_m, yaw, pitch),
-            ViewMode::ThirdPerson => {
-                rig::third_person(&pose, character.eye_height_m, yaw, pitch, heights)
-            }
+        let (yaw, pitch) = self.controls.view_deg();
+        let mut camera = match self.view() {
+            ViewMode::FirstPerson => rig::first_person(&pose, eye_height_m, yaw, pitch),
+            ViewMode::ThirdPerson => rig::third_person(&pose, eye_height_m, yaw, pitch, heights),
         };
+        camera.fov_y_deg = self.fov_y_deg();
         if camera.validate().is_ok() {
             camera
         } else {
             Camera::framing(world, heights, aspect)
         }
+    }
+
+    /// Where the player's held model (a weapon's view model) is drawn: in first person, at the
+    /// eyes along the aim (the input record's yaw and pitch), which free look does not turn;
+    /// `None` in third person or without a player.
+    pub fn view_model_aim(&self) -> Option<ViewModelAim> {
+        if self.view() != ViewMode::FirstPerson {
+            return None;
+        }
+        let (pose, eye_height_m) = self.player_pose()?;
+        let [x, y, z] = pose.position;
+        Some(ViewModelAim {
+            eye: [x, y + eye_height_m, z],
+            yaw_deg: self.controls.yaw_deg(),
+            pitch_deg: self.controls.pitch_deg(),
+        })
     }
 
     /// What is in flight and what just hit, for the renderer: a streak behind the head of each
@@ -338,7 +387,7 @@ impl Game {
 
     /// The character not to draw: the player in first person (the camera is inside it).
     pub fn hidden_character(&self) -> Option<EntityId> {
-        match self.view {
+        match self.view() {
             ViewMode::FirstPerson => self.player(),
             ViewMode::ThirdPerson => None,
         }

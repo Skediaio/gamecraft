@@ -2,9 +2,12 @@
 //!
 //! W and S walk forward and back, A and D strafe, Shift runs, Space jumps, E interacts; the
 //! mouse turns the character (the record's `yaw_deg`) and tilts the camera; the left button
-//! fires the character's launcher along that tilt (the record's `fire` and `pitch_deg`). F1 toggles first and third person, F5 restarts the simulation, P pauses
-//! and Esc releases the pointer: those are [`Action`]s for the window, not input.
+//! fires the character's launcher along that tilt (the record's `fire` and `pitch_deg`). While
+//! Left Alt is held the mouse turns only the head ([`Freelook`]): the record's facing and aim
+//! stay. F1 switches among the world's allowed views, F5 restarts the simulation, P pauses and
+//! Esc releases the pointer: those are [`Action`]s for the window, not input.
 
+use crate::freelook::Freelook;
 use gamecraft_engine::Session;
 use gamecraft_math::wrap_deg;
 use gamecraft_world::EntityId;
@@ -35,6 +38,8 @@ pub enum Key {
     Jump,
     /// E: interact.
     Interact,
+    /// Left Alt, held: free look (the head turns, the aim stays).
+    Freelook,
     /// F1: first or third person.
     ToggleView,
     /// F5: restart the simulation.
@@ -48,7 +53,7 @@ pub enum Key {
 /// What a window key asks of the window, on its press.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// Switch between first and third person.
+    /// Switch to the next of the world's allowed views.
     ToggleView,
     /// Stop and start the simulation again.
     Restart,
@@ -131,6 +136,8 @@ pub struct Controls {
     pad_jump: bool,
     pad_interact: bool,
     pad_fire: bool,
+    /// The head's own turn while free look is held.
+    freelook: Freelook,
 }
 
 impl Controls {
@@ -165,6 +172,10 @@ impl Controls {
                 self.interact_tapped |= pressed;
                 &mut self.interact
             }
+            Key::Freelook => {
+                self.freelook.hold(pressed);
+                return None;
+            }
             Key::ToggleView => return pressed.then_some(Action::ToggleView),
             Key::Restart => return pressed.then_some(Action::Restart),
             Key::Pause => return pressed.then_some(Action::Pause),
@@ -175,7 +186,8 @@ impl Controls {
     }
 
     /// The mouse moved by `dx`, `dy` pixels (right and down positive): right turns right
-    /// (clockwise seen from above), up looks up. The pitch stays within 85 degrees.
+    /// (clockwise seen from above), up looks up. The pitch stays within 85 degrees. While free
+    /// look is held only the head turns.
     pub fn look(&mut self, dx: f64, dy: f64) {
         let clean = |v: f64| {
             if v.is_finite() {
@@ -184,9 +196,10 @@ impl Controls {
                 0.0
             }
         };
-        self.yaw_deg = wrap_deg(self.yaw_deg - clean(dx) * LOOK_DEG_PER_PIXEL);
-        self.pitch_deg = (self.pitch_deg - clean(dy) * LOOK_DEG_PER_PIXEL)
-            .clamp(-PITCH_LIMIT_DEG, PITCH_LIMIT_DEG);
+        self.turn(
+            -clean(dx) * LOOK_DEG_PER_PIXEL,
+            -clean(dy) * LOOK_DEG_PER_PIXEL,
+        );
     }
 
     /// The fire button (left mouse) went down or up.
@@ -222,8 +235,13 @@ impl Controls {
     }
 
     /// Turns the view by `dyaw_deg` (counter-clockwise positive) and tilts it by `dpitch_deg`
-    /// (up positive); the pitch stays within 85 degrees.
+    /// (up positive); the pitch stays within 85 degrees. While free look is held only the head
+    /// turns (within its limits), not the facing and the aim.
     pub fn turn(&mut self, dyaw_deg: f64, dpitch_deg: f64) {
+        if self.freelook.is_held() {
+            self.freelook.turn(dyaw_deg, dpitch_deg, self.pitch_deg);
+            return;
+        }
         if dyaw_deg.is_finite() {
             self.yaw_deg = wrap_deg(self.yaw_deg + dyaw_deg);
         }
@@ -244,9 +262,20 @@ impl Controls {
         self.yaw_deg
     }
 
-    /// The camera's tilt, degrees, up positive.
+    /// The aim's tilt (the camera's unless free look is held), degrees, up positive.
     pub fn pitch_deg(&self) -> f64 {
         self.pitch_deg
+    }
+
+    /// Where the camera looks: the facing and the aim, turned by the head while free look is
+    /// held. Yaw 0 to 360 and pitch up positive, degrees.
+    pub fn view_deg(&self) -> (f64, f64) {
+        self.freelook.view(self.yaw_deg, self.pitch_deg)
+    }
+
+    /// Whether free look is held (the camera may look away from the aim).
+    pub fn is_freelooking(&self) -> bool {
+        self.freelook.is_held()
     }
 
     /// The input record of the keys held and tapped and the facing.

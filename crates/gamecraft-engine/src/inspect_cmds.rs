@@ -22,8 +22,9 @@ fn inspect_spec() -> CommandSpec {
         "world.inspect",
         "Inspect World",
         "Describes the current world (the running world while playing): name, seed, terrain, \
-         environment and sun, the prefabs, the scenario's variables, objectives and trigger count \
-         (scenario.inspect has the triggers), and its entities in id order, a page at a time.",
+         environment and sun, the view rules, the prefabs, the scenario's variables, \
+         objectives and trigger count (scenario.inspect has the triggers), and its entities in \
+         id order, a page at a time.",
         vec![
             param(
                 "entities",
@@ -37,7 +38,8 @@ fn inspect_spec() -> CommandSpec {
         "{name, seed, revision, playing, tick (null when not playing), terrain: null | \
          {size_m, cell_m, source, layers: [names], paint_rules, edits (counts; terrain.edits \
          lists them), cols, rows, min_height_m, max_height_m}, environment, sun: \
-         {azimuth_deg, elevation_deg, direction, above_horizon}, entity_count, vars: {name: \
+         {azimuth_deg, elevation_deg, direction, above_horizon}, view: {modes, fov_y_deg}, \
+         entity_count, vars: {name: \
          value}, objectives: [{id, title, status, hidden}], trigger_count, prefabs: [{id, \
          name, components, children, instances, instance_count}], entities: [{id, name, \
          position, rotation_y_deg, scale, prefab?, parent?, layer? (left out: the default layer), \
@@ -96,6 +98,7 @@ fn inspect(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
             "direction": sun.direction,
             "above_horizon": sun.elevation_deg > 0.0,
         },
+        "view": serde_json::to_value(&world.view).map_err(failed)?,
         "entity_count": world.entity_count(),
         "vars": serde_json::to_value(&world.vars).map_err(failed)?,
         "objectives": serde_json::to_value(&world.objectives).map_err(failed)?,

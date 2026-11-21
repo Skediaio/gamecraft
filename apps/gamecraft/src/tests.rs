@@ -14,7 +14,7 @@ use gamecraft_render::Quality;
 use gamecraft_sim::DT;
 use gamecraft_world::{
     Character, Component, EntityDraft, EntityId, Objective, ObjectiveStatus, Terrain,
-    TerrainSource, World,
+    TerrainSource, ViewMode as WorldView, ViewRules, World,
 };
 use serde_json::json;
 
@@ -433,6 +433,25 @@ fn the_arguments_name_a_world_the_control_channel_and_a_quality() {
     assert!(e.contains("b.gamecraft"), "{e}");
 }
 
+#[test]
+fn the_field_of_view_flag_takes_30_to_120_degrees() {
+    assert_eq!(parse(&["--fov", "90"]).unwrap().fov, Some(90.0));
+    assert_eq!(parse(&["--fov", "30"]).unwrap().fov, Some(30.0));
+    assert_eq!(parse(&["--fov", "120"]).unwrap().fov, Some(120.0));
+    assert_eq!(parse(&[]).unwrap().fov, None);
+    for bad in ["29", "121", "-70", "NaN", "inf"] {
+        let e = parse(&["--fov", bad]).unwrap_err();
+        assert!(e.contains("--fov") && e.contains("30 to 120"), "{bad}: {e}");
+    }
+    let e = parse(&["--fov", "wide"]).unwrap_err();
+    assert!(e.contains("`wide`") && e.contains("not a number"), "{e}");
+    let e = parse(&["--fov"]).unwrap_err();
+    assert!(e.contains("--fov needs a value"), "{e}");
+    let e = parse(&["--fv", "90"]).unwrap_err();
+    assert!(e.contains("did you mean --fov"), "{e}");
+    assert_eq!(args::parse_fov(" 75.5 "), Ok(75.5));
+}
+
 // ---- the game loop, without a window ----
 
 fn frames(game: &mut Game, n: u32) -> u32 {
@@ -532,6 +551,174 @@ fn the_view_key_toggles_the_camera() {
     let e = game.session().current_world().entity(scout).unwrap();
     let eye = e.position[1] + e.character().unwrap().eye_height_m;
     assert!(close(first.position[1], eye, 1e-9));
+}
+
+fn ruled(modes: &[WorldView], fov_y_deg: f64) -> World {
+    let mut world = example_world();
+    world.view = ViewRules {
+        modes: modes.to_vec(),
+        fov_y_deg,
+    };
+    world
+}
+
+#[test]
+fn the_views_cycle_among_those_the_rules_allow() {
+    let rules = |modes: &[WorldView]| ViewRules {
+        modes: modes.to_vec(),
+        fov_y_deg: 70.0,
+    };
+    let first = rules(&[WorldView::First]);
+    assert_eq!(ViewMode::first_allowed(&first), ViewMode::FirstPerson);
+    assert_eq!(
+        ViewMode::FirstPerson.next_allowed(&first),
+        ViewMode::FirstPerson
+    );
+    assert_eq!(
+        ViewMode::ThirdPerson.allowed(&first),
+        ViewMode::FirstPerson,
+        "a view the rules forbid falls back to the first allowed"
+    );
+    let both = rules(&[WorldView::First, WorldView::Third]);
+    assert_eq!(ViewMode::first_allowed(&both), ViewMode::FirstPerson);
+    assert_eq!(
+        ViewMode::FirstPerson.next_allowed(&both),
+        ViewMode::ThirdPerson
+    );
+    assert_eq!(
+        ViewMode::ThirdPerson.next_allowed(&both),
+        ViewMode::FirstPerson
+    );
+    assert_eq!(
+        ViewMode::first_allowed(&ViewRules::default()),
+        ViewMode::ThirdPerson,
+        "a world without rules starts in third person, as before"
+    );
+}
+
+#[test]
+fn a_world_that_allows_only_first_person_stays_in_first_person() {
+    let mut game = Game::new(ruled(&[WorldView::First], 70.0));
+    assert_eq!(game.view(), ViewMode::FirstPerson);
+    assert_eq!(game.hidden_character(), game.player());
+    for _ in 0..3 {
+        game.key(Key::ToggleView, true);
+        game.key(Key::ToggleView, false);
+        assert_eq!(game.view(), ViewMode::FirstPerson, "F1 does nothing");
+    }
+    let mut game = Game::new(ruled(&[WorldView::First, WorldView::Third], 70.0));
+    assert_eq!(game.view(), ViewMode::FirstPerson, "the first listed");
+    game.key(Key::ToggleView, true);
+    assert_eq!(game.view(), ViewMode::ThirdPerson);
+    // A game master forbids the third-person view while it is played.
+    game.session_mut()
+        .run("view.set", &json!({"modes": ["first"]}))
+        .unwrap();
+    assert_eq!(game.view(), ViewMode::FirstPerson);
+    game.key(Key::ToggleView, true);
+    assert_eq!(game.view(), ViewMode::FirstPerson);
+}
+
+#[test]
+fn the_camera_sees_as_wide_as_the_world_or_the_player_says() {
+    let mut game = Game::new(example_world());
+    assert_eq!(game.camera(16.0 / 9.0).fov_y_deg, 70.0);
+    let mut game_ruled = Game::new(ruled(&[WorldView::Third, WorldView::First], 55.0));
+    assert_eq!(game_ruled.camera(16.0 / 9.0).fov_y_deg, 55.0);
+    game_ruled.set_fov(Some(95.0));
+    assert_eq!(
+        game_ruled.camera(16.0 / 9.0).fov_y_deg,
+        95.0,
+        "the player's own"
+    );
+    game_ruled.key(Key::ToggleView, true);
+    assert_eq!(
+        game_ruled.camera(16.0 / 9.0).fov_y_deg,
+        95.0,
+        "in both views"
+    );
+    game.session_mut()
+        .run("view.set", &json!({"fov_y_deg": 80}))
+        .unwrap();
+    assert_eq!(
+        game.camera(16.0 / 9.0).fov_y_deg,
+        80.0,
+        "a running world's rules"
+    );
+    game.set_fov(None);
+    assert_eq!(game.fov_y_deg(), 80.0);
+}
+
+#[test]
+fn free_look_turns_the_camera_but_not_the_aim() {
+    let mut game = Game::new(ruled(&[WorldView::First], 70.0));
+    frames(&mut game, 2);
+    let aim = game.view_model_aim().unwrap();
+    let player = game.player().unwrap();
+    let facing_before = game
+        .session()
+        .current_world()
+        .entity(player)
+        .unwrap()
+        .rotation_y_deg;
+    let before = game.camera(16.0 / 9.0);
+    let look = |c: &gamecraft_render::Camera| {
+        let d = DVec3::from_array(c.target) - DVec3::from_array(c.position);
+        d / d.length()
+    };
+    game.key(Key::Freelook, true);
+    assert!(game.is_freelooking());
+    // 500 pixels right (60 degrees) and 200 up.
+    game.look(250.0, 0.0);
+    game.look(250.0, -200.0);
+    let turned = game.camera(16.0 / 9.0);
+    let (a, b) = (look(&before), look(&turned));
+    assert!(a.dot(b) < 0.6, "the head turned: {a:?} {b:?}");
+    assert!(b.y > 0.3, "and looks up: {b:?}");
+    let after = game.view_model_aim().unwrap();
+    assert_eq!(
+        (after.yaw_deg, after.pitch_deg),
+        (aim.yaw_deg, aim.pitch_deg),
+        "the aim, and so the held model, stays"
+    );
+    // The character the simulation steps keeps its facing.
+    frames(&mut game, 2);
+    let scout = game.player().unwrap();
+    let facing = |g: &Game| {
+        g.session()
+            .current_world()
+            .entity(scout)
+            .unwrap()
+            .rotation_y_deg
+    };
+    assert_eq!(facing(&game), facing_before);
+    // At most 100 degrees to the side.
+    game.look(10_000.0, 0.0);
+    game.look(10_000.0, 0.0);
+    let far = look(&game.camera(16.0 / 9.0));
+    let side = yaw_forward(aim.yaw_deg);
+    let flat = DVec3::new(far.x, 0.0, far.z).normalize();
+    let angle = flat.dot(side).clamp(-1.0, 1.0).acos().to_degrees();
+    assert!(close(angle, 100.0, 1e-6), "{angle}");
+    // Let go: back on the aim at once.
+    game.key(Key::Freelook, false);
+    assert!(!game.is_freelooking());
+    let back = look(&game.camera(16.0 / 9.0));
+    assert!(back.dot(look(&before)) > 1.0 - 1e-9, "{back:?}");
+    // And the mouse turns the aim again.
+    game.look(100.0, 0.0);
+    assert!(game.view_model_aim().unwrap().yaw_deg != aim.yaw_deg);
+}
+
+#[test]
+fn the_view_model_is_held_only_in_first_person() {
+    let mut game = Game::new(example_world());
+    assert_eq!(game.view(), ViewMode::ThirdPerson);
+    assert!(game.view_model_aim().is_none());
+    game.key(Key::ToggleView, true);
+    let aim = game.view_model_aim().unwrap();
+    let camera = game.camera(16.0 / 9.0);
+    assert_eq!(aim.eye, camera.position, "held at the eyes");
 }
 
 #[test]

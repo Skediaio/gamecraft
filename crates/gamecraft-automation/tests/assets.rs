@@ -247,6 +247,40 @@ fn the_renderer_is_handed_each_model_s_files_once() {
 }
 
 #[test]
+fn a_held_model_s_asset_is_used_and_missing_like_a_model_s() {
+    let (_dir, mut h) = demo("assets-held");
+    let fence_users = |h: &mut Host| {
+        let list = ok(h, "asset.list", json!({}));
+        list["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["path"] == "models/fence.glb")
+            .unwrap()["used_by"]
+            .as_u64()
+            .unwrap()
+    };
+    let before = fence_users(&mut h);
+    ok(
+        &mut h,
+        "entity.add",
+        json!({"name": "Holder", "position": [0, 0, 0], "components": [{"type": "held_model", "asset": "models/fence.glb"}]}),
+    );
+    assert_eq!(fence_users(&mut h), before + 1);
+    let r = ok(
+        &mut h,
+        "entity.add",
+        json!({"name": "Rifleman", "position": [0, 0, 0], "components": [{"type": "held_model", "asset": "models/rifle.glb"}]}),
+    );
+    let list = ok(&mut h, "asset.list", json!({}));
+    assert_eq!(
+        list["missing"],
+        json!([{"asset": "models/rifle.glb", "entities": [r["id"]]}]),
+        "{list}"
+    );
+}
+
+#[test]
 fn asset_commands_take_hostile_parameters_without_panicking() {
     let (_dir, mut h) = demo("assets-hostile");
     let values = [
