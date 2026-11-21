@@ -169,6 +169,21 @@ determinism, hot reload and what a mod may do.
 An authoritative server with replication and prediction is assumed. Open: the transport for
 browsers, and whether determinism is used for more than testing (rollback, lockstep).
 
+### A game's own assets, and attachment points (blocks the first game outside this repository)
+
+The engine repository holds only the small example packs that test it (rule 16), under CC0 or
+CC-BY (rule 15). A real game lives in a repository of its own, with its own art. Open:
+
+- The loader refuses every asset that is not CC0 or CC-BY, in *every* pack. That is right for
+  this repository but blocks a game that ships its own or bought art. Proposed: the record stays
+  required and `asset.credits` lists it, but the licence is any SPDX id or `proprietary`; the
+  CC0/CC-BY rule is checked for the repository's own examples by a test, not by the loader.
+- Equipment made of parts (a scope on a rail, a part swapped for another) needs attachment
+  points kept from a model's nodes and a slot mechanism in the engine (M5); today the glTF
+  reader merges the nodes away.
+- Terrains of several kilometres a side need streaming of terrain, vegetation and entities; no
+  milestone plans it yet.
+
 ### Toolchain pin
 
 VisionCraft follows stable Rust without a pin; 3DCraft pins a version. A pin keeps new clippy
