@@ -19,8 +19,8 @@ use gamecraft_render::{
     Camera, Picture, PictureRequest, ViewModelAim, WorldRenderer, encode_png, headless_gpu,
 };
 use gamecraft_world::{
-    Character, Component, EntityDraft, HeightField, HeldModel, Model, ModelCollider, Shape,
-    ShapeKind, Terrain, TerrainSource, World,
+    Character, Component, EntityDraft, HeightField, HeldAttachment, HeldModel, Model,
+    ModelCollider, Reticle, Shape, ShapeKind, Terrain, TerrainSource, World,
 };
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -563,4 +563,116 @@ fn a_held_model_is_not_hidden_by_a_wall_in_front_of_the_eyes() {
         is_wood(held),
         "the crate is held in front of the wall: {held:?}"
     );
+}
+
+/// The mean colour of the square of side `2 * half` pixels centred `dx` pixels right of the
+/// picture's centre.
+fn beside_centre(p: &Picture, dx: i64, half: usize) -> [f64; 3] {
+    let (w, h) = (p.width as usize, p.height as usize);
+    let cx = (w as i64 / 2 + dx) as usize;
+    let mut sum = [0.0; 3];
+    let mut n = 0.0;
+    for y in h / 2 - half..h / 2 + half {
+        for x in cx - half..cx + half {
+            let i = (y * w + x) * 4;
+            for k in 0..3 {
+                sum[k] += f64::from(p.rgba[i + k]);
+            }
+            n += 1.0;
+        }
+    }
+    sum.map(|s| s / n)
+}
+
+fn is_red([red, green, blue]: [f64; 3]) -> bool {
+    red > 180.0 && green < 0.5 * red && blue < 0.5 * red
+}
+
+/// A crate held low, below the view, with a second crate attached on top of it (in the held
+/// crate's own units) that reaches the middle of the view, and a red dot: the attachment is
+/// drawn with the held model, and down the sights the dot marks where the aim points, also
+/// when the aim (sway) leaves the camera's axis. `out/render-reticle.png` shows it.
+#[test]
+fn an_attachment_rides_on_the_held_model_and_the_dot_marks_the_aim() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let (mut world, hf) = flat();
+    let held = HeldModel {
+        offset_m: [0.0, -1.2, 1.0],
+        scale: 0.5,
+        ..HeldModel::of("models/crate.glb")
+    };
+    let player = world
+        .add_entity(EntityDraft {
+            name: "Player".into(),
+            components: vec![
+                Component::Character(Character::default()),
+                Component::HeldModel(held.clone()),
+            ],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    r.provide_asset("models/crate.glb", CRATE.to_vec());
+    r.set_hidden_character(Some(player));
+    r.sync(&world, Some(&hf));
+    let eye = [0.0, Character::default().eye_height_m, 0.0];
+    let aim = |yaw_deg: f64, ads: f64| ViewModelAim {
+        eye,
+        yaw_deg,
+        pitch_deg: 0.0,
+        ads,
+    };
+    r.set_view_model(Some(aim(0.0, 1.0)));
+    let low = centre(&picture(&mut r, eyes(eye, 0.0)), 4);
+    assert!(
+        !is_wood(low) && !is_red(low),
+        "the crate is held below: {low:?}"
+    );
+    // The attachment sits two crates up, in the middle of the view.
+    world
+        .entity_mut(player)
+        .unwrap()
+        .set_component(Component::HeldModel(HeldModel {
+            attachments: vec![HeldAttachment {
+                asset: "models/crate.glb".into(),
+                offset_m: [0.0, 2.0, 0.0],
+            }],
+            ..held.clone()
+        }));
+    r.sync(&world, Some(&hf));
+    let attached = centre(&picture(&mut r, eyes(eye, 0.0)), 4);
+    assert!(is_wood(attached), "the attachment is drawn: {attached:?}");
+    // A red dot: at the centre down the sights, not at the hip.
+    world
+        .entity_mut(player)
+        .unwrap()
+        .set_component(Component::HeldModel(HeldModel {
+            reticle: Some(Reticle::default()),
+            ..held
+        }));
+    r.sync(&world, Some(&hf));
+    r.set_view_model(Some(aim(0.0, 0.5)));
+    let hip = centre(&picture(&mut r, eyes(eye, 0.0)), 1);
+    assert!(!is_red(hip), "no dot at the hip: {hip:?}");
+    r.set_view_model(Some(aim(0.0, 1.0)));
+    let dot = centre(&picture(&mut r, eyes(eye, 0.0)), 1);
+    assert!(is_red(dot), "the dot at the centre: {dot:?}");
+    // The barrel sways 3 degrees left of where the camera looks: the dot goes with it, by
+    // tan(3 degrees) / tan(35 degrees) of half the picture's height (120 px): 9 px.
+    r.set_view_model(Some(aim(3.0, 1.0)));
+    let swayed = picture(&mut r, eyes(eye, 0.0));
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("render-reticle.png"),
+        encode_png(&swayed.rgba, swayed.width, swayed.height).unwrap(),
+    )
+    .unwrap();
+    let dx = -(3f64.to_radians().tan() / 35f64.to_radians().tan() * 120.0).round() as i64;
+    assert_eq!(dx, -9);
+    let moved = beside_centre(&swayed, dx, 1);
+    assert!(is_red(moved), "the dot followed the barrel: {moved:?}");
+    let left = centre(&swayed, 1);
+    assert!(!is_red(left), "and left the centre: {left:?}");
 }

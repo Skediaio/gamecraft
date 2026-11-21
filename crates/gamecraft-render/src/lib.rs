@@ -18,7 +18,9 @@
 //!   first-person camera along the aim for the hidden character only
 //!   ([`WorldRenderer::set_view_model`]), moved every frame without a rebuild. It is shrunk
 //!   towards the eye so no wall in front of the camera hides it, and casts no shadow
-//!   ([`view_model`]); it moves from its hip offset to its sights as the aim says.
+//!   ([`view_model`]); it moves from its hip offset to its sights as the aim says. Its
+//!   attachments (an optic) are drawn rigidly with it, and down the sights its `reticle` is
+//!   a dot over everything where the barrel points ([`reticle`]), in live frames and pictures.
 //! - **Characters**: a body (cylinder and head) with a small dark visor at eye height on the
 //!   side the character faces.
 //! - **Sky and light**: the physical sky, the sun from the environment, clouds, mist, rain, wind
@@ -51,6 +53,7 @@ pub mod mesh;
 pub mod model;
 mod plants;
 mod renderer;
+pub mod reticle;
 pub mod view_model;
 
 #[cfg(test)]

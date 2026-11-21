@@ -503,3 +503,121 @@ fn the_hud_shows_the_ammunition_briefly_and_the_death_screen_is_unmistakable() {
     let restarted = shoot(&device, &queue, &mut view, &texture, &mut game);
     assert!(luminance_stats(&restarted).0 > before * 0.7);
 }
+
+/// A project of your own seen down its player's sights, to look at: with
+/// `GAMECRAFT_SIGHTS_PROJECT` set to a project folder, the player is put
+/// `GAMECRAFT_SIGHTS_RANGE_M` (default 75) metres from the nearest other character (towards
+/// `GAMECRAFT_SIGHTS_BEARING_DEG` from it, if given), turns to it
+/// and is drawn from the hip (`out/window-sights-hip.png`) and fully down the sights
+/// (`out/window-sights-ads.png`), its held model's attachments and reticle included. Skipped
+/// without the variable.
+#[test]
+fn a_project_seen_down_the_sights() {
+    let Ok(dir) = std::env::var("GAMECRAFT_SIGHTS_PROJECT") else {
+        println!("skipping: GAMECRAFT_SIGHTS_PROJECT names no project");
+        return;
+    };
+    let range_m: f64 = std::env::var("GAMECRAFT_SIGHTS_RANGE_M")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(75.0);
+    let (device, queue) = match headless_gpu() {
+        Ok(gpu) => gpu,
+        Err(e) => {
+            if std::env::var("GAMECRAFT_REQUIRE_GPU").as_deref() == Ok("1") {
+                panic!("GAMECRAFT_REQUIRE_GPU=1 but there is no GPU: {e}");
+            }
+            println!("skipping GPU test: {e}");
+            return;
+        }
+    };
+    let mut game = Game::from_project(std::path::Path::new(&dir)).unwrap();
+    let player = game.player().unwrap();
+    let world = game.session().current_world().clone();
+    let me = world.entity(player).unwrap().position;
+    let foe = world
+        .entities()
+        .filter(|e| e.id != player && e.character().is_some())
+        .min_by(|a, b| {
+            let d = |p: [f64; 3]| (p[0] - me[0]).powi(2) + (p[2] - me[2]).powi(2);
+            d(a.position).total_cmp(&d(b.position))
+        })
+        .unwrap()
+        .id;
+    let there = world.entity(foe).unwrap().position;
+    // From the target towards the player, or towards a compass bearing (degrees clockwise from
+    // north) when `GAMECRAFT_SIGHTS_BEARING_DEG` gives one.
+    let (dx, dz) = match std::env::var("GAMECRAFT_SIGHTS_BEARING_DEG")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+    {
+        Some(b) => (b.to_radians().sin(), -b.to_radians().cos()),
+        None => (me[0] - there[0], me[2] - there[2]),
+    };
+    let len = dx.hypot(dz).max(1e-9);
+    let at = [there[0] + dx / len * range_m, there[2] + dz / len * range_m];
+    game.session_mut()
+        .run("entity.set", &serde_json::json!({"id": player.0, "at": at}))
+        .unwrap();
+    if game.view() != ViewMode::FirstPerson {
+        game.key(Key::ToggleView, true);
+        game.key(Key::ToggleView, false);
+    }
+    let texture = target(&device);
+    let surface = texture.create_view(&Default::default());
+    let mut view = GameView::new(
+        device.clone(),
+        queue.clone(),
+        Quality::High,
+        (WIDTH, HEIGHT),
+    );
+    // Each frame the mouse turns the view to the target's chest.
+    let frame = |game: &mut Game, view: &mut GameView| {
+        let session = game.session();
+        let w = session.current_world();
+        let (Some(t), Some(p)) = (w.entity(foe), w.entity(player)) else {
+            return;
+        };
+        let eye_h = p.character().map_or(1.6, |c| c.eye_height_m);
+        let chest = t.character().map_or(1.3, |c| c.height_m * 0.72);
+        let d = [
+            t.position[0] - p.position[0],
+            t.position[1] + chest - (p.position[1] + eye_h),
+            t.position[2] - p.position[2],
+        ];
+        let yaw = (-d[0]).atan2(-d[2]).to_degrees();
+        let pitch = d[1].atan2(d[0].hypot(d[2])).to_degrees();
+        let c = game.camera(16.0 / 9.0);
+        let f = [
+            c.target[0] - c.position[0],
+            c.target[1] - c.position[1],
+            c.target[2] - c.position[2],
+        ];
+        let now_yaw = (-f[0]).atan2(-f[2]).to_degrees();
+        let now_pitch = f[1].atan2(f[0].hypot(f[2])).to_degrees();
+        let turn = (yaw - now_yaw + 540.0).rem_euclid(360.0) - 180.0;
+        let px = gamecraft::input::LOOK_DEG_PER_PIXEL;
+        game.look(-turn / px, -(pitch - now_pitch) / px);
+        game.frame(DT);
+        view.provide_assets(game.take_assets());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        view.draw(game, &surface, &mut encoder).unwrap();
+        queue.submit([encoder.finish()]);
+    };
+    for _ in 0..30 {
+        frame(&mut game, &mut view);
+    }
+    save(
+        "window-sights-hip.png",
+        &read_back(&device, &queue, &texture),
+    );
+    game.aim_down_sights(true);
+    for _ in 0..40 {
+        frame(&mut game, &mut view);
+    }
+    assert!(game.ads_blend() > 0.99, "{}", game.ads_blend());
+    save(
+        "window-sights-ads.png",
+        &read_back(&device, &queue, &texture),
+    );
+}

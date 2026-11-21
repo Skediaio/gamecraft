@@ -369,6 +369,23 @@ const HELD_MODEL_FIELDS: &[Field] = &[
         Some("s"),
         "Seconds the model takes to come up to the sights and the view to narrow, 0 to 5.",
     ),
+    field(
+        "attachments",
+        "[{asset, offset_m?: [x, y, z]}]",
+        Some("m"),
+        "Extra models drawn rigidly with the held model (an optic on its rail), at most 8: each \
+         a glTF asset of the pack, its origin at offset_m (each -2 to 2) in the held model's \
+         own axes (x right, y up, z back) and units.",
+    ),
+    field(
+        "reticle",
+        "{color_srgb?: [r, g, b], radius_mrad?, brightness?} | null",
+        None,
+        "The dot of a collimated sight (a red dot), drawn while fully down the sights where the \
+         barrel points, sway and recoil included: color_srgb each 0 to 1 (default [1, 0.08, \
+         0.05]), radius_mrad 0.05 to 20 (default 0.6, drawn at least a few pixels wide), \
+         brightness 0 to 1 (default 1). Null draws none.",
+    ),
 ];
 
 const LAUNCHER_FIELDS: &[Field] = &[

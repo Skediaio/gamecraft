@@ -192,4 +192,45 @@ fn the_component_list_shows_the_handling_fields_with_their_defaults() {
     assert_eq!(field("launcher", "ads_sway_factor")["default"], 0.5);
     assert_eq!(field("held_model", "ads_fov_factor")["default"], 0.85);
     assert_eq!(field("held_model", "ads_offset_m")["default"], Value::Null);
+    assert_eq!(field("held_model", "reticle")["default"], Value::Null);
+    assert_eq!(field("held_model", "attachments")["default"], json!([]));
+}
+
+#[test]
+fn a_held_model_takes_an_optic_and_a_reticle_and_refuses_bad_ones() {
+    let mut s = Session::new(World::new("Range", 3));
+    let held = |extra: Value| {
+        let mut h = json!({"type": "held_model", "asset": "models/rifle.glb",
+            "attachments": [{"asset": "models/optic.glb", "offset_m": [0, 0.03, -0.05]}],
+            "reticle": {"color_srgb": [1, 0.1, 0.05], "radius_mrad": 0.6, "brightness": 1}});
+        if let (Value::Object(h), Value::Object(extra)) = (&mut h, extra) {
+            h.extend(extra);
+        }
+        json!({"name": "Rifleman", "position": [0, 0, 0], "components": [{"type": "character"}, h]})
+    };
+    s.run("entity.add", &held(json!({}))).unwrap();
+    let got = s.run("entity.get", &json!({"id": "Rifleman"})).unwrap();
+    let text = got.to_string();
+    assert!(
+        text.contains("models/optic.glb") && text.contains("radius_mrad"),
+        "{text}"
+    );
+    refuse(
+        &mut s,
+        "entity.add",
+        held(json!({"reticle": {"radius_mrad": 50}})),
+        &["held_model.reticle.radius_mrad"],
+    );
+    refuse(
+        &mut s,
+        "entity.add",
+        held(json!({"attachments": [{"asset": "optic.obj"}]})),
+        &["held_model.attachments[0].asset"],
+    );
+    refuse(
+        &mut s,
+        "entity.add",
+        held(json!({"reticle": {"glow": 1}})),
+        &["glow"],
+    );
 }

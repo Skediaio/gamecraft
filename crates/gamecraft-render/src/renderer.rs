@@ -8,6 +8,7 @@ use crate::light;
 use crate::mesh::{self, MeshData};
 use crate::model::{self, Alpha, ModelMaterial, TexRef};
 use crate::plants::{self, PartKind, PlantImage};
+use crate::reticle;
 use crate::view_model::{self, ModelExtent};
 use crate::{Camera, Quality, RenderError};
 #[cfg(not(target_arch = "wasm32"))]
@@ -126,10 +127,12 @@ struct HeldGroup {
     instances: Vec<Mat4>,
 }
 
-/// An entity whose `held_model` a [`HeldGroup`] draws.
+/// An entity whose `held_model` (or one of its attachments) a [`HeldGroup`] draws.
 struct Holder {
     id: EntityId,
     held: HeldModel,
+    /// `None` for the held model itself, else the index of the attachment drawn.
+    part: Option<usize>,
     /// Nothing solid comes nearer its eye than this, metres: the share
     /// [`view_model::VIEW_MODEL_CLEAR_SHARE`] of its character's radius.
     clear_m: f64,
@@ -188,21 +191,54 @@ fn held_pose(aim: &ViewModelAim, held: &HeldModel, size: f64) -> Option<Mat4> {
     held_pose_unshrunk(aim, held, size).map(|(m, _)| m.as_mat4())
 }
 
-/// Where a held model is drawn for `aim`: [`held_pose_unshrunk`] shrunk towards the eye so no
-/// wall in front of the camera hides it ([`view_model`]).
-fn held_pose_drawn(
-    aim: &ViewModelAim,
-    held: &HeldModel,
-    size: f64,
-    extent: Option<&ModelExtent>,
-    clear_m: f64,
-) -> Option<Mat4> {
-    let (pose, offset) = held_pose_unshrunk(aim, held, size)?;
-    let k = extent.map_or(1.0, |e| {
-        view_model::depth_share(offset, held.scale * size, e, clear_m)
-    });
-    let drawn = view_model::shrink_towards(DVec3::from_array(aim.eye), pose, k);
-    drawn.is_finite().then(|| drawn.as_mat4())
+/// Where a held model is placed for `aim` before it is drawn: its pose
+/// ([`held_pose_unshrunk`]) and the share it is shrunk by towards the eye so no wall in front of
+/// the camera hides it ([`view_model`]). Its attachments share both, so they stay on it.
+#[derive(Clone, Copy)]
+struct HeldFrame {
+    eye: DVec3,
+    pose: glam::DMat4,
+    /// The pose without the stand-in's size: where the attachments are placed from.
+    unsized_pose: glam::DMat4,
+    k: f64,
+}
+
+impl HeldFrame {
+    fn of(
+        aim: &ViewModelAim,
+        held: &HeldModel,
+        size: f64,
+        extent: Option<&ModelExtent>,
+        clear_m: f64,
+    ) -> Option<HeldFrame> {
+        let (pose, offset) = held_pose_unshrunk(aim, held, size)?;
+        let (unsized_pose, _) = held_pose_unshrunk(aim, held, 1.0)?;
+        let k = extent.map_or(1.0, |e| {
+            view_model::depth_share(offset, held.scale * size, e, clear_m)
+        });
+        Some(HeldFrame {
+            eye: DVec3::from_array(aim.eye),
+            pose,
+            unsized_pose,
+            k,
+        })
+    }
+
+    /// The drawn matrix of the held model (`part` none) or of its attachment `part`, drawn
+    /// `size` times its own size.
+    fn drawn(&self, held: &HeldModel, part: Option<usize>, size: f64) -> Option<Mat4> {
+        let pose = match part {
+            None => self.pose,
+            Some(i) => {
+                let a = held.attachments.get(i)?;
+                self.unsized_pose
+                    * glam::DMat4::from_translation(DVec3::from_array(a.offset_m))
+                    * glam::DMat4::from_scale(DVec3::splat(size))
+            }
+        };
+        let drawn = view_model::shrink_towards(self.eye, pose, self.k);
+        drawn.is_finite().then(|| drawn.as_mat4())
+    }
 }
 
 /// One character item: the characters it draws, in instance order, and where it drew them.
@@ -761,6 +797,7 @@ impl WorldRenderer {
                 .iter()
                 .flat_map(line_pair),
         );
+        sights.extend(self.reticle_lines(camera, self.size.1));
         self.renderer.set_overlay_lines_on_top(&sights);
         let output = self.renderer.render(encoder);
         self.blit
@@ -796,19 +833,50 @@ impl WorldRenderer {
         }
     }
 
+    /// The dot of the hidden character's held-model `reticle` for a frame `height_px` tall
+    /// from `camera`, while its view model is down the sights ([`reticle`]); none otherwise.
+    fn reticle_lines(&self, camera: &Camera, height_px: u32) -> Vec<vc::LineVertex> {
+        let (Some(id), Some(aim)) = (self.hidden, self.view_model.as_ref()) else {
+            return Vec::new();
+        };
+        let Some(sight) = self.built.held.iter().find_map(|g| {
+            g.held
+                .iter()
+                .find(|h| h.id == id && h.part.is_none())
+                .and_then(|h| h.held.reticle.as_ref())
+        }) else {
+            return Vec::new();
+        };
+        reticle::reticle_segments(
+            camera,
+            sight,
+            (aim.yaw_deg, aim.pitch_deg, aim.ads),
+            height_px,
+        )
+        .iter()
+        .flat_map(line_pair)
+        .collect()
+    }
+
     /// Puts the hidden character's held model at the view model's aim, and every other held
     /// model nowhere.
     fn move_view_model(&mut self) {
         let (hidden, aim) = (self.hidden, self.view_model);
+        // Where the hidden character's held model is placed; its attachments follow it.
+        let frame = match (hidden, aim.as_ref()) {
+            (Some(id), Some(aim)) => self.built.held.iter().find_map(|g| {
+                let h = g.held.iter().find(|h| h.id == id && h.part.is_none())?;
+                HeldFrame::of(aim, &h.held, g.size, g.extent.as_ref(), h.clear_m)
+            }),
+            _ => None,
+        };
         for group in &mut self.built.held {
-            let instances: Vec<Mat4> = match (hidden, aim.as_ref()) {
-                (Some(id), Some(aim)) => group
+            let instances: Vec<Mat4> = match (hidden, frame.as_ref()) {
+                (Some(id), Some(frame)) => group
                     .held
                     .iter()
                     .filter(|h| h.id == id)
-                    .filter_map(|h| {
-                        held_pose_drawn(aim, &h.held, group.size, group.extent.as_ref(), h.clear_m)
-                    })
+                    .filter_map(|h| frame.drawn(&h.held, h.part, group.size))
                     .collect(),
                 _ => Vec::new(),
             };
@@ -826,6 +894,9 @@ impl WorldRenderer {
         let (width, height) = (request.width, request.height);
         let aspect = f64::from(width) / f64::from(height);
         let (view, proj, eye) = self.aim(&request.camera, aspect, request.time_s);
+        // A picture carries no crosshair or text, only the sight's dot of the view model.
+        let dot = self.reticle_lines(&request.camera, height);
+        self.renderer.set_overlay_lines_on_top(&dot);
         let rgba = self
             .renderer
             .render_still(width, height, view, proj, eye)
@@ -1548,19 +1619,28 @@ impl Scene<'_> {
         uploads: &mut u64,
         units: Option<UnitMeshes>,
     ) {
-        let mut groups: BTreeMap<String, Vec<&Entity>> = BTreeMap::new();
+        // Every asset drawn, with the entities and the part of their held model it is (the
+        // model itself, or an attachment).
+        let mut groups: BTreeMap<String, Vec<(&Entity, Option<usize>)>> = BTreeMap::new();
         for e in world.entities() {
             if let Some(h) = e.held_model() {
-                groups.entry(h.asset.clone()).or_default().push(e);
+                groups.entry(h.asset.clone()).or_default().push((e, None));
+                for (i, a) in h.attachments.iter().enumerate() {
+                    groups
+                        .entry(a.asset.clone())
+                        .or_default()
+                        .push((e, Some(i)));
+                }
             }
         }
-        let held_of = |entities: &[&Entity]| -> Vec<Holder> {
+        let held_of = |entities: &[(&Entity, Option<usize>)]| -> Vec<Holder> {
             entities
                 .iter()
-                .filter_map(|e| {
+                .filter_map(|&(e, part)| {
                     e.held_model().map(|h| Holder {
                         id: e.id,
                         held: h.clone(),
+                        part,
                         clear_m: e
                             .character()
                             .map_or(0.0, |c| c.radius_m * view_model::VIEW_MODEL_CLEAR_SHARE),
@@ -1609,7 +1689,7 @@ impl Scene<'_> {
                     let named: Vec<String> = entities
                         .iter()
                         .take(MAX_NAMED_ENTITIES)
-                        .map(|e| format!("{} \"{}\"", e.id, e.name))
+                        .map(|(e, _)| format!("{} \"{}\"", e.id, e.name))
                         .collect();
                     let more = match entities.len().saturating_sub(MAX_NAMED_ENTITIES) {
                         0 => String::new(),

@@ -41,7 +41,7 @@ dead character. Keys:
 | mouse | turn (the input's `yaw_deg`) and look up and down (the camera, and the input's `pitch_deg` for a launcher); click the window to lock the pointer |
 | Left Alt, held | free look: the mouse (and the right stick) turns only the head, at most 100 degrees to either side and within the usual tilt; the character's facing, its aim and its held model stay; let go and the camera is back on the aim |
 | left button | the trigger of the character's launcher (`fire`) once the pointer is locked: once per click in semi, a burst in burst, while held in auto, nothing on safe; tracers, impact puffs and, in first person, a crosshair are drawn; the recoil climbs the view and the mouse pulls it back |
-| right button, held | aim down the sights (`ads`): less sway and spread; in first person the held model comes up to its `ads_offset_m`, the view narrows by its `ads_fov_factor` (over its `ads_time_s`) and the crosshair is hidden |
+| right button, held | aim down the sights (`ads`): less sway and spread; in first person the held model comes up to its `ads_offset_m`, the view narrows by its `ads_fov_factor` (over its `ads_time_s`) and the crosshair is hidden; a `reticle` (a red dot) then marks where the barrel points |
 | B | switch the fire mode (`switch_mode`: the next of the launcher's `modes`) |
 | R | reload (`reload`) |
 | T | check the magazine: show the ammunition for about 3 seconds |

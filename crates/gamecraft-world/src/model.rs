@@ -9,7 +9,10 @@
 //! by rays.
 
 use crate::error::Ctx;
-use crate::limits::{ADS_FOV_FACTOR_MIN, ADS_TIME_MAX_S, HELD_OFFSET_MAX_M, SCALE_MAX, SCALE_MIN};
+use crate::limits::{
+    ADS_FOV_FACTOR_MIN, ADS_TIME_MAX_S, HELD_ATTACHMENTS_MAX, HELD_OFFSET_MAX_M,
+    RETICLE_RADIUS_MAX_MRAD, RETICLE_RADIUS_MIN_MRAD, SCALE_MAX, SCALE_MIN,
+};
 use crate::{Entity, WorldError};
 use gamecraft_math::{Portable, deg_to_rad};
 use serde::{Deserialize, Serialize};
@@ -151,6 +154,52 @@ pub struct HeldModel {
         skip_serializing_if = "is_default_ads_time_s"
     )]
     pub ads_time_s: f64,
+    /// Extra models drawn rigidly with the held model (an optic on the rail, a light): each
+    /// an asset placed in the held model's own axes. At most 8. Default none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<HeldAttachment>,
+    /// The dot of a collimated sight (a red dot), drawn while the character is fully down the
+    /// sights where the barrel points (with its sway and recoil), as a sight focused at
+    /// infinity shows it. `null` draws none. Default null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reticle: Option<Reticle>,
+}
+
+/// A model drawn rigidly with a [`HeldModel`]: an optic, a light, a grip.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HeldAttachment {
+    /// The asset's path inside the pack's `assets/` folder, ending in `.glb` or `.gltf`
+    /// (`models/optic.glb`).
+    pub asset: String,
+    /// Where the attachment's origin sits in the held model's own axes (x right, y up, z
+    /// back, as glTF faces), in the held model's units before its scale, each -2 to 2.
+    /// Default `[0, 0, 0]`.
+    #[serde(default)]
+    pub offset_m: [f64; 3],
+}
+
+/// The dot of a collimated sight: its colour, size and brightness.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Reticle {
+    /// sRGB, each channel 0 to 1. Default red `[1, 0.08, 0.05]`.
+    pub color_srgb: [f64; 3],
+    /// The dot's radius as an angle, milliradians, 0.05 to 20 (a 2 MOA dot is about 0.3; it
+    /// is drawn at least a few pixels wide). Default 0.6.
+    pub radius_mrad: f64,
+    /// How bright the dot is, 0 (off) to 1. Default 1.
+    pub brightness: f64,
+}
+
+impl Default for Reticle {
+    fn default() -> Reticle {
+        Reticle {
+            color_srgb: [1.0, 0.08, 0.05],
+            radius_mrad: 0.6,
+            brightness: 1.0,
+        }
+    }
 }
 
 /// The share of the field of view a [`HeldModel`] leaves while aiming down the sights when its
@@ -184,6 +233,8 @@ pub fn held_model_sights_defaults() -> serde_json::Value {
         "ads_offset_m": null,
         "ads_fov_factor": DEFAULT_ADS_FOV_FACTOR,
         "ads_time_s": DEFAULT_ADS_TIME_S,
+        "attachments": [],
+        "reticle": null,
     })
 }
 
@@ -197,7 +248,14 @@ impl HeldModel {
             ads_offset_m: None,
             ads_fov_factor: DEFAULT_ADS_FOV_FACTOR,
             ads_time_s: DEFAULT_ADS_TIME_S,
+            attachments: Vec::new(),
+            reticle: None,
         }
+    }
+
+    /// The assets it draws: its own, then its attachments'.
+    pub fn assets(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.asset).chain(self.attachments.iter().map(|a| &a.asset))
     }
 
     /// Where the origin sits `ads` of the way (0 hip to 1 at the sights) from `offset_m` to
@@ -276,7 +334,54 @@ impl HeldModel {
             0.0,
             ADS_TIME_MAX_S,
             " seconds",
-        )
+        )?;
+        if self.attachments.len() > HELD_ATTACHMENTS_MAX {
+            return Err(ctx.invalid(
+                "held_model.attachments",
+                format!("{} attachments", self.attachments.len()),
+                format!("at most {HELD_ATTACHMENTS_MAX}"),
+            ));
+        }
+        for (i, a) in self.attachments.iter().enumerate() {
+            if !is_model_path(&a.asset) {
+                let shown: String = a.asset.chars().take(MAX_ASSET_PATH_CHARS + 8).collect();
+                return Err(ctx.invalid(
+                    format!("held_model.attachments[{i}].asset"),
+                    format!("{shown:?}"),
+                    "a path inside the pack's assets/ folder ending in .glb or .gltf, such as \
+                     \"models/optic.glb\"",
+                ));
+            }
+            for (axis, v) in ["x", "y", "z"].iter().zip(a.offset_m) {
+                ctx.range(
+                    format!("held_model.attachments[{i}].offset_m ({axis})"),
+                    v,
+                    -HELD_OFFSET_MAX_M,
+                    HELD_OFFSET_MAX_M,
+                    " metres",
+                )?;
+            }
+        }
+        if let Some(r) = &self.reticle {
+            for (channel, v) in ["red", "green", "blue"].iter().zip(r.color_srgb) {
+                ctx.range(
+                    format!("held_model.reticle.color_srgb ({channel})"),
+                    v,
+                    0.0,
+                    1.0,
+                    "",
+                )?;
+            }
+            ctx.range(
+                "held_model.reticle.radius_mrad",
+                r.radius_mrad,
+                RETICLE_RADIUS_MIN_MRAD,
+                RETICLE_RADIUS_MAX_MRAD,
+                " mrad",
+            )?;
+            ctx.range("held_model.reticle.brightness", r.brightness, 0.0, 1.0, "")?;
+        }
+        Ok(())
     }
 }
 

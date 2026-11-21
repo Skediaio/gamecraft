@@ -255,6 +255,9 @@ fn wrong_field(object: &Map<String, Value>, kind: &str, field: &str, fallback: &
             "plant" => {
                 m.insert("species".into(), Value::from("x"));
             }
+            "model" | "held_model" => {
+                m.insert("asset".into(), Value::from("models/x.glb"));
+            }
             _ => {}
         }
         m

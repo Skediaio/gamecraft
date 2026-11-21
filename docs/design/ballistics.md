@@ -152,7 +152,9 @@ exact rules):
   yet, so every one stands (`handling::stance_of` is the hook).
 - **Sights**: the input's `ads` multiplies sway and dispersion by `ads_sway_factor` and
   `ads_dispersion_factor`; `held_model {ads_offset_m, ads_fov_factor, ads_time_s}` moves the
-  view model to the sights and narrows the view in the window.
+  view model to the sights and narrows the view in the window. Its `attachments` (an optic)
+  ride on it, and its `reticle` is a collimated dot: at infinity along the barrel, so it shows
+  the aim with its sway and recoil and wanders within the optic while the camera stays.
 - Every handling field is left out of a document while at its default, so old worlds keep
   their text and their state hashes.
 

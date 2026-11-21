@@ -163,7 +163,7 @@ pub async fn load_assets(world: &mut World) -> Vec<(String, Vec<u8>)> {
         .entities()
         .flat_map(|e| {
             let model = e.model().map(|m| m.asset.clone());
-            let held = e.held_model().map(|h| h.asset.clone());
+            let held = e.held_model().into_iter().flat_map(|h| h.assets().cloned());
             model.into_iter().chain(held)
         })
         .collect();

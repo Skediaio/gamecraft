@@ -173,3 +173,9 @@ pub const COVER_SEARCH_MAX_M: f64 = 100.0;
 pub const ADS_FOV_FACTOR_MIN: f64 = 0.2;
 /// Longest a `held_model` takes to come up to the sights, seconds.
 pub const ADS_TIME_MAX_S: f64 = 5.0;
+/// Most `attachments` of a `held_model`.
+pub const HELD_ATTACHMENTS_MAX: usize = 8;
+/// Smallest radius of a `held_model`'s reticle dot, milliradians.
+pub const RETICLE_RADIUS_MIN_MRAD: f64 = 0.05;
+/// Largest radius of a `held_model`'s reticle dot, milliradians.
+pub const RETICLE_RADIUS_MAX_MRAD: f64 = 20.0;

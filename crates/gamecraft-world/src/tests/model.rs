@@ -1,8 +1,8 @@
 //! The `model` component: its JSON form, its checks, the derived bounds and the collider box.
 
 use crate::{
-    Component, DEFAULT_HELD_OFFSET_M, EntityDraft, HeldModel, Model, ModelBounds, ModelBox,
-    ModelCollider, World, is_asset_path, is_model_path,
+    Component, DEFAULT_HELD_OFFSET_M, EntityDraft, HeldAttachment, HeldModel, Model, ModelBounds,
+    ModelBox, ModelCollider, Reticle, World, is_asset_path, is_model_path,
 };
 use std::collections::BTreeMap;
 
@@ -271,4 +271,71 @@ fn bad_sights_name_the_field() {
     );
     let e = bad(|h| h.ads_time_s = f64::INFINITY);
     assert!(e.contains("held_model.ads_time_s"), "{e}");
+}
+
+#[test]
+fn attachments_and_a_reticle_are_left_out_by_default_and_read_back() {
+    let plain = serde_json::to_string(&HeldModel::of("models/rifle.glb")).unwrap();
+    assert!(
+        !plain.contains("attachments") && !plain.contains("reticle"),
+        "{plain}"
+    );
+    let c: Component = serde_json::from_str(
+        r#"{"type": "held_model", "asset": "models/rifle.glb",
+            "attachments": [{"asset": "models/optic.glb", "offset_m": [0, 0.04, -0.1]}],
+            "reticle": {"radius_mrad": 1}}"#,
+    )
+    .unwrap();
+    let Component::HeldModel(h) = c else { panic!() };
+    assert_eq!(
+        h.attachments,
+        vec![HeldAttachment {
+            asset: "models/optic.glb".into(),
+            offset_m: [0.0, 0.04, -0.1],
+        }]
+    );
+    let r = h.reticle.clone().unwrap();
+    assert_eq!((r.radius_mrad, r.brightness), (1.0, 1.0));
+    assert_eq!(r.color_srgb, Reticle::default().color_srgb);
+    let assets: Vec<&String> = h.assets().collect();
+    assert_eq!(assets, ["models/rifle.glb", "models/optic.glb"]);
+    let back: HeldModel = serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap();
+    assert_eq!(back, h);
+}
+
+#[test]
+fn bad_attachments_and_reticles_name_the_field() {
+    let bad = |change: fn(&mut HeldModel)| {
+        let mut h = HeldModel::of("models/rifle.glb");
+        h.reticle = Some(Reticle::default());
+        h.attachments = vec![HeldAttachment {
+            asset: "models/optic.glb".into(),
+            offset_m: [0.0; 3],
+        }];
+        change(&mut h);
+        let mut w = World::new("h", 1);
+        w.add_entity(EntityDraft {
+            components: vec![Component::HeldModel(h)],
+            ..EntityDraft::default()
+        })
+        .map(|_| ())
+        .err()
+        .map(|e| e.to_string())
+    };
+    assert_eq!(bad(|_| ()), None);
+    let e = bad(|h| h.attachments[0].asset = "../optic.glb".into()).unwrap();
+    assert!(e.contains("held_model.attachments[0].asset"), "{e}");
+    let e = bad(|h| h.attachments[0].offset_m = [0.0, f64::NAN, 0.0]).unwrap();
+    assert!(e.contains("held_model.attachments[0].offset_m (y)"), "{e}");
+    let e = bad(|h| h.attachments = vec![h.attachments[0].clone(); 9]).unwrap();
+    assert!(
+        e.contains("held_model.attachments") && e.contains("at most 8"),
+        "{e}"
+    );
+    let e = bad(|h| h.reticle.as_mut().unwrap().radius_mrad = 0.0).unwrap();
+    assert!(e.contains("held_model.reticle.radius_mrad"), "{e}");
+    let e = bad(|h| h.reticle.as_mut().unwrap().brightness = 2.0).unwrap();
+    assert!(e.contains("held_model.reticle.brightness"), "{e}");
+    let e = bad(|h| h.reticle.as_mut().unwrap().color_srgb = [1.0, -0.1, 0.0]).unwrap();
+    assert!(e.contains("held_model.reticle.color_srgb (green)"), "{e}");
 }
