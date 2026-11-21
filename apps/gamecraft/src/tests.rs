@@ -222,8 +222,9 @@ fn down_the_sights_the_held_model_comes_up_and_the_view_narrows() {
     let wide = game.camera(16.0 / 9.0).fov_y_deg;
     game.aim_down_sights(true);
     assert!(game.is_aiming());
-    // 0.2 s at 60 frames a second: up at the sights after 12 frames.
-    frames(&mut game, 6);
+    // 0.2 s at 60 ticks a second: up at the sights after 12 ticks. The picture shows the
+    // tick before the last (like the camera), so it is one frame behind.
+    frames(&mut game, 7);
     assert!(close(game.ads_blend(), 0.5, 1e-9), "{}", game.ads_blend());
     frames(&mut game, 6);
     assert!(close(game.ads_blend(), 1.0, 1e-9));
@@ -233,7 +234,7 @@ fn down_the_sights_the_held_model_comes_up_and_the_view_narrows() {
     let state = game.session_mut().run("sim.state", &json!({})).unwrap();
     assert_eq!(state["inputs"][0]["ads"], json!(true));
     game.aim_down_sights(false);
-    frames(&mut game, 12);
+    frames(&mut game, 13);
     assert_eq!(game.ads_blend(), 0.0);
     assert!(close(game.camera(16.0 / 9.0).fov_y_deg, wide, 1e-9));
 }
@@ -1125,7 +1126,7 @@ fn the_ammunition_shows_after_a_shot_a_reload_or_a_check_and_hides_after_three_s
     game.key(Key::CheckMagazine, true);
     game.key(Key::CheckMagazine, false);
     let lines: Vec<String> = game.hud().corner.iter().map(|l| l.text.clone()).collect();
-    assert_eq!(lines, ["SEMI", "MAGAZINE FULL", "2 SPARE MAGAZINES"]);
+    assert_eq!(lines, ["SEMI", "MAGAZINE FULL", "2 FULL"]);
     frames(&mut game, (crate::hud::AMMO_SHOW_S / DT) as u32 - 5);
     assert!(!game.hud().is_empty(), "still up just before three seconds");
     frames(&mut game, 10);
@@ -1144,24 +1145,11 @@ fn the_ammunition_shows_after_a_shot_a_reload_or_a_check_and_hides_after_three_s
     game.key(Key::Reload, false);
     frames(&mut game, 2);
     let lines: Vec<String> = game.hud().corner.iter().map(|l| l.text.clone()).collect();
-    assert_eq!(lines, ["SEMI", "RELOADING", "2 SPARE MAGAZINES"]);
+    assert_eq!(lines, ["SEMI", "RELOADING", "1 FULL, 1 PARTLY USED"]);
 }
 
 #[test]
 fn a_reloading_weapon_is_lowered_by_the_reload_progress() {
-    use crate::game::reload_progress_of;
-    assert_eq!(reload_progress_of(2.5, 2.5), 0.0);
-    assert_eq!(reload_progress_of(0.0, 2.5), 1.0);
-    assert!(close(reload_progress_of(1.0, 2.5), 0.6, 1e-12));
-    for (ready, total) in [
-        (f64::NAN, 2.5),
-        (1.0, 0.0),
-        (1.0, f64::INFINITY),
-        (9.0, 2.5),
-    ] {
-        let p = reload_progress_of(ready, total);
-        assert!((0.0..=1.0).contains(&p), "{ready} {total}: {p}");
-    }
     let mut game = Game::new(duel(Some(2)));
     frames(&mut game, 2);
     assert_eq!(game.reload_progress(), None);
@@ -1245,4 +1233,64 @@ fn enter_does_nothing_while_the_player_lives() {
     game.key(Key::Confirm, false);
     frames(&mut game, 1);
     assert!(game.session().live().unwrap().tick() > tick, "no restart");
+}
+
+// ---- tracers and the camera ----
+
+#[test]
+fn a_shot_fired_this_tick_by_a_moving_player_starts_at_the_muzzle_the_camera_shows() {
+    use crate::game::tracer_of;
+    use gamecraft_sim::Projectile;
+    let held = HeldModel {
+        muzzle_m: Some([0.0, 0.0, -0.9]),
+        ..HeldModel::of("models/rifle.glb")
+    };
+    let eye_height_m = 1.6;
+    let eye = |p: &Pose| {
+        let [x, y, z] = p.position;
+        [x, y + eye_height_m, z]
+    };
+    // Walking north at 6 m/s: the last tick left the player 0.1 m beyond the one before.
+    let before = Pose {
+        position: [3.0, 0.0, -2.0],
+        yaw_deg: 0.0,
+    };
+    let last = Pose {
+        position: [3.0, 0.0, -2.1],
+        yaw_deg: 0.0,
+    };
+    let fire_point = held.muzzle_point(eye(&last), 0.0, 0.0, 0.0).unwrap();
+    let velocity = [0.0, 0.0, -800.0];
+    // Fired in the last tick, which also flew it for DT.
+    let shot = Projectile {
+        id: 1,
+        shooter: EntityId(1),
+        position: [
+            fire_point[0],
+            fire_point[1],
+            fire_point[2] + velocity[2] * DT,
+        ],
+        velocity,
+        age_s: DT,
+        mass_kg: 0.004,
+        ballistic_coefficient: 200.0,
+        damage_per_joule: 0.01,
+        max_flight_s: 1.0,
+    };
+    for alpha in [0.1, 0.25, 0.5, 0.75, 0.95] {
+        let shown = pose::interpolate(&before, &last, alpha);
+        let lag = [
+            shown.position[0] - last.position[0],
+            shown.position[1] - last.position[1],
+            shown.position[2] - last.position[2],
+        ];
+        let muzzle = held.muzzle_point(eye(&shown), 0.0, 0.0, 0.0).unwrap();
+        let tracer = tracer_of(&shot, alpha, lag).expect("a tracer");
+        let off = DVec3::from_array(tracer.from) - DVec3::from_array(muzzle);
+        assert!(
+            off.length() < 0.01,
+            "alpha {alpha}: the tail is {} m from the muzzle on screen",
+            off.length()
+        );
+    }
 }

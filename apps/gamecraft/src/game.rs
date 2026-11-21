@@ -18,7 +18,7 @@ use gamecraft_engine::Session;
 use gamecraft_render::effects::IMPACT_LIFE_S;
 use gamecraft_render::hud::Hud;
 use gamecraft_render::{Camera, Effects, Impact, Tracer, ViewModelAim};
-use gamecraft_sim::{DT, Handling};
+use gamecraft_sim::{DT, Handling, Projectile};
 use gamecraft_world::{EntityId, HeightField, World};
 use serde_json::{Value, json};
 
@@ -50,8 +50,11 @@ pub struct Game {
     hits: Vec<([f64; 3], [f64; 3], f64)>,
     /// Asset files waiting for the view ([`Game::take_assets`]): what the browser fetched.
     assets: Vec<(String, Vec<u8>)>,
-    /// How far the held model is up to the sights: 0 at the hip, 1 at the sights.
-    ads_blend: f64,
+    /// How far the player was up to the sights at the tick before the last and at the last,
+    /// from the simulation's `Handling::ads_amount`: the view model shows them interpolated
+    /// like the camera.
+    ads_before: f64,
+    ads_last: f64,
     /// Seconds the ammunition stays up still.
     ammo_timer_s: f64,
     /// What the ammunition showed last: (shots fired, selector, reloading); a change shows it.
@@ -64,13 +67,46 @@ pub struct Game {
     dead_s: Option<f64>,
 }
 
-/// How far through a reload of `total_s` seconds a timer with `ready_in_s` seconds left is,
-/// 0 to 1; 1 for a reload that takes no time or a number that is not finite.
-pub fn reload_progress_of(ready_in_s: f64, total_s: f64) -> f64 {
-    if !(ready_in_s.is_finite() && total_s.is_finite()) || total_s <= 0.0 {
-        return 1.0;
+/// Seconds over which a projectile stops following the lag of its shooter's displayed pose: a
+/// fresh shot leaves the muzzle where the camera shows it, then flies on in the world.
+pub const TRACER_LAG_FADE_S: f64 = 0.05;
+
+/// The streak of `p` as drawn `alpha` of the way between the last two ticks, like the
+/// characters: the projectile is shown where it was at that time (its position is the tick's
+/// end), and `lag` (its shooter's displayed position minus its simulated one) moves a fresh
+/// shot so it starts at the muzzle the camera shows, fading out over [`TRACER_LAG_FADE_S`].
+/// `None` while it is not yet fired at that time or has no length.
+pub fn tracer_of(p: &Projectile, alpha: f64, lag: [f64; 3]) -> Option<Tracer> {
+    let alpha = if alpha.is_nan() {
+        1.0
+    } else {
+        alpha.clamp(0.0, 1.0)
+    };
+    // The camera shows the time `(1 - alpha)` of a tick before the last tick's end, and so
+    // does the projectile.
+    let ahead = (alpha - 1.0) * DT;
+    let age_s = p.age_s + ahead;
+    if !age_s.is_finite() || age_s <= 0.0 {
+        return None;
     }
-    (1.0 - ready_in_s / total_s).clamp(0.0, 1.0)
+    let [vx, vy, vz] = p.velocity;
+    let [px, py, pz] = p.position;
+    let shifted = |t: f64, age_s: f64| {
+        let w = (1.0 - age_s / TRACER_LAG_FADE_S).clamp(0.0, 1.0);
+        [
+            px + vx * t + lag[0] * w,
+            py + vy * t + lag[1] * w,
+            pz + vz * t + lag[2] * w,
+        ]
+    };
+    let shown = TRACER_STREAK_S.min(age_s);
+    let head = shifted(ahead, age_s);
+    let tail = shifted(ahead - shown, age_s - shown);
+    (head != tail).then_some(Tracer {
+        from: tail,
+        to: head,
+        age_s,
+    })
 }
 
 /// The steepest the camera tilts with the recoil on top of the aim, degrees.
@@ -126,7 +162,8 @@ impl Game {
             last_error: None,
             hits: Vec::new(),
             assets: Vec::new(),
-            ads_blend: 0.0,
+            ads_before: 0.0,
+            ads_last: 0.0,
             ammo_timer_s: 0.0,
             ammo_seen: None,
             hit_flash_s: 0.0,
@@ -274,10 +311,28 @@ impl Game {
         self.controls.is_aiming()
     }
 
-    /// How far the held model is up to the sights: 0 at the hip, 1 at the sights; it moves
-    /// over the held model's `ads_time_s` while the sights are held in first person.
+    /// How far the held model is up to the sights: 0 at the hip, 1 at the sights. It is the
+    /// simulation's `Handling::ads_amount` (it moves over the held model's `ads_time_s` while
+    /// the sights are held and the weapon is not reloading), interpolated between the last two
+    /// ticks like the camera; 0 outside first person.
     pub fn ads_blend(&self) -> f64 {
-        self.ads_blend
+        if self.view() != ViewMode::FirstPerson {
+            return 0.0;
+        }
+        let alpha = self.step.alpha();
+        let blend = self.ads_before + (self.ads_last - self.ads_before) * alpha;
+        if blend.is_finite() {
+            blend.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// The simulation's sights amount of the player now, 0 without a simulation.
+    fn sim_ads(&self) -> f64 {
+        self.player()
+            .and_then(|id| self.session().live()?.handling(id))
+            .map_or(0.0, |h| h.ads_amount)
     }
 
     /// The player's held model, if it has one.
@@ -326,10 +381,11 @@ impl Game {
         })
     }
 
-    /// The rounds in each of the player's spare magazines. The hook for the simulation's
-    /// `magazine.pouch`; `None` until the simulation tells, so the HUD shows a bare count.
+    /// The rounds in each of the player's spare magazines, fullest first, from the
+    /// simulation's magazine; `None` for an unlimited pouch or without a simulation.
     fn pouch_rounds(&self) -> Option<Vec<u32>> {
-        None
+        let id = self.player()?;
+        self.session().live()?.magazine(id)?.pouch_rounds()
     }
 
     /// What the window shows over the world: the ammunition for a few seconds after the weapon
@@ -391,7 +447,6 @@ impl Game {
     /// due (none while paused or stopped) and reads what the scenario tells. Returns the ticks
     /// run.
     pub fn frame(&mut self, frame_s: f64) -> u32 {
-        self.raise_sights(frame_s);
         if !self.session().is_playing() || self.paused {
             self.tick_hud(if self.paused { 0.0 } else { frame_s });
             self.step.reset();
@@ -413,6 +468,8 @@ impl Game {
             ran += 1;
             let world = self.host.session().current_world();
             self.poses.ticked(world);
+            self.ads_before = self.ads_last;
+            self.ads_last = self.sim_ads();
             self.controls.ticked();
             self.send_input();
         }
@@ -425,30 +482,6 @@ impl Game {
             self.read_notices();
         }
         ran
-    }
-
-    /// Moves the held model towards the sights (while they are held in first person) or back
-    /// to the hip over its `ads_time_s`, for a frame of `frame_s` seconds.
-    fn raise_sights(&mut self, frame_s: f64) {
-        let target = if self.is_aiming() && self.view() == ViewMode::FirstPerson {
-            1.0
-        } else {
-            0.0
-        };
-        let time_s = self
-            .held_model()
-            .map_or(gamecraft_world::DEFAULT_ADS_TIME_S, |h| h.ads_time_s);
-        let step = if time_s > 0.0 && frame_s.is_finite() {
-            frame_s.max(0.0) / time_s
-        } else {
-            1.0
-        };
-        let blend = if target > self.ads_blend {
-            (self.ads_blend + step).min(target)
-        } else {
-            (self.ads_blend - step).max(target)
-        };
-        self.ads_blend = if blend.is_finite() { blend } else { target };
     }
 
     /// Runs one line of the control protocol (`gamecraft-cli serve`'s JSON lines) on the
@@ -505,7 +538,7 @@ impl Game {
         };
         let narrowing = self
             .held_model()
-            .map_or(1.0, |h| h.fov_factor_at(self.ads_blend));
+            .map_or(1.0, |h| h.fov_factor_at(self.ads_blend()));
         camera.fov_y_deg = self.fov_y_deg() * narrowing;
         if camera.validate().is_ok() {
             camera
@@ -530,29 +563,17 @@ impl Game {
             yaw_deg: self.controls.yaw_deg() + yaw,
             pitch_deg: (self.controls.pitch_deg() + pitch)
                 .clamp(-RECOIL_PITCH_LIMIT_DEG, RECOIL_PITCH_LIMIT_DEG),
-            ads: self.ads_blend,
+            ads: self.ads_blend(),
             reload: self.reload_progress(),
         })
     }
 
     /// How far through a reload the player's launcher is, 0 to 1, `None` when it is not
-    /// reloading. Read from the simulation's magazine: the reload timer against the launcher's
-    /// reload time. This is the one place to read `handling.reload_progress` instead when the
-    /// simulation tells it.
+    /// reloading: the simulation's own `Magazine::reload_progress`.
     pub fn reload_progress(&self) -> Option<f64> {
         let id = self.player()?;
-        let sim = self.session().live()?;
-        let magazine = sim.magazine(id)?;
-        if !magazine.reloading {
-            return None;
-        }
-        let launcher = sim.world().entity(id)?.launcher()?;
-        let total_s = if magazine.left == 0 {
-            launcher.empty_reload_s()
-        } else {
-            launcher.reload_s
-        };
-        Some(reload_progress_of(magazine.ready_in_s, total_s))
+        let magazine = self.session().live()?.magazine(id)?;
+        magazine.reloading.then(|| magazine.reload_progress())
     }
 
     /// Whether the world's view rules let the window draw a crosshair.
@@ -567,22 +588,13 @@ impl Game {
         let Some(sim) = self.session().live() else {
             return Effects::default();
         };
-        let ahead = self.step.alpha() * DT;
+        let alpha = self.step.alpha();
         let tracers = sim
             .projectiles()
             .iter()
             .filter_map(|p| {
-                let [vx, vy, vz] = p.velocity;
-                let [px, py, pz] = p.position;
-                let at = |t: f64| [px + vx * t, py + vy * t, pz + vz * t];
-                let head = at(ahead);
-                let shown = TRACER_STREAK_S.min(p.age_s + ahead);
-                let tail = at(ahead - shown);
-                (head != tail).then_some(Tracer {
-                    from: tail,
-                    to: head,
-                    age_s: p.age_s + ahead,
-                })
+                let lag = self.shooter_lag(p.shooter, alpha);
+                tracer_of(p, alpha, lag)
             })
             .collect();
         let now = self.time_s();
@@ -596,6 +608,19 @@ impl Game {
             })
             .collect();
         Effects { tracers, impacts }
+    }
+
+    /// How far behind its simulated position a character is shown: its interpolated position
+    /// minus where the last tick left it (zero without a pose).
+    fn shooter_lag(&self, id: EntityId, alpha: f64) -> [f64; 3] {
+        let Some(pose) = self.poses.at(id, alpha) else {
+            return [0.0; 3];
+        };
+        let Some(entity) = self.session().current_world().entity(id) else {
+            return [0.0; 3];
+        };
+        let [a, b] = [pose.position, entity.position];
+        [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
     }
 
     /// The world as shown: the running world (or the document) with every character between
@@ -729,7 +754,8 @@ impl Game {
         self.notices.clear();
         self.noticed = false;
         self.hits.clear();
-        self.ads_blend = 0.0;
+        self.ads_before = 0.0;
+        self.ads_last = 0.0;
         self.ammo_timer_s = 0.0;
         self.ammo_seen = None;
         self.hit_flash_s = 0.0;
