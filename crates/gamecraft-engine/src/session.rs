@@ -123,6 +123,7 @@ const MODULES: &[&[Registration]] = &[
     crate::journal_cmds::SPECS,
     crate::gm_cmds::SPECS,
     crate::terrain_cmds::SPECS,
+    crate::ai_cmds::SPECS,
 ];
 
 /// The spec and scope of the built-in command `name`, without a session (for checking the

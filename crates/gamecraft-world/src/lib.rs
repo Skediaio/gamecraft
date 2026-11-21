@@ -38,7 +38,7 @@ mod world;
 #[cfg(test)]
 mod tests;
 
-pub use combat::{Behaviour, BehaviourMode, Health, Launcher};
+pub use combat::{Alertness, Behaviour, BehaviourMode, DEFAULT_CALM_S, Health, Launcher};
 pub use component::{
     Character, Component, Interactable, Light, Plant, Shape, ShapeKind, Tags, Zone, ZoneShape,
 };

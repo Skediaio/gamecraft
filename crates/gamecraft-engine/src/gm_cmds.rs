@@ -564,7 +564,7 @@ fn resolve_one(world: &World, v: &Value, out: &mut BTreeSet<EntityId>) -> Result
 }
 
 /// The characters `entity` names, in id order.
-fn order_targets(world: &World, p: &Params<'_>) -> Result<Vec<EntityId>, CommandError> {
+pub(crate) fn order_targets(world: &World, p: &Params<'_>) -> Result<Vec<EntityId>, CommandError> {
     let v = p
         .value("entity")
         .ok_or_else(|| bad("missing `entity`: a character, `tag:<tag>` or a list"))?;

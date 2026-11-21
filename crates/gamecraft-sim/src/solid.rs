@@ -2,7 +2,7 @@
 //! out of them.
 
 use gamecraft_math::{Portable, deg_to_rad};
-use gamecraft_world::{Entity, ModelBox, ShapeKind, World};
+use gamecraft_world::{Entity, EntityId, ModelBox, ShapeKind, World};
 
 use crate::STEP_HEIGHT_M;
 
@@ -29,6 +29,8 @@ enum Footprint {
 /// One solid shape of the running world, sized and placed.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Solid {
+    /// The entity it belongs to.
+    pub(crate) entity: EntityId,
     /// World x and z of the centre of the footprint (the entity's position).
     centre: [f64; 2],
     /// World y of the base.
@@ -86,6 +88,7 @@ impl Solid {
             ),
         };
         let solid = Solid {
+            entity: entity.id,
             centre: [px, pz],
             bottom: py,
             top: py + height,
@@ -113,6 +116,7 @@ impl Solid {
         let [cx, cy, cz] = center;
         let [hx, hy, hz] = half;
         let solid = Solid {
+            entity: entity.id,
             centre: [cx, cz],
             bottom: cy - hy,
             top: cy + hy,
@@ -137,6 +141,63 @@ impl Solid {
     /// Local (x, z) to a world offset: the rotation counter-clockwise seen from above.
     fn to_world(sin: f64, cos: f64, lx: f64, lz: f64) -> (f64, f64) {
         (lx * cos + lz * sin, -lx * sin + lz * cos)
+    }
+
+    /// World x and z of the centre of the footprint.
+    pub(crate) fn centre(&self) -> [f64; 2] {
+        self.centre
+    }
+
+    /// The radius of a circle around [`Solid::centre`] that holds the whole footprint.
+    pub(crate) fn reach(&self) -> f64 {
+        match self.footprint {
+            Footprint::Rect { half_x, half_z, .. } => (half_x * half_x + half_z * half_z).sqrt(),
+            Footprint::Circle { radius } | Footprint::Ball { radius } => radius,
+        }
+    }
+
+    /// Eight points `clearance` metres outside the footprint, world x and z: for a box the
+    /// middles of its four sides, then its four corners (pushed out diagonally); for a round
+    /// solid eight points around it, every 45 degrees.
+    pub(crate) fn around(&self, clearance: f64) -> [[f64; 2]; 8] {
+        let [cx, cz] = self.centre;
+        let local: [(f64, f64); 8] = match self.footprint {
+            Footprint::Rect { half_x, half_z, .. } => {
+                let (x, z) = (half_x + clearance, half_z + clearance);
+                [
+                    (x, 0.0),
+                    (0.0, z),
+                    (-x, 0.0),
+                    (0.0, -z),
+                    (x, z),
+                    (-x, z),
+                    (-x, -z),
+                    (x, -z),
+                ]
+            }
+            Footprint::Circle { radius } | Footprint::Ball { radius } => {
+                let r = radius + clearance;
+                let d = r * std::f64::consts::FRAC_1_SQRT_2;
+                [
+                    (r, 0.0),
+                    (0.0, r),
+                    (-r, 0.0),
+                    (0.0, -r),
+                    (d, d),
+                    (-d, d),
+                    (-d, -d),
+                    (d, -d),
+                ]
+            }
+        };
+        let (sin, cos) = match self.footprint {
+            Footprint::Rect { sin, cos, .. } => (sin, cos),
+            _ => (0.0, 1.0),
+        };
+        local.map(|(lx, lz)| {
+            let (wx, wz) = Self::to_world(sin, cos, lx, lz);
+            [cx + wx, cz + wz]
+        })
     }
 
     /// The top of a box or cylinder whose footprint contains world `x`, `z`; `None` for a

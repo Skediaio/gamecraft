@@ -105,10 +105,12 @@ use gamecraft_math::{StateHasher, wrap_deg};
 use gamecraft_world::{Entity, EntityId, HeightField, World};
 use serde::{Deserialize, Serialize};
 
+pub mod ai;
 pub mod aim;
 pub mod ballistics;
 pub mod behaviour;
 pub mod combat;
+pub mod cover;
 mod events;
 mod motion;
 pub mod perception;
@@ -157,6 +159,8 @@ const HASH_MARK_HELD: u64 = 0x1A7E_1A7E_1A7E_1A7E;
 const HASH_MARK_MODELS: u64 = 0x30DE_130D_E130_DE13;
 /// Marks the held facings in the state hash.
 const HASH_MARK_FACE: u64 = 0xFACE_FACE_FACE_FACE;
+/// Marks what the behaviours know and feel in the state hash.
+const HASH_MARK_AI: u64 = 0xA1A1_A1A1_A1A1_A1A1;
 
 /// What a character keeps facing, turned towards at the start of every tick (see the crate
 /// docs, *Facing*).
@@ -656,8 +660,13 @@ impl Sim {
                 muzzle_velocity_mps: me.launcher().map(|l| l.muzzle_velocity_mps),
                 shots: self.magazines.get(&id).map_or(0, |m| m.shots),
                 heard,
+                solids: &self.solids,
+                projectiles: &self.projectiles,
+                inputs: &self.inputs,
+                bodies: &self.bodies,
+                brains: &self.brains,
             };
-            let mut next = *brain;
+            let mut next = brain.clone();
             let input = mind.decide(&mut next);
             decided.push((id, next, input));
         }
@@ -896,18 +905,14 @@ impl Sim {
                 let mut brain = self
                     .brains
                     .get(&entity.id)
-                    .copied()
+                    .cloned()
                     .unwrap_or_else(|| Brain::new(entity, behaviour));
-                let old_route = self
-                    .world
-                    .entity(entity.id)
-                    .and_then(Entity::behaviour)
-                    .map(|b| b.route.as_slice());
-                if old_route.is_some_and(|r| r != behaviour.route.as_slice()) {
+                let old = self.world.entity(entity.id).and_then(Entity::behaviour);
+                if old.is_some_and(|o| o.route != behaviour.route) {
                     // A new route starts at its first point.
                     brain.waypoint = 0;
                 }
-                brain.adapt(behaviour);
+                brain.adapt(behaviour, old);
                 brains.insert(entity.id, brain);
             }
         }
@@ -1106,6 +1111,21 @@ impl Sim {
                     }
                 }
                 None => hasher.write_bool(false),
+            }
+        }
+        // What the behaviours know and feel (`ai`), written only when one of them uses those
+        // numbers: with all of them at their defaults it decides nothing (`behaviour` docs).
+        let uses_ai = self.brains.keys().any(|id| {
+            self.world
+                .entity(*id)
+                .and_then(Entity::behaviour)
+                .is_some_and(gamecraft_world::Behaviour::uses_ai_numbers)
+        });
+        if uses_ai {
+            hasher.write_u64(HASH_MARK_AI);
+            for (id, b) in &self.brains {
+                hasher.write_u64(id.0);
+                ai::hash_brain(b, hasher);
             }
         }
         hasher.write_u64(aims.len() as u64);

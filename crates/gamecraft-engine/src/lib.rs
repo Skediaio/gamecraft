@@ -36,6 +36,7 @@
 //! `example` must run on [`example_world`] (`tests/examples.rs` checks every one), and the
 //! panic hunt picks the new command up by itself.
 
+mod ai_cmds;
 mod aim_cmds;
 mod catalog_cmds;
 mod combat_cmds;

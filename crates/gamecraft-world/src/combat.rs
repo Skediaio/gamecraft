@@ -7,9 +7,9 @@ use crate::WorldError;
 use crate::error::Ctx;
 use crate::limits::{
     AIM_ERROR_MAX_MRAD, BALLISTIC_COEFFICIENT_MAX, BEHAVIOUR_RANGE_MAX_M, BEHAVIOUR_TIME_MAX_S,
-    DAMAGE_PER_JOULE_MAX, DISPERSION_MAX_MRAD, HEALTH_MAX, LAUNCHER_TIME_MAX_S, MAGAZINE_MAX,
-    MAX_COORDINATE_M, MAX_FLIGHT_MAX_S, MAX_NAME_CHARS, MAX_ROUTE_POINTS, MUZZLE_VELOCITY_MAX_MPS,
-    PROJECTILE_MASS_MAX_KG, SHAPE_SIZE_MAX_M, SOUND_RANGE_MAX_M,
+    COVER_SEARCH_MAX_M, DAMAGE_PER_JOULE_MAX, DISPERSION_MAX_MRAD, HEALTH_MAX, LAUNCHER_TIME_MAX_S,
+    MAGAZINE_MAX, MAX_COORDINATE_M, MAX_FLIGHT_MAX_S, MAX_NAME_CHARS, MAX_ROUTE_POINTS,
+    MUZZLE_VELOCITY_MAX_MPS, PROJECTILE_MASS_MAX_KG, SHAPE_SIZE_MAX_M, SOUND_RANGE_MAX_M,
 };
 use serde::{Deserialize, Serialize};
 
@@ -267,6 +267,102 @@ pub struct Behaviour {
     /// Seconds it searches after losing sight of an enemy or hearing a shot, 0 to 3600.
     /// Default 15.
     pub search_s: f64,
+    /// General skill, 0 to 1: scales its reaction time, spot time and how often it looks for
+    /// cover again (at 1 the numbers as given; at 0 they take twice as long). Default 1.
+    #[serde(skip_serializing_if = "is_one")]
+    pub skill: f64,
+    /// Precision, 0 to 1: scales its aim error only (at 1 the errors as given; at 0 four times
+    /// as large). Default 1.
+    #[serde(skip_serializing_if = "is_one")]
+    pub precision: f64,
+    /// Seconds an enemy in plain view at half its effective view range takes to be fully
+    /// known, 0 to 3600; closer, moving or firing it is known sooner. 0: known at first sight.
+    /// Default 0.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub spot_time_s: f64,
+    /// Seconds of keeping a target in view over which its aim error shrinks from
+    /// `aim_error_mrad` to `aim_error_floor_mrad`, 0 to 3600. 0: the aim does not settle.
+    /// Default 0.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub aim_settle_s: f64,
+    /// The aim error a settled aim reaches, milliradians, 0 to 1000 (at most
+    /// `aim_error_mrad` counts). Default 0.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub aim_error_floor_mrad: f64,
+    /// Courage, 0 to 1: how much of the stress of near misses it shrugs off (1: all of it).
+    /// Default 1.
+    #[serde(skip_serializing_if = "is_one")]
+    pub courage: f64,
+    /// How far around itself it looks for cover in combat, metres, 0 to 100. 0: it does not
+    /// take cover. Default 0.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub cover_search_m: f64,
+    /// Seconds without contact after which combat calms down to aware, and aware to safe, 0
+    /// to 3600. Default 30.
+    #[serde(skip_serializing_if = "is_default_calm")]
+    pub calm_s: f64,
+    /// The alertness it starts in (and is put in when this changes while playing). Default
+    /// `safe`.
+    #[serde(skip_serializing_if = "Alertness::is_safe")]
+    pub alertness: Alertness,
+}
+
+/// The default of [`Behaviour::calm_s`], seconds.
+pub const DEFAULT_CALM_S: f64 = 30.0;
+
+fn is_one(v: &f64) -> bool {
+    *v == 1.0
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+fn is_default_calm(v: &f64) -> bool {
+    *v == DEFAULT_CALM_S
+}
+
+/// How alert a [`Behaviour`] is, like the behaviour modes of a tactical shooter's soldiers:
+/// `safe` (nothing noticed), `aware` (heard a shot, glimpsed something), `combat` (in contact:
+/// it spots faster and, with `cover_search_m`, fights from cover).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Alertness {
+    /// Nothing noticed.
+    #[default]
+    Safe,
+    /// Something noticed.
+    Aware,
+    /// In contact.
+    Combat,
+}
+
+impl Alertness {
+    /// Every alertness name, as in JSON.
+    pub const NAMES: [&'static str; 3] = ["safe", "aware", "combat"];
+
+    /// The name as in JSON.
+    pub fn name(self) -> &'static str {
+        match self {
+            Alertness::Safe => "safe",
+            Alertness::Aware => "aware",
+            Alertness::Combat => "combat",
+        }
+    }
+
+    /// The alertness of a name as in JSON.
+    pub fn from_name(name: &str) -> Option<Alertness> {
+        match name {
+            "safe" => Some(Alertness::Safe),
+            "aware" => Some(Alertness::Aware),
+            "combat" => Some(Alertness::Combat),
+            _ => None,
+        }
+    }
+
+    fn is_safe(&self) -> bool {
+        *self == Alertness::Safe
+    }
 }
 
 impl Default for Behaviour {
@@ -281,6 +377,15 @@ impl Default for Behaviour {
             aim_error_mrad: 3.0,
             reaction_s: 0.6,
             search_s: 15.0,
+            skill: 1.0,
+            precision: 1.0,
+            spot_time_s: 0.0,
+            aim_settle_s: 0.0,
+            aim_error_floor_mrad: 0.0,
+            courage: 1.0,
+            cover_search_m: 0.0,
+            calm_s: DEFAULT_CALM_S,
+            alertness: Alertness::Safe,
         }
     }
 }
@@ -348,6 +453,46 @@ impl Behaviour {
             0.0,
             BEHAVIOUR_TIME_MAX_S,
             " seconds",
+        )?;
+        ctx.range("behaviour.skill", self.skill, 0.0, 1.0, "")?;
+        ctx.range("behaviour.precision", self.precision, 0.0, 1.0, "")?;
+        ctx.range("behaviour.courage", self.courage, 0.0, 1.0, "")?;
+        for (field, value) in [
+            ("behaviour.spot_time_s", self.spot_time_s),
+            ("behaviour.aim_settle_s", self.aim_settle_s),
+            ("behaviour.calm_s", self.calm_s),
+        ] {
+            ctx.range(field, value, 0.0, BEHAVIOUR_TIME_MAX_S, " seconds")?;
+        }
+        ctx.range(
+            "behaviour.aim_error_floor_mrad",
+            self.aim_error_floor_mrad,
+            0.0,
+            AIM_ERROR_MAX_MRAD,
+            " milliradians",
+        )?;
+        ctx.range(
+            "behaviour.cover_search_m",
+            self.cover_search_m,
+            0.0,
+            COVER_SEARCH_MAX_M,
+            " metres",
         )
+    }
+
+    /// Whether any of the numbers of skill, precision, detection, settling, courage, cover
+    /// and alertness differs from its default (a behaviour of an older world has them all
+    /// at their defaults, and then behaves as it always did).
+    pub fn uses_ai_numbers(&self) -> bool {
+        let d = Behaviour::default();
+        self.skill != d.skill
+            || self.precision != d.precision
+            || self.spot_time_s != d.spot_time_s
+            || self.aim_settle_s != d.aim_settle_s
+            || self.aim_error_floor_mrad != d.aim_error_floor_mrad
+            || self.courage != d.courage
+            || self.cover_search_m != d.cover_search_m
+            || self.calm_s != d.calm_s
+            || self.alertness != d.alertness
     }
 }

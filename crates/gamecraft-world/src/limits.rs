@@ -157,3 +157,5 @@ pub const VIEW_FOV_MIN_DEG: f64 = 30.0;
 pub const VIEW_FOV_MAX_DEG: f64 = 120.0;
 /// Farthest a `held_model` sits from the camera along any axis, metres.
 pub const HELD_OFFSET_MAX_M: f64 = 2.0;
+/// Farthest a `behaviour` looks for cover, metres.
+pub const COVER_SEARCH_MAX_M: f64 = 100.0;

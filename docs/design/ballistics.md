@@ -62,6 +62,39 @@ Enough for enemies that patrol and react; navigation proper is M7.
   it has seen nothing for a while. Its decisions are made from the same input records a player
   uses, so an agent can take over any enemy by sending input.
 
+## Skill, detection and cover
+
+Hard because they notice you, react and use cover; fair because their aim is fallible. The
+split follows the tactical shooters players tune: *skill* (perception, reaction, tactics) and
+*precision* (aim only), as numbers on the behaviour; named presets are a pack's data
+(`crates/gamecraft-sim/src/ai.rs` has the formulas and constants).
+
+- **Skill and precision** (0 to 1, default 1): skill multiplies reaction, spot time and the
+  pauses in cover by `1 + (1 - skill)`; precision multiplies the aim error by
+  `1 + 3 * (1 - precision)`, stress by `1 + 2 * stress`.
+- **Gradual detection**: knowledge of every enemy, 0 to 1, rises while it is seen at
+  `gain / (spot_time_s * time factor / alert)` per second (`gain`: half the effective range
+  over the distance, between 0.25 and 4, times 1.5 when the enemy moves and 2 when it fires;
+  alert 1, 1.5 or 2 for safe, aware, combat) and falls by 1 per 60 s unseen; the last known
+  place stays. It reacts from 0.25 and fires from 0.6. Darkness, mist and rain shorten the
+  effective range and so slow it. Vegetation does not count yet.
+- **Alertness**: safe, aware (a shot heard, an enemy glimpsed), combat (contact, or the stress
+  of near misses); `calm_s` without contact outside a fight calms it one step, never below its
+  behaviour's `alertness`.
+- **Aim settling**: the aim error falls from `aim_error_mrad` to `aim_error_floor_mrad` over
+  `aim_settle_s` while the same target stays in view.
+- **Cover** (`cover_search_m` above 0, in combat): a position picker queried every 30 ticks
+  (skill scales it), at most 64 candidates (where it stands, eight points around every solid
+  near it, two rings of 12), scored by protection from the known threats (line of sight to the
+  chest blocked), the length of the way there (straight or round one or two corners), a peek
+  point from which it can fire at the first threat, and spacing from friends. It runs there,
+  stays down 2 s, peeks and fires 2.5 s, and goes back down. `query.cover` is the same query.
+- **Suppression** (light): a projectile of someone else passing within 3 m of the chest adds
+  `0.35 * (1 - courage) * (1 - distance / 3)` stress (recovering 0.1 per second); from 0.3 it
+  is in combat and takes cover, from 0.6 it does not peek.
+- With all these numbers at their defaults a behaviour decides exactly as before them, and
+  the state hash leaves out what it knows and feels.
+
 ## Open
 
 - Penetration of thin shapes, ricochets, materials (later, with physics, M4).

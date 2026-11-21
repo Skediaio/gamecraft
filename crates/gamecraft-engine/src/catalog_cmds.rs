@@ -504,6 +504,66 @@ const BEHAVIOUR_FIELDS: &[Field] = &[
         Some("s"),
         "Seconds it searches after losing sight of an enemy or hearing a shot, 0 to 3600.",
     ),
+    field(
+        "skill",
+        "number",
+        None,
+        "General skill, 0 to 1 (default 1): at 0 its reaction, spot time and cover pauses take \
+         twice as long.",
+    ),
+    field(
+        "precision",
+        "number",
+        None,
+        "Aim precision, 0 to 1 (default 1): at 0 its aim errors are four times as large.",
+    ),
+    field(
+        "spot_time_s",
+        "number",
+        Some("s"),
+        "Seconds an enemy in plain view at half the view range takes to be fully known, 0 to \
+         3600 (default 0: at first sight); closer, moving or firing sooner. It reacts from \
+         knowledge 0.25 and fires from 0.6.",
+    ),
+    field(
+        "aim_settle_s",
+        "number",
+        Some("s"),
+        "Seconds over which the aim error shrinks to aim_error_floor_mrad while the target \
+         stays in view, 0 to 3600 (default 0: it does not settle).",
+    ),
+    field(
+        "aim_error_floor_mrad",
+        "number",
+        Some("mrad"),
+        "The aim error of a settled aim, 0 to 1000 (default 0).",
+    ),
+    field(
+        "courage",
+        "number",
+        None,
+        "How much of the stress of near misses it shrugs off, 0 to 1 (default 1: all). Stress \
+         widens its aim and, with cover_search_m, sends it into cover.",
+    ),
+    field(
+        "cover_search_m",
+        "number",
+        Some("m"),
+        "How far it looks for cover in combat, 0 to 100 (default 0: it does not take cover).",
+    ),
+    field(
+        "calm_s",
+        "number",
+        Some("s"),
+        "Seconds without contact after which combat calms to aware and aware to safe, 0 to \
+         3600 (default 30).",
+    ),
+    field(
+        "alertness",
+        "\"safe\"|\"aware\"|\"combat\"",
+        None,
+        "The alertness it starts in and never falls below (default safe).",
+    ),
 ];
 
 const KINDS: &[Kind] = &[
@@ -620,7 +680,25 @@ fn defaults(kind: &Kind) -> Result<Value, CommandError> {
             kind.kind
         ))
     })?;
-    serde_json::to_value(component).map_err(failed)
+    let mut v = serde_json::to_value(&component).map_err(failed)?;
+    // A behaviour leaves its skill, detection and cover numbers out of the file at their
+    // defaults (older worlds read and write as before); list them anyway.
+    if let (Component::Behaviour(b), Value::Object(m)) = (&component, &mut v) {
+        for (name, value) in [
+            ("skill", json!(b.skill)),
+            ("precision", json!(b.precision)),
+            ("spot_time_s", json!(b.spot_time_s)),
+            ("aim_settle_s", json!(b.aim_settle_s)),
+            ("aim_error_floor_mrad", json!(b.aim_error_floor_mrad)),
+            ("courage", json!(b.courage)),
+            ("cover_search_m", json!(b.cover_search_m)),
+            ("calm_s", json!(b.calm_s)),
+            ("alertness", json!(b.alertness.name())),
+        ] {
+            m.entry(name).or_insert(value);
+        }
+    }
+    Ok(v)
 }
 
 fn components_spec() -> CommandSpec {
