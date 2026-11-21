@@ -3,10 +3,12 @@
 
 use crate::blit::Blit;
 use crate::effects::{self, Effects, Segment};
+use crate::hud;
 use crate::light;
 use crate::mesh::{self, MeshData};
 use crate::model::{self, Alpha, ModelMaterial, TexRef};
 use crate::plants::{self, PartKind, PlantImage};
+use crate::view_model::{self, ModelExtent};
 use crate::{Camera, Quality, RenderError};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{Picture, PictureRequest, PictureStats};
@@ -83,6 +85,8 @@ struct UnitMeshes {
     cube: vc::MeshId,
     sphere: vc::MeshId,
     cylinder: vc::MeshId,
+    /// A mesh that draws nothing ([`mesh::nothing`]).
+    nothing: vc::MeshId,
 }
 
 impl UnitMeshes {
@@ -114,15 +118,27 @@ struct Built {
 /// at the aim).
 struct HeldGroup {
     item: vc::ItemId,
-    held: Vec<(EntityId, HeldModel)>,
+    held: Vec<Holder>,
     /// The model's size on top of its scale: 1, or the stand-in's side.
     size: f64,
+    /// The box the model's vertices lie in (before its size and scale), when known.
+    extent: Option<ModelExtent>,
     instances: Vec<Mat4>,
 }
 
-/// Where a first-person view model is held: the eye, and the aim's yaw (degrees
-/// counter-clockwise from north seen from above) and pitch (degrees up from level). The aim
-/// is where the character points, not where a free-looking head turns.
+/// An entity whose `held_model` a [`HeldGroup`] draws.
+struct Holder {
+    id: EntityId,
+    held: HeldModel,
+    /// Nothing solid comes nearer its eye than this, metres: the share
+    /// [`view_model::VIEW_MODEL_CLEAR_SHARE`] of its character's radius.
+    clear_m: f64,
+}
+
+/// Where a first-person view model is held: the eye, the aim's yaw (degrees counter-clockwise
+/// from north seen from above) and pitch (degrees up from level), and how far it is up to the
+/// sights. The aim is where the character points (with its recoil and sway), not where a
+/// free-looking head turns.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewModelAim {
     /// The eye, world metres.
@@ -131,16 +147,25 @@ pub struct ViewModelAim {
     pub yaw_deg: f64,
     /// The aim's tilt, degrees up.
     pub pitch_deg: f64,
+    /// 0 at the hip (`offset_m`), 1 at the sights (`ads_offset_m`), between while it moves.
+    pub ads: f64,
 }
 
-/// Where a held model is drawn for `aim`: turned to the aim (its -Z forward along it), its
-/// origin `offset_m` (right, up, forward) from the eye in the aim's axes, scaled by its scale
-/// times `size`. `None` when a number is not finite.
-fn held_pose(aim: &ViewModelAim, held: &HeldModel, size: f64) -> Option<Mat4> {
+/// Where a held model is drawn for `aim`, before it is shrunk towards the eye: turned to the
+/// aim (its -Z forward along it), its origin at the offset (right, up, forward; `offset_m`
+/// towards `ads_offset_m` by `aim.ads`) from the eye in the aim's axes, scaled by its scale
+/// times `size`. Also the offset in the aim's axes (right, up, back). `None` when a number is
+/// not finite.
+fn held_pose_unshrunk(
+    aim: &ViewModelAim,
+    held: &HeldModel,
+    size: f64,
+) -> Option<(glam::DMat4, DVec3)> {
+    let offset = held.offset_at(aim.ads);
     let finite = aim
         .eye
         .iter()
-        .chain(&held.offset_m)
+        .chain(&offset)
         .chain(&[aim.yaw_deg, aim.pitch_deg, held.scale, size])
         .all(|v| v.is_finite());
     if !finite {
@@ -148,12 +173,36 @@ fn held_pose(aim: &ViewModelAim, held: &HeldModel, size: f64) -> Option<Mat4> {
     }
     let turn = DQuat::from_rotation_y(deg_to_rad(aim.yaw_deg))
         * DQuat::from_rotation_x(deg_to_rad(aim.pitch_deg));
-    let [right, up, forward] = held.offset_m;
-    let at = DVec3::from_array(aim.eye) + turn * DVec3::new(right, up, -forward);
-    Some(
-        glam::DMat4::from_scale_rotation_translation(DVec3::splat(held.scale * size), turn, at)
-            .as_mat4(),
-    )
+    let [right, up, forward] = offset;
+    let local = DVec3::new(right, up, -forward);
+    let at = DVec3::from_array(aim.eye) + turn * local;
+    Some((
+        glam::DMat4::from_scale_rotation_translation(DVec3::splat(held.scale * size), turn, at),
+        local,
+    ))
+}
+
+/// [`held_pose_unshrunk`] as drawn.
+#[cfg(test)]
+fn held_pose(aim: &ViewModelAim, held: &HeldModel, size: f64) -> Option<Mat4> {
+    held_pose_unshrunk(aim, held, size).map(|(m, _)| m.as_mat4())
+}
+
+/// Where a held model is drawn for `aim`: [`held_pose_unshrunk`] shrunk towards the eye so no
+/// wall in front of the camera hides it ([`view_model`]).
+fn held_pose_drawn(
+    aim: &ViewModelAim,
+    held: &HeldModel,
+    size: f64,
+    extent: Option<&ModelExtent>,
+    clear_m: f64,
+) -> Option<Mat4> {
+    let (pose, offset) = held_pose_unshrunk(aim, held, size)?;
+    let k = extent.map_or(1.0, |e| {
+        view_model::depth_share(offset, held.scale * size, e, clear_m)
+    });
+    let drawn = view_model::shrink_towards(DVec3::from_array(aim.eye), pose, k);
+    drawn.is_finite().then(|| drawn.as_mat4())
 }
 
 /// One character item: the characters it draws, in instance order, and where it drew them.
@@ -356,6 +405,8 @@ pub struct WorldRenderer {
     tracer_lines: Vec<vc::LineVertex>,
     /// Whether the live frames carry a crosshair.
     crosshair: bool,
+    /// The line of text in the bottom right corner of live frames, if any.
+    hud: Option<String>,
     synced: Option<GeometryKey>,
     problems: Vec<String>,
     /// Problems of setting the renderer up, repeated with every sync.
@@ -381,6 +432,8 @@ struct ResidentModel {
     files: Vec<String>,
     /// Textures that could not be decoded, as a sentence; the model is drawn without them.
     note: Option<String>,
+    /// The box its vertices lie in, when it has any.
+    extent: Option<ModelExtent>,
 }
 
 impl ResidentModel {
@@ -418,14 +471,16 @@ impl WorldRenderer {
             unit(mesh::unit_box()),
             unit(mesh::unit_sphere()),
             unit(mesh::unit_cylinder()),
+            unit(mesh::nothing()),
         ) {
-            (Ok(cube), Ok(sphere), Ok(cylinder)) => Some(UnitMeshes {
+            (Ok(cube), Ok(sphere), Ok(cylinder), Ok(nothing)) => Some(UnitMeshes {
                 cube,
                 sphere,
                 cylinder,
+                nothing,
             }),
-            (a, b, c) => {
-                let why: Vec<String> = [a, b, c].into_iter().filter_map(Result::err).collect();
+            (a, b, c, d) => {
+                let why: Vec<String> = [a, b, c, d].into_iter().filter_map(Result::err).collect();
                 setup_problems.push(format!(
                     "The shape meshes could not be uploaded, so shapes are not drawn: {}.",
                     why.join("; ")
@@ -469,6 +524,7 @@ impl WorldRenderer {
             puff_instances: Vec::new(),
             tracer_lines: Vec::new(),
             crosshair: false,
+            hud: None,
             synced: None,
             problems: setup_problems.clone(),
             setup_problems,
@@ -586,6 +642,13 @@ impl WorldRenderer {
         self.crosshair = on;
     }
 
+    /// A line of text live frames ([`WorldRenderer::draw`]) carry in their bottom right corner
+    /// (a weapon's mode and rounds: `AUTO 27/30`), drawn over everything in capitals, digits
+    /// and `/` ([`hud`]); `None` (the default) for none. Pictures never carry one.
+    pub fn set_hud_text(&mut self, text: Option<&str>) {
+        self.hud = text.map(str::to_string);
+    }
+
     /// How many times [`WorldRenderer::sync`] built the scene's geometry: a count of work for
     /// tests and measurements.
     pub fn rebuild_count(&self) -> u64 {
@@ -683,7 +746,7 @@ impl WorldRenderer {
         let aspect = f64::from(self.size.0) / f64::from(self.size.1);
         let (view, proj, eye) = self.aim(camera, aspect, time_s);
         self.renderer.set_camera(view, proj, eye);
-        let sights: Vec<vc::LineVertex> = if self.crosshair {
+        let mut sights: Vec<vc::LineVertex> = if self.crosshair {
             effects::crosshair_segments(camera, self.size.1)
                 .iter()
                 .flat_map(line_pair)
@@ -691,6 +754,13 @@ impl WorldRenderer {
         } else {
             Vec::new()
         };
+        if let Some(text) = &self.hud {
+            sights.extend(
+                hud::hud_segments(camera, self.size.0, self.size.1, text)
+                    .iter()
+                    .flat_map(line_pair),
+            );
+        }
         self.renderer.set_overlay_lines_on_top(&sights);
         let output = self.renderer.render(encoder);
         self.blit
@@ -735,8 +805,10 @@ impl WorldRenderer {
                 (Some(id), Some(aim)) => group
                     .held
                     .iter()
-                    .filter(|(e, _)| *e == id)
-                    .filter_map(|(_, held)| held_pose(aim, held, group.size))
+                    .filter(|h| h.id == id)
+                    .filter_map(|h| {
+                        held_pose_drawn(aim, &h.held, group.size, group.extent.as_ref(), h.clear_m)
+                    })
                     .collect(),
                 _ => Vec::new(),
             };
@@ -1027,6 +1099,7 @@ fn upload_model(
         textures: Vec::new(),
         files: used.into_inner(),
         note: None,
+        extent: ModelExtent::of(data.prims.iter().flat_map(|p| p.positions.iter().copied())),
     };
     let mut textures: BTreeMap<(usize, bool, Role), Option<vc::TextureId>> = BTreeMap::new();
     let mut notes: Vec<String> = Vec::new();
@@ -1481,13 +1554,30 @@ impl Scene<'_> {
                 groups.entry(h.asset.clone()).or_default().push(e);
             }
         }
-        let held_of = |entities: &[&Entity]| -> Vec<(EntityId, HeldModel)> {
+        let held_of = |entities: &[&Entity]| -> Vec<Holder> {
             entities
                 .iter()
-                .filter_map(|e| e.held_model().map(|h| (e.id, h.clone())))
+                .filter_map(|e| {
+                    e.held_model().map(|h| Holder {
+                        id: e.id,
+                        held: h.clone(),
+                        clear_m: e
+                            .character()
+                            .map_or(0.0, |c| c.radius_m * view_model::VIEW_MODEL_CLEAR_SHARE),
+                    })
+                })
                 .collect()
         };
-        let mut missing: Vec<(EntityId, HeldModel)> = Vec::new();
+        // Drawn by the view, nothing in the shadow passes (one level coarser): no shadow.
+        let no_shadow = |lods: &mut Vec<(vc::MeshId, vc::MaterialId, f32)>| {
+            if let (Some(units), Some(&(_, material, _))) = (units, lods.first()) {
+                for lod in lods.iter_mut() {
+                    lod.2 = view_model::VIEW_MODEL_LOD_M;
+                }
+                lods.push((units.nothing, material, f32::INFINITY));
+            }
+        };
+        let mut missing: Vec<Holder> = Vec::new();
         for (asset, entities) in groups {
             ensure_resident(self.r, resident, &asset, files, uploads);
             match resident.get(&asset) {
@@ -1499,17 +1589,19 @@ impl Scene<'_> {
                     if let (Some(note), false) = (&m.note, shown_as_model) {
                         self.problems.push(format!("Model `{asset}`: {note}"));
                     }
-                    let lods: Vec<(vc::MeshId, vc::MaterialId, f32)> = m
+                    let mut lods: Vec<(vc::MeshId, vc::MaterialId, f32)> = m
                         .parts
                         .iter()
                         .map(|&(mesh, material)| (mesh, material, f32::INFINITY))
                         .collect();
+                    no_shadow(&mut lods);
                     let item = self.r.add_lod_item(&lods, &[]);
                     self.built.items.push(item);
                     self.built.held.push(HeldGroup {
                         item,
                         held: held_of(&entities),
                         size: 1.0,
+                        extent: m.extent,
                         instances: Vec::new(),
                     });
                 }
@@ -1535,11 +1627,19 @@ impl Scene<'_> {
         let Some(units) = units else { return };
         if !missing.is_empty() {
             let material = self.color(MISSING_MODEL_COLOR);
-            let item = self.add_item(&[(units.cube, material)], &[]);
+            let mut lods = vec![(units.cube, material, f32::INFINITY)];
+            no_shadow(&mut lods);
+            let item = self.r.add_lod_item(&lods, &[]);
+            self.built.items.push(item);
             self.built.held.push(HeldGroup {
                 item,
                 held: missing,
                 size: MISSING_HELD_SIZE_M,
+                // The unit box: x and z from -0.5 to 0.5, y from 0 to 1.
+                extent: Some(ModelExtent {
+                    min: [-0.5, 0.0, -0.5],
+                    max: [0.5, 1.0, 0.5],
+                }),
                 instances: Vec::new(),
             });
         }
@@ -1827,6 +1927,7 @@ mod tests {
             asset: "models/rifle.glb".into(),
             offset_m,
             scale,
+            ..HeldModel::of("models/rifle.glb")
         }
     }
 
@@ -1856,6 +1957,7 @@ mod tests {
             eye: [1.0, 1.6, 3.0],
             yaw_deg: 0.0,
             pitch_deg: 0.0,
+            ads: 0.0,
         };
         let m = held_pose(&level, &held, 1.0).unwrap();
         // Facing north (-Z): right is +X, forward -Z.

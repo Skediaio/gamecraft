@@ -122,3 +122,38 @@ split follows the tactical shooters players tune: *skill* (perception, reaction,
   shooter's own motion is not added to the projectile.
 - The ray maths lives in `gamecraft-sim/src/ray.rs`, shared by projectiles, sight and the
   engine's `query.raycast` and `query.line_of_sight`.
+
+## Handling: fire modes, reloads, recoil, sway, sights (2026-11-21)
+
+Mechanisms on the same `launcher`, numbers as data (`gamecraft-sim/src/handling.rs` has the
+exact rules):
+
+- **Selector**: `modes` (one to four of `safe`, `semi`, `auto`, `burst`, in switch order; the
+  first at the start), `burst_count`, `cyclic_rpm` for `auto` and `burst` (else `rate_s`);
+  `semi` fires once per pull and at most every `rate_s`. The input's `fire` is the trigger,
+  `switch_mode` moves the selector, `sim.input {fire_mode}` sets it. Left out, `modes` is
+  `["auto"]` at `rate_s`: a launcher fires as it always did, so behaviours that hold `fire`
+  keep firing.
+- **Reload**: the input's `reload` takes `reload_s`; from empty `reload_empty_s` (else
+  `reload_s`).
+- **Recoil** `{kick_up_mrad, kick_side_mrad, recovery_s}`: a kick per shot on top of the aim,
+  decaying exponentially (5 % left after `recovery_s`); fast shots stack. The window shows it
+  as a climbing view the player pulls back with the mouse: the input's aim is the player's,
+  the offset is added on top.
+- **Sway** `{standing_mrad, crouched_mrad, prone_mrad, moving_factor, fatigue_factor,
+  fatigue_build_s, fatigue_fade_s, breath_hold_s, breath_steady_factor, breath_recover_s,
+  breath_recover_factor, period_s}`: a seeded sum of three sines; characters have no stances
+  yet, so every one stands (`handling::stance_of` is the hook).
+- **Sights**: the input's `ads` multiplies sway and dispersion by `ads_sway_factor` and
+  `ads_dispersion_factor`; `held_model {ads_offset_m, ads_fov_factor, ads_time_s}` moves the
+  view model to the sights and narrows the view in the window.
+- Every handling field is left out of a document while at its default, so old worlds keep
+  their text and their state hashes.
+
+A 5.56 service rifle in these terms (research of 2026-11-21: published figures, and tuning
+values to settle in play): `muzzle_velocity_mps` 870, `mass_kg` 0.004, `dispersion_mrad` 0.5,
+`rate_s` 0.1, `magazine` 30, `reload_s` 2.5, `reload_empty_s` 3.5, `modes` `["safe", "semi",
+"auto"]`, `cyclic_rpm` 650, `recoil` 1.5 / 0.6 mrad over 0.25 s, `sway` 2 / 1.2 / 0.5 mrad, a
+fatigue factor of 2.5 fading over 10 s. The research gives the M855 ball's G1 coefficient
+(about 0.30 lb/in2); this engine's drag is G7, whose figure for that bullet is about 0.15
+lb/in2, so `ballistic_coefficient` is about 135 (times 895.2), not 211.

@@ -60,6 +60,7 @@ fn script(rng: &mut Rng) -> Input {
         pitch_deg: 0.0,
         fire: false,
         face: None,
+        ..Input::default()
     }
 }
 

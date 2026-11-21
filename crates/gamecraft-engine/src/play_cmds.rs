@@ -1,7 +1,7 @@
 //! Playing: `sim.start`, `sim.stop`, `sim.step`, `sim.input`, `sim.state`.
 
 use crate::combat_cmds::{
-    PROJECTILE_DOC, behaviour_json, health_json, magazine_json, projectiles_json,
+    PROJECTILE_DOC, behaviour_json, handling_json, health_json, magazine_json, projectiles_json,
 };
 use crate::error::{CommandError, bad, failed};
 use crate::params::Params;
@@ -9,6 +9,7 @@ use crate::session::{Handler, Registration, Session};
 use crate::spec::{CommandSpec, ParamType as T, param, spec};
 use crate::triggers::{self, Happening};
 use gamecraft_sim::{Face, Input, MAX_PITCH_DEG, MAX_STEP_TICKS, Sim, TICK_HZ};
+use gamecraft_world::FireMode;
 use serde_json::{Map, Value, json};
 
 /// The commands of this module.
@@ -40,10 +41,13 @@ const MIN_FACE_DISTANCE_M: f64 = 1e-9;
 
 const CHARACTERS_DOC: &str = "[{id, name, position, rotation_y_deg, velocity, grounded, \
     health: {max, current, armor, down} | null, behaviour: {state, ...} | null, magazine: {left, \
-    shots, ready_in_s, reloading} | null}]";
+    shots, ready_in_s, reloading, mode} | null, handling: {recoil_mrad: [left, up], sway_mrad: \
+    [left, up], aim_offset_deg: [yaw, pitch], sway_amplitude_mrad, fatigue, breath, breath_s, \
+    ads, stance, pulled} | null}]";
 
 const INPUT_DOC: &str = "{entity, forward, right, yaw_deg, pitch_deg, run, jump, interact, fire, \
-    face: [x, z] | null, face_entity: id | null, face_pitch}";
+    face: [x, z] | null, face_entity: id | null, face_pitch, ads, hold_breath, switch_mode, \
+    reload}";
 
 /// The state hash as 16 lowercase hex digits (a JSON number cannot hold a `u64` exactly).
 fn hash(sim: &Sim) -> String {
@@ -67,6 +71,7 @@ fn characters(sim: &Sim) -> Vec<Value> {
                 "health": health_json(e),
                 "behaviour": behaviour_json(sim, e.id),
                 "magazine": magazine_json(sim, e.id),
+                "handling": handling_json(sim, e.id),
             })
         })
         .collect()
@@ -306,8 +311,41 @@ fn input_spec() -> CommandSpec {
             param(
                 "fire",
                 T::Boolean,
-                "Held: the character's launcher fires every `rate_s` while it has shots.",
+                "Held: the trigger of the character's launcher is pulled; it fires as its fire \
+                 mode allows (once per pull in semi, burst_count per pull in burst, at the \
+                 cyclic rate while held in auto, never on safe) while it has shots.",
             ),
+            param(
+                "ads",
+                T::Boolean,
+                "Held: aims down the sights; the sway and the dispersion shrink by the \
+                 launcher's ads_sway_factor and ads_dispersion_factor.",
+            ),
+            param(
+                "hold_breath",
+                T::Boolean,
+                "Held: holds the breath, steadying the sway for up to the launcher's \
+                 sway.breath_hold_s; it is worse for sway.breath_recover_s after.",
+            ),
+            param(
+                "switch_mode",
+                T::Boolean,
+                "Held: moves the selector to the launcher's next fire mode once, when it turns \
+                 true.",
+            ),
+            param(
+                "reload",
+                T::Boolean,
+                "Held: starts a reload of the launcher's reload_s once, when it turns true, \
+                 unless the magazine is full or reloading.",
+            ),
+            param(
+                "fire_mode",
+                T::String,
+                "Moves the selector to this mode now; it must be one of the launcher's modes. \
+                 Not kept in the record.",
+            )
+            .allowed(&FireMode::NAMES),
         ],
         &format!("{INPUT_DOC}: the stored input"),
         json!({"entity": "Scout", "forward": 1, "face": [0, -60], "run": true}),
@@ -335,6 +373,10 @@ fn input_json(id: u64, i: &Input) -> Value {
             _ => Value::Null,
         },
         "face_pitch": matches!(i.face, Some(Face::Entity { pitch: true, .. })),
+        "ads": i.ads,
+        "hold_breath": i.hold_breath,
+        "switch_mode": i.switch_mode,
+        "reload": i.reload,
     })
 }
 
@@ -429,7 +471,46 @@ fn input(session: &mut Session, p: Params<'_>) -> Result<Value, CommandError> {
     if let Some(v) = p.bool("fire")? {
         record.fire = v;
     }
+    for (name, slot) in [
+        ("ads", &mut record.ads),
+        ("hold_breath", &mut record.hold_breath),
+        ("switch_mode", &mut record.switch_mode),
+        ("reload", &mut record.reload),
+    ] {
+        if let Some(v) = p.bool(name)? {
+            *slot = v;
+        }
+    }
+    let mode = match p.str("fire_mode")? {
+        Some(name) => {
+            let mode = FireMode::from_name(name).ok_or_else(|| {
+                bad(format!(
+                    "`fire_mode` is \"{name}\"; it must be one of {}",
+                    FireMode::NAMES.join(", ")
+                ))
+            })?;
+            let Some(launcher) = entity.launcher() else {
+                return Err(bad(format!(
+                    "`fire_mode` needs a launcher, and entity {id} has none; add one with \
+                     entity.set_component"
+                )));
+            };
+            if !launcher.modes.contains(&mode) {
+                let modes: Vec<&str> = launcher.modes.iter().map(|m| m.name()).collect();
+                return Err(bad(format!(
+                    "`fire_mode` is \"{name}\", which the launcher of entity {id} does not \
+                     have; it has {}",
+                    modes.join(", ")
+                )));
+            }
+            Some(mode)
+        }
+        None => None,
+    };
     sim.set_input(id, record).map_err(failed)?;
+    if let Some(mode) = mode {
+        sim.set_fire_mode(id, mode).map_err(failed)?;
+    }
     let stored = sim.input(id).copied().unwrap_or(record);
     Ok(input_json(id.0, &stored))
 }

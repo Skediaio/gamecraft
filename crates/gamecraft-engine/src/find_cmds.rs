@@ -1,6 +1,8 @@
 //! Looking up entities: `entity.get` and `entity.find`.
 
-use crate::combat_cmds::{BEHAVIOUR_DOC, behaviour_json, health_json, magazine_json};
+use crate::combat_cmds::{
+    BEHAVIOUR_DOC, behaviour_json, handling_json, health_json, magazine_json,
+};
 use crate::error::{CommandError, bad, failed};
 use crate::params::Params;
 use crate::session::{Handler, Registration, Session};
@@ -47,10 +49,13 @@ fn get_spec() -> CommandSpec {
              [ids], layer: name | null (null: the world's default layer), components: [...] (the effective ones), ground_height_m: \
              number | null (null without ground beneath), height_above_ground_m: number | null, \
              body: null | {{velocity, grounded}} (a character while playing), input: null | \
-             {{forward, right, yaw_deg, pitch_deg, run, jump, interact, fire}} (the input \
+             {{forward, right, yaw_deg, pitch_deg, run, jump, interact, fire, face, ads, \
+             hold_breath, switch_mode, reload}} (the input \
              stored for a character while playing), health: null | {{max, current, armor, \
              down}}, behaviour: null | {BEHAVIOUR_DOC} (while playing), magazine: null | \
-             {{left, shots, ready_in_s, reloading}} (a launcher while playing)}}"
+             {{left, shots, ready_in_s, reloading, mode}} (a launcher while playing), handling: \
+             null | {{recoil_mrad, sway_mrad, aim_offset_deg, sway_amplitude_mrad, fatigue, \
+             breath, breath_s, ads, stance, pulled}} (a character's launcher while playing)}}"
         ),
         json!({"id": "Scout"}),
     )
@@ -92,6 +97,7 @@ fn get(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
         "health": health_json(entity),
         "behaviour": session.live().map_or(Value::Null, |sim| behaviour_json(sim, id)),
         "magazine": session.live().map_or(Value::Null, |sim| magazine_json(sim, id)),
+        "handling": session.live().map_or(Value::Null, |sim| handling_json(sim, id)),
     }))
 }
 

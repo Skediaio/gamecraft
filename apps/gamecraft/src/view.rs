@@ -62,12 +62,15 @@ impl GameView {
         self.problems = problems;
         self.renderer.set_view_model(game.view_model_aim());
         self.renderer.set_effects(&game.effects());
-        // The crosshair marks the aim, which the camera leaves while free look is held.
+        // The crosshair marks the aim, which the camera leaves while free look is held; down
+        // the sights the sights are the mark.
         self.renderer.set_crosshair(
             game.view() == ViewMode::FirstPerson
                 && game.player().is_some()
-                && !game.is_freelooking(),
+                && !game.is_freelooking()
+                && !game.is_aiming(),
         );
+        self.renderer.set_hud_text(game.hud_text().as_deref());
         let (width, height) = self.renderer.size();
         let camera = game.camera(f64::from(width) / f64::from(height));
         self.renderer

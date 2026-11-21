@@ -3,8 +3,9 @@
 //! Pure mapping, no device: [`PadState`] is a snapshot of one pad (what a backend such as
 //! `gilrs` reads), [`PadMapper`] turns snapshots into [`Controls`] changes and window
 //! [`Action`]s. The left stick walks (with a radial dead zone), the right stick looks at a
-//! speed in degrees per second, whatever the frame rate; the left stick's click or a held left
-//! trigger runs, the south button jumps, west interacts, the right trigger fires, start
+//! speed in degrees per second, whatever the frame rate; the left stick's click runs (and holds
+//! the breath while aiming), the south button jumps, west interacts, the right trigger fires,
+//! the left trigger aims down the sights, north switches the fire mode, east reloads, start
 //! pauses and select switches the view.
 
 use crate::input::{Action, Controls};
@@ -63,6 +64,10 @@ pub struct PadState {
     pub south: bool,
     /// West button (X, square).
     pub west: bool,
+    /// North button (Y, triangle).
+    pub north: bool,
+    /// East button (B, circle).
+    pub east: bool,
     /// Start.
     pub start: bool,
     /// Select (back, view).
@@ -134,10 +139,15 @@ impl PadMapper {
         let (forward, right) = move_axes(state.left_x, state.left_y, c);
         controls.pad_move(forward, right);
         controls.pad_buttons(
-            state.left_thumb || state.left_trigger >= c.trigger_threshold,
+            state.left_thumb,
             state.south,
             state.west,
             state.right_trigger >= c.trigger_threshold,
+        );
+        controls.pad_weapon(
+            state.left_trigger >= c.trigger_threshold,
+            state.north,
+            state.east,
         );
         let (yaw, pitch) = look_step(state.right_x, state.right_y, dt_s, c);
         controls.turn(yaw, pitch);
@@ -235,21 +245,27 @@ mod tests {
         let r = controls.record();
         assert!(close(r.forward, 1.0) && close(r.right, 0.0));
         assert!(r.run && r.jump && r.interact && r.fire);
-        // A held left trigger runs too; letting go of everything stops it all.
+        // The left trigger aims down the sights, and the stick's click then holds the breath;
+        // north and east switch the mode and reload. Letting go of everything stops it all.
         mapper.update(
             &PadState {
                 left_trigger: 1.0,
+                left_thumb: true,
+                north: true,
+                east: true,
                 ..PadState::default()
             },
             0.016,
             &mut controls,
         );
         let r = controls.record();
-        assert!(r.run && !r.fire && r.forward == 0.0);
+        assert!(r.ads && r.hold_breath && !r.run && r.forward == 0.0);
+        assert!(r.switch_mode && r.reload);
         mapper.update(&PadState::default(), 0.016, &mut controls);
         controls.ticked();
         let r = controls.record();
         assert!(!r.run && !r.jump && !r.interact && !r.fire);
+        assert!(!r.ads && !r.hold_breath && !r.switch_mode && !r.reload);
     }
 
     #[test]

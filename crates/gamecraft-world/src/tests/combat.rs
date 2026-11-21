@@ -24,6 +24,7 @@ fn armed_world() -> World {
                 muzzle_height_m: 1.4,
                 max_flight_s: 6.0,
                 sound_range_m: 800.0,
+                ..Launcher::default()
             }),
             Component::Health(Health {
                 max: 120.0,

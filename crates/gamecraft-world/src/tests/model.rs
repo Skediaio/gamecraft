@@ -174,6 +174,7 @@ fn a_held_model_reads_with_its_defaults_and_round_trips() {
                 asset: "models/rifle.glb".into(),
                 offset_m: [0.2, -0.1, 0.5],
                 scale: 0.5,
+                ..HeldModel::of("models/rifle.glb")
             })],
             ..EntityDraft::default()
         })
@@ -191,6 +192,7 @@ fn a_bad_held_model_names_the_field_and_what_is_allowed() {
             asset: "models/rifle.glb".into(),
             offset_m: DEFAULT_HELD_OFFSET_M,
             scale: 1.0,
+            ..HeldModel::of("models/rifle.glb")
         };
         change(&mut h);
         let mut w = World::new("h", 1);
@@ -217,4 +219,56 @@ fn a_bad_held_model_names_the_field_and_what_is_allowed() {
     );
     let e = bad(|h| h.scale = 0.0);
     assert!(e.contains("held_model.scale"), "{e}");
+}
+
+#[test]
+fn a_held_model_comes_up_to_its_sights() {
+    // Left out, the sights are at the hip offset and the view narrows to 0.85 in 0.2 s.
+    let c: Component =
+        serde_json::from_str(r#"{"type": "held_model", "asset": "models/rifle.glb"}"#).unwrap();
+    let Component::HeldModel(h) = c else { panic!() };
+    assert_eq!(h, HeldModel::of("models/rifle.glb"));
+    assert_eq!(h.ads_offset_m, None);
+    assert_eq!((h.ads_fov_factor, h.ads_time_s), (0.85, 0.2));
+    assert_eq!(h.offset_at(1.0), h.offset_m);
+    let h = HeldModel {
+        offset_m: [0.2, -0.2, 0.4],
+        ads_offset_m: Some([0.0, -0.05, 0.3]),
+        ads_fov_factor: 0.7,
+        ..HeldModel::of("models/rifle.glb")
+    };
+    assert_eq!(h.offset_at(0.0), [0.2, -0.2, 0.4]);
+    assert_eq!(h.offset_at(1.0), [0.0, -0.05, 0.3]);
+    let half = h.offset_at(0.5);
+    assert!((half[0] - 0.1).abs() < 1e-12 && (half[1] + 0.125).abs() < 1e-12);
+    assert_eq!(h.offset_at(f64::NAN), h.offset_m);
+    assert_eq!(h.offset_at(7.0), [0.0, -0.05, 0.3]);
+    assert!((h.fov_factor_at(1.0) - 0.7).abs() < 1e-12);
+    assert_eq!(h.fov_factor_at(0.0), 1.0);
+    let back: HeldModel = serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap();
+    assert_eq!(back, h);
+}
+
+#[test]
+fn bad_sights_name_the_field() {
+    let bad = |change: fn(&mut HeldModel)| {
+        let mut h = HeldModel::of("models/rifle.glb");
+        change(&mut h);
+        let mut w = World::new("h", 1);
+        w.add_entity(EntityDraft {
+            components: vec![Component::HeldModel(h)],
+            ..EntityDraft::default()
+        })
+        .unwrap_err()
+        .to_string()
+    };
+    let e = bad(|h| h.ads_offset_m = Some([0.0, 0.0, 3.0]));
+    assert!(e.contains("held_model.ads_offset_m (forward)"), "{e}");
+    let e = bad(|h| h.ads_fov_factor = 0.1);
+    assert!(
+        e.contains("held_model.ads_fov_factor") && e.contains("0.2 to 1"),
+        "{e}"
+    );
+    let e = bad(|h| h.ads_time_s = f64::INFINITY);
+    assert!(e.contains("held_model.ads_time_s"), "{e}");
 }

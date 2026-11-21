@@ -13,8 +13,8 @@ use gamecraft_math::{DVec3, yaw_forward};
 use gamecraft_render::Quality;
 use gamecraft_sim::DT;
 use gamecraft_world::{
-    Character, Component, EntityDraft, EntityId, Objective, ObjectiveStatus, Terrain,
-    TerrainSource, ViewMode as WorldView, ViewRules, World,
+    Character, Component, EntityDraft, EntityId, FireMode, HeldModel, Launcher, Objective,
+    ObjectiveStatus, Recoil, Terrain, TerrainSource, ViewMode as WorldView, ViewRules, World,
 };
 use serde_json::json;
 
@@ -53,7 +53,8 @@ fn keys_become_an_input_record() {
     assert_eq!(
         params,
         json!({"entity": 3, "forward": 0.0, "right": 1.0, "yaw_deg": 30.0, "run": true,
-               "jump": false, "interact": true, "pitch_deg": 0.0, "fire": false})
+               "jump": false, "interact": true, "pitch_deg": 0.0, "fire": false, "ads": false,
+               "hold_breath": false, "switch_mode": false, "reload": false})
     );
 
     c.release_all();
@@ -74,6 +75,11 @@ fn the_fire_button_and_the_camera_tilt_go_into_the_record() {
     assert_eq!(params["fire"], json!(true));
     assert_eq!(params["pitch_deg"], json!(r.pitch_deg));
     c.set_fire(false);
+    assert!(
+        c.record().fire,
+        "a click reaches a tick even when let go before"
+    );
+    c.ticked();
     assert!(!c.record().fire);
     c.set_fire(true);
     c.release_all();
@@ -82,6 +88,146 @@ fn the_fire_button_and_the_camera_tilt_go_into_the_record() {
         "letting go of everything lets go of the trigger"
     );
     assert!(c.pitch_deg() > 0.0, "the look is kept");
+}
+
+#[test]
+fn the_sights_the_breath_the_selector_and_a_reload_go_into_the_record() {
+    let mut c = Controls::new(0.0);
+    // Shift runs; with the sights held it holds the breath instead.
+    c.key(Key::Run, true);
+    let r = c.record();
+    assert!(r.run && !r.ads && !r.hold_breath);
+    c.set_ads(true);
+    let r = c.record();
+    assert!(!r.run && r.ads && r.hold_breath);
+    c.key(Key::Run, false);
+    let r = c.record();
+    assert!(r.ads && !r.hold_breath);
+    // B and R are taps that reach one tick, held keys stay.
+    c.key(Key::SwitchMode, true);
+    c.key(Key::SwitchMode, false);
+    c.key(Key::Reload, true);
+    let r = c.record();
+    assert!(r.switch_mode && r.reload);
+    c.ticked();
+    let r = c.record();
+    assert!(!r.switch_mode && r.reload, "R is still held");
+    let params = r.params(EntityId(2));
+    assert_eq!(
+        (params["ads"].clone(), params["reload"].clone()),
+        (json!(true), json!(true))
+    );
+    c.release_all();
+    let r = c.record();
+    assert!(!r.ads && !r.reload && !r.switch_mode && !r.hold_breath);
+}
+
+/// A flat world with one player holding a rifle that kicks 10 mrad up per shot (semi, then
+/// auto) and a held model with sights.
+fn rifleman() -> World {
+    let mut world = World::new("Rifle range", 4);
+    world.terrain = Some(Terrain {
+        size_m: 128.0,
+        cell_m: 4.0,
+        source: TerrainSource::Flat { height_m: 0.0 },
+        ..Default::default()
+    });
+    world.view = ViewRules {
+        modes: vec![WorldView::First],
+        fov_y_deg: 70.0,
+    };
+    world
+        .add_entity(EntityDraft {
+            name: "Rifleman".into(),
+            components: vec![
+                Component::Character(Character::default()),
+                Component::Launcher(Launcher {
+                    dispersion_mrad: 0.0,
+                    magazine: 30,
+                    modes: vec![FireMode::Semi, FireMode::Auto],
+                    max_flight_s: 0.5,
+                    recoil: Recoil {
+                        kick_up_mrad: 10.0,
+                        kick_side_mrad: 0.0,
+                        recovery_s: 1.0,
+                    },
+                    ..Launcher::default()
+                }),
+                Component::HeldModel(HeldModel {
+                    ads_offset_m: Some([0.0, -0.05, 0.25]),
+                    ads_fov_factor: 0.8,
+                    ..HeldModel::of("models/rifle.glb")
+                }),
+            ],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    world
+}
+
+#[test]
+fn the_recoil_climbs_the_view_and_the_player_pulls_it_back() {
+    let mut game = Game::new(rifleman());
+    frames(&mut game, 2);
+    let pitch_of = |g: &Game| {
+        let c = g.camera(16.0 / 9.0);
+        let d = DVec3::from_array(c.target) - DVec3::from_array(c.position);
+        (d.y / d.length()).asin().to_degrees()
+    };
+    let level = pitch_of(&game);
+    assert!(close(level, 0.0, 1e-9), "{level}");
+    assert_eq!(game.hud_text().as_deref(), Some("SEMI 30/30"));
+    // A click: one shot; the view climbs by the kick (10 mrad, 0.57 degrees).
+    game.fire(true);
+    game.fire(false);
+    frames(&mut game, 1);
+    let kicked = pitch_of(&game);
+    assert!(close(kicked, 0.01_f64.to_degrees(), 1e-6), "{kicked}");
+    assert_eq!(game.hud_text().as_deref(), Some("SEMI 29/30"));
+    let aim = game.view_model_aim().unwrap();
+    assert!(
+        close(aim.pitch_deg, kicked, 1e-9),
+        "the held model climbs too"
+    );
+    // The player pulls the mouse down by as much: the view is level again while the kick
+    // decays, so it then sinks below (the input's aim is the player's).
+    game.look(0.0, kicked / crate::input::LOOK_DEG_PER_PIXEL);
+    assert!(close(pitch_of(&game), 0.0, 1e-9));
+    frames(&mut game, 60);
+    assert!(
+        pitch_of(&game) < -0.4,
+        "the kick settled: {}",
+        pitch_of(&game)
+    );
+    // B switches to auto.
+    game.key(Key::SwitchMode, true);
+    game.key(Key::SwitchMode, false);
+    frames(&mut game, 1);
+    assert!(game.hud_text().unwrap().starts_with("AUTO"));
+}
+
+#[test]
+fn down_the_sights_the_held_model_comes_up_and_the_view_narrows() {
+    let mut game = Game::new(rifleman());
+    frames(&mut game, 2);
+    assert_eq!(game.ads_blend(), 0.0);
+    let wide = game.camera(16.0 / 9.0).fov_y_deg;
+    game.aim_down_sights(true);
+    assert!(game.is_aiming());
+    // 0.2 s at 60 frames a second: up at the sights after 12 frames.
+    frames(&mut game, 6);
+    assert!(close(game.ads_blend(), 0.5, 1e-9), "{}", game.ads_blend());
+    frames(&mut game, 6);
+    assert!(close(game.ads_blend(), 1.0, 1e-9));
+    assert!(close(game.camera(16.0 / 9.0).fov_y_deg, wide * 0.8, 1e-9));
+    assert!(close(game.view_model_aim().unwrap().ads, 1.0, 1e-9));
+    // The simulation knows: the input holds `ads`.
+    let state = game.session_mut().run("sim.state", &json!({})).unwrap();
+    assert_eq!(state["inputs"][0]["ads"], json!(true));
+    game.aim_down_sights(false);
+    frames(&mut game, 12);
+    assert_eq!(game.ads_blend(), 0.0);
+    assert!(close(game.camera(16.0 / 9.0).fov_y_deg, wide, 1e-9));
 }
 
 #[test]

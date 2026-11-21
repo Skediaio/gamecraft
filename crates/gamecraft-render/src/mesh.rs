@@ -451,6 +451,18 @@ pub fn layer_weights(normal_y: f64) -> [u8; 8] {
     weights
 }
 
+/// A mesh that draws nothing: one triangle with its three corners at the origin. An item's
+/// level of detail made of it is drawn by no pixel (a held model's shadow level).
+pub fn nothing() -> MeshData {
+    let mut mesh = MeshData::default();
+    let up = [0.0, 1.0, 0.0];
+    let a = mesh.vertex([0.0; 3], up);
+    let b = mesh.vertex([0.0; 3], up);
+    let c = mesh.vertex([0.0; 3], up);
+    mesh.triangle(a, b, c);
+    mesh
+}
+
 /// A box 1 m on each side standing on the origin: x and z from -0.5 to 0.5, y from 0 to 1.
 /// Flat normals: four vertices per face.
 pub fn unit_box() -> MeshData {

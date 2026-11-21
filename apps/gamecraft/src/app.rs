@@ -28,7 +28,7 @@ const SETTLE_FRAMES: u8 = 2;
 #[cfg(not(target_arch = "wasm32"))]
 const START_SIZE: (f64, f64) = (1280.0, 720.0);
 
-/// The game key of a physical key: WASD, Shift, Space, E, Left Alt, F1, F5, P and Esc.
+/// The game key of a physical key: WASD, Shift, Space, E, B, R, Left Alt, F1, F5, P and Esc.
 pub fn key_of(code: KeyCode) -> Option<Key> {
     Some(match code {
         KeyCode::KeyW => Key::Forward,
@@ -38,6 +38,8 @@ pub fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::ShiftLeft | KeyCode::ShiftRight => Key::Run,
         KeyCode::Space => Key::Jump,
         KeyCode::KeyE => Key::Interact,
+        KeyCode::KeyB => Key::SwitchMode,
+        KeyCode::KeyR => Key::Reload,
         KeyCode::AltLeft => Key::Freelook,
         KeyCode::F1 => Key::ToggleView,
         KeyCode::F5 => Key::Restart,
@@ -241,6 +243,7 @@ impl App {
         self.captured = false;
         if let Some(game) = &mut self.game {
             game.fire(false);
+            game.aim_down_sights(false);
         }
     }
 
@@ -433,10 +436,20 @@ impl ApplicationHandler for App {
                     game.fire(pressed && self.captured);
                 }
             }
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Right,
+                ..
+            } => {
+                if let Some(game) = &mut self.game {
+                    game.aim_down_sights(state == ElementState::Pressed && self.captured);
+                }
+            }
             WindowEvent::Focused(false) => {
                 if let Some(game) = &mut self.game {
                     game.release_keys();
                     game.fire(false);
+                    game.aim_down_sights(false);
                 }
                 self.release();
             }

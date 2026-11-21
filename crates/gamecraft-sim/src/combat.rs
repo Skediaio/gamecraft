@@ -1,13 +1,17 @@
 //! Launchers, projectiles in flight, hits, damage and `down`, and the sound of shots.
 //!
-//! - **Firing.** A launcher fires when its character's input holds `fire` (every `rate_s`
-//!   while held) or by [`crate::Sim::fire`]. A shot needs the launcher ready: `rate_s` after
-//!   the last shot, and after the last shot of a magazine `reload_s` (or `rate_s` when longer)
-//!   before a full magazine. The muzzle is at a character's eyes, or `muzzle_height_m` above
-//!   any other entity's position. The direction is the yaw and pitch asked for, turned by the
-//!   dispersion: a uniform draw in a cone of `dispersion_mrad` from the world's seeded stream
-//!   forked by [`LABEL_DISPERSION`], the launcher's entity id and its shot number. The shooter's
-//!   own motion is not added.
+//! - **Firing.** A launcher fires when its character's input holds `fire`, as its fire mode
+//!   allows ([`crate::handling`]: once per pull in `semi`, while held in `auto`, never on
+//!   `safe`), or by [`crate::Sim::fire`] (not on `safe`). A shot needs the launcher ready: the
+//!   mode's interval after the last shot (`rate_s`, or the cyclic rate's in `auto` and
+//!   `burst`), and after the last shot of a magazine `reload_empty_s` (else `reload_s`; or the
+//!   interval when longer) before a full magazine; a reload asked for (the input's `reload`)
+//!   takes `reload_s`. The muzzle is at a character's eyes, or `muzzle_height_m` above any
+//!   other entity's position. The direction is the yaw and pitch asked for (plus a character's
+//!   recoil and sway), turned by the dispersion: a uniform draw in a cone of `dispersion_mrad`
+//!   (times `ads_dispersion_factor` while aiming down the sights) from the world's seeded
+//!   stream forked by [`LABEL_DISPERSION`], the launcher's entity id and its shot number. The
+//!   shooter's own motion is not added.
 //! - **Hearing.** Every character but the shooter whose eyes are within `sound_range_m` of the
 //!   muzzle, and that is not down, hears the shot: a `heard` event.
 //! - **Flight.** Per tick, projectiles in id order, each over [`crate::PROJECTILE_SUBSTEPS`]
@@ -24,7 +28,7 @@
 
 use gamecraft_math::{Portable, Rng, deg_to_rad, yaw_forward};
 use gamecraft_world::limits::MAX_COORDINATE_M;
-use gamecraft_world::{Entity, EntityId, Environment, HeightField, Launcher, World};
+use gamecraft_world::{Entity, EntityId, Environment, FireMode, HeightField, Launcher, World};
 use serde::Serialize;
 
 use crate::ballistics::{Flight, SUBSTEP_S, advance, air_at};
@@ -77,17 +81,31 @@ pub struct Magazine {
     pub ready_in_s: f64,
     /// Whether the wait is a reload (the magazine is refilled when it ends).
     pub reloading: bool,
+    /// Where the selector is: one of the launcher's `modes`.
+    pub mode: FireMode,
 }
 
 impl Magazine {
-    /// A full magazine, ready.
+    /// A full magazine, ready, the selector at the launcher's first mode.
     pub(crate) fn full(launcher: &Launcher) -> Magazine {
         Magazine {
             left: launcher.magazine,
             shots: 0,
             ready_in_s: 0.0,
             reloading: false,
+            mode: launcher.first_mode(),
         }
+    }
+
+    /// Starts a reload of `reload_s` (after any wait still running) unless the magazine is
+    /// full or reloading already. Whether it started.
+    pub(crate) fn reload(&mut self, launcher: &Launcher) -> bool {
+        if self.reloading || self.left >= launcher.magazine {
+            return false;
+        }
+        self.reloading = true;
+        self.ready_in_s = self.ready_in_s.max(launcher.reload_s);
+        true
     }
 
     /// Whether it can fire now.
@@ -109,11 +127,12 @@ impl Magazine {
     fn shoot(&mut self, launcher: &Launcher) {
         self.left = self.left.saturating_sub(1);
         self.shots = self.shots.saturating_add(1);
+        let interval = launcher.interval_s(self.mode);
         if self.left == 0 {
             self.reloading = true;
-            self.ready_in_s = launcher.reload_s.max(launcher.rate_s);
+            self.ready_in_s = launcher.empty_reload_s().max(interval);
         } else {
-            self.ready_in_s = launcher.rate_s;
+            self.ready_in_s = interval;
         }
     }
 }
@@ -160,6 +179,9 @@ pub(crate) struct Shot {
     pub(crate) number: u64,
     /// The projectile's id.
     pub(crate) id: u64,
+    /// The spread of this shot, milliradians: the launcher's, less while aiming down the
+    /// sights.
+    pub(crate) dispersion_mrad: f64,
 }
 
 /// The projectile of `shot` from `launcher`.
@@ -168,7 +190,7 @@ pub(crate) fn launch(world: &World, launcher: &Launcher, shot: &Shot) -> Project
         .fork(LABEL_DISPERSION)
         .fork(shot.shooter.0)
         .fork(shot.number);
-    let (dy, dp) = cone_offset(&mut rng, launcher.dispersion_mrad);
+    let (dy, dp) = cone_offset(&mut rng, shot.dispersion_mrad);
     let yaw = shot.yaw_deg + dy.to_degrees();
     let pitch = shot.pitch_deg + dp.to_degrees();
     let [dx, up, dz] = aim_direction(yaw, pitch);
@@ -186,28 +208,39 @@ pub(crate) fn launch(world: &World, launcher: &Launcher, shot: &Shot) -> Project
     }
 }
 
-/// Fires `launcher` of `shooter` if it is ready: the projectile and the `heard` events of its
-/// sound; the magazine counts the shot. `None` when it is not ready.
+/// Where a shot is aimed and how widely it spreads.
+pub(crate) struct Aim {
+    /// Yaw, degrees, before dispersion.
+    pub(crate) yaw_deg: f64,
+    /// Pitch, degrees, before dispersion.
+    pub(crate) pitch_deg: f64,
+    /// Spread, milliradians.
+    pub(crate) dispersion_mrad: f64,
+}
+
+/// Fires `launcher` of `shooter` along `aim` if it is ready and not on `safe`: the projectile
+/// and the `heard` events of its sound; the magazine counts the shot. `None` when it does not
+/// fire.
 pub(crate) fn try_fire(
     world: &World,
     shooter: &Entity,
     launcher: &Launcher,
     magazine: &mut Magazine,
-    yaw_deg: f64,
-    pitch_deg: f64,
+    aim: &Aim,
     id: u64,
 ) -> Option<(Projectile, Vec<EventKind>)> {
-    if !magazine.ready() {
+    if !magazine.ready() || magazine.mode == FireMode::Safe {
         return None;
     }
     let from = muzzle(shooter, launcher);
     let shot = Shot {
         shooter: shooter.id,
         from,
-        yaw_deg,
-        pitch_deg,
+        yaw_deg: aim.yaw_deg,
+        pitch_deg: aim.pitch_deg,
         number: magazine.shots,
         id,
+        dispersion_mrad: aim.dispersion_mrad,
     };
     let projectile = launch(world, launcher, &shot);
     magazine.shoot(launcher);

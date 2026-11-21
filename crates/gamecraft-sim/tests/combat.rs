@@ -31,6 +31,7 @@ fn rifle() -> Launcher {
         muzzle_height_m: 1.5,
         max_flight_s: 60.0,
         sound_range_m: 400.0,
+        ..Launcher::default()
     }
 }
 

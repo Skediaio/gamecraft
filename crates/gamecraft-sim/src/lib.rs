@@ -33,8 +33,8 @@
 //!
 //! Every tick runs, in this order: the behaviours decide ([`behaviour`] docs: they write the
 //! input of their characters), the characters move (a character that is down takes no input),
-//! the launchers fire (inputs holding `fire`; [`combat`] docs), and the projectiles fly
-//! ([`ballistics`] for the flight, [`combat`] for hits, damage and `down`). Then the events
+//! the launchers handle and fire ([`handling`]: selector, reload, recoil, sway and the trigger;
+//! [`combat`] docs), and the projectiles fly ([`ballistics`] for the flight, [`combat`] for hits, damage and `down`). Then the events
 //! above are detected. The events of a tick are the scenario events above, then `heard`,
 //! `hit` and `down` in the order they happened (shots in id order of the shooter, projectiles
 //! in id order). A shot of [`Sim::fire`] (between two ticks) is heard at once.
@@ -102,7 +102,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use gamecraft_math::{StateHasher, wrap_deg};
-use gamecraft_world::{Entity, EntityId, HeightField, World};
+use gamecraft_world::{Entity, EntityId, FireMode, HeightField, World};
 use serde::{Deserialize, Serialize};
 
 pub mod ai;
@@ -112,6 +112,7 @@ pub mod behaviour;
 pub mod combat;
 pub mod cover;
 mod events;
+pub mod handling;
 mod motion;
 pub mod perception;
 pub mod ray;
@@ -120,6 +121,7 @@ mod solid;
 pub use behaviour::{Brain, BrainState};
 pub use combat::{Magazine, Projectile};
 pub use events::{Event, EventKind};
+pub use handling::{Breath, Handling, Stance};
 
 use motion::{State, Surroundings, clamp_to_disc};
 use solid::Solid;
@@ -161,6 +163,8 @@ const HASH_MARK_MODELS: u64 = 0x30DE_130D_E130_DE13;
 const HASH_MARK_FACE: u64 = 0xFACE_FACE_FACE_FACE;
 /// Marks what the behaviours know and feel in the state hash.
 const HASH_MARK_AI: u64 = 0xA1A1_A1A1_A1A1_A1A1;
+/// Marks the launchers in characters' hands (trigger, recoil, sway) in the state hash.
+const HASH_MARK_HANDLING: u64 = 0x4A7D_4A7D_4A7D_4A7D;
 
 /// What a character keeps facing, turned towards at the start of every tick (see the crate
 /// docs, *Facing*).
@@ -198,10 +202,19 @@ pub struct Input {
     /// Where the character aims, degrees up from level, -89 to 89 (clamped). It does not turn
     /// the body.
     pub pitch_deg: f64,
-    /// Held: the character's launcher fires every `rate_s` (while it has shots).
+    /// Held: the trigger of the character's launcher is pulled; it fires as its fire mode
+    /// allows (while it has shots; [`handling`]).
     pub fire: bool,
     /// Held: what the character keeps turning towards, every tick; `None` keeps `yaw_deg`.
     pub face: Option<Face>,
+    /// Held: the character aims down the sights (less sway and dispersion).
+    pub ads: bool,
+    /// Held: the character holds its breath (a steadier sway for a few seconds).
+    pub hold_breath: bool,
+    /// Held: the selector moves to the launcher's next fire mode once, when it turns true.
+    pub switch_mode: bool,
+    /// Held: a reload starts once, when it turns true (unless the magazine is full).
+    pub reload: bool,
 }
 
 /// The moving state of one character that is not in the document. A new body is at rest and
@@ -285,6 +298,8 @@ pub struct Sim {
     next_projectile: u64,
     /// The state of every launcher of the running world.
     magazines: BTreeMap<EntityId, Magazine>,
+    /// The state of every launcher in a character's hands: trigger, recoil, sway.
+    handlings: BTreeMap<EntityId, Handling>,
     /// The state of every behaviour of a character of the running world.
     brains: BTreeMap<EntityId, Brain>,
     /// Characters with a behaviour whose input an agent took over.
@@ -320,6 +335,7 @@ impl Sim {
             projectiles: Vec::new(),
             next_projectile: 1,
             magazines: BTreeMap::new(),
+            handlings: BTreeMap::new(),
             brains: BTreeMap::new(),
             taken_over: BTreeSet::new(),
             sounds: Vec::new(),
@@ -574,6 +590,13 @@ impl Sim {
             .get(&id)
             .copied()
             .unwrap_or_else(|| Magazine::full(launcher));
+        if magazine.mode == FireMode::Safe {
+            return Err(SimError::NotReady(format!(
+                "the launcher of entity {id} is on safe; set another of its modes ({}) with \
+                 sim.input's fire_mode",
+                mode_names(launcher)
+            )));
+        }
         if !magazine.ready() {
             let what = if magazine.reloading {
                 "it is reloading"
@@ -586,13 +609,18 @@ impl Sim {
             )));
         }
         let projectile_id = self.next_projectile;
+        let number = magazine.shots;
+        let ads = self.handlings.get(&id).is_some_and(|h| h.ads);
         let fired = combat::try_fire(
             &self.world,
             entity,
             launcher,
             &mut magazine,
-            wrap_deg(yaw),
-            pitch,
+            &combat::Aim {
+                yaw_deg: wrap_deg(yaw),
+                pitch_deg: pitch,
+                dispersion_mrad: dispersion_of(launcher, ads),
+            },
             projectile_id,
         );
         let Some((projectile, heard)) = fired else {
@@ -600,6 +628,10 @@ impl Sim {
                 "the launcher of entity {id} is not ready"
             )));
         };
+        let seed = self.world.seed;
+        if let Some(h) = self.handlings.get_mut(&id) {
+            h.kick(launcher, seed, id, number);
+        }
         self.magazines.insert(id, magazine);
         self.next_projectile = self.next_projectile.saturating_add(1);
         self.projectiles.push(projectile);
@@ -681,10 +713,13 @@ impl Sim {
         }
     }
 
-    /// The launchers wait a tick, and those whose character holds `fire` shoot.
+    /// The launchers wait a tick; those in a character's hands handle a tick ([`handling`]:
+    /// selector, reload, recoil, sway) and shoot while their trigger allows.
     fn shoot(&mut self) -> Vec<EventKind> {
         let mut events = Vec::new();
         let ids: Vec<EntityId> = self.magazines.keys().copied().collect();
+        let seed = self.world.seed;
+        let end_s = self.tick.saturating_add(1) as f64 * DT;
         for id in ids {
             let Some(entity) = self.world.entity(id) else {
                 continue;
@@ -696,30 +731,101 @@ impl Sim {
                 continue;
             };
             magazine.wait(DT, launcher);
-            let input = self.inputs.get(&id).copied();
-            let wants = entity.character().is_some()
-                && !entity.is_down()
-                && input.is_some_and(|i| i.fire)
+            let handling = self.handlings.get(&id).copied();
+            let (Some(mut handling), Some(_)) = (handling, entity.character()) else {
+                self.magazines.insert(id, magazine);
+                continue;
+            };
+            // A character that is down takes no input.
+            let input = if entity.is_down() {
+                None
+            } else {
+                self.inputs.get(&id).copied()
+            };
+            let pressed = input.unwrap_or_default();
+            if pressed.switch_mode && !handling.switch_held {
+                magazine.mode = launcher.next_mode(magazine.mode);
+                handling.pulled = 0;
+            }
+            if pressed.reload && !handling.reload_held {
+                magazine.reload(launcher);
+            }
+            handling.switch_held = pressed.switch_mode;
+            handling.reload_held = pressed.reload;
+            let [vx, _, vz] = self.bodies.get(&id).map_or([0.0; 3], |b| b.velocity);
+            let phases = handling::sway_phases(seed, id);
+            handling.tick(
+                launcher,
+                &handling::Moment {
+                    input: input.as_ref(),
+                    speed_mps: (vx * vx + vz * vz).sqrt(),
+                    stance: handling::stance_of(entity),
+                    time_s: end_s,
+                    phases: &phases,
+                },
+            );
+            let wants = pressed.fire
+                && handling.allows(magazine.mode, launcher.burst_count)
                 && self.projectiles.len() < combat::MAX_PROJECTILES;
-            if wants
-                && let Some(i) = input
-                && let Some((projectile, heard)) = combat::try_fire(
+            if wants {
+                let (left, up) = Handling::to_deg(handling.offset_mrad());
+                let number = magazine.shots;
+                let fired = combat::try_fire(
                     &self.world,
                     entity,
                     launcher,
                     &mut magazine,
-                    i.yaw_deg,
-                    i.pitch_deg,
+                    &combat::Aim {
+                        yaw_deg: wrap_deg(pressed.yaw_deg + left),
+                        pitch_deg: (pressed.pitch_deg + up)
+                            .clamp(-MAX_FIRE_PITCH_DEG, MAX_FIRE_PITCH_DEG),
+                        dispersion_mrad: dispersion_of(launcher, handling.ads),
+                    },
                     self.next_projectile,
-                )
-            {
-                self.next_projectile = self.next_projectile.saturating_add(1);
-                self.projectiles.push(projectile);
-                events.extend(heard);
+                );
+                if let Some((projectile, heard)) = fired {
+                    self.next_projectile = self.next_projectile.saturating_add(1);
+                    self.projectiles.push(projectile);
+                    events.extend(heard);
+                    handling.count_shot(magazine.mode);
+                    handling.kick(launcher, seed, id, number);
+                }
             }
             self.magazines.insert(id, magazine);
+            self.handlings.insert(id, handling);
         }
         events
+    }
+
+    /// The state of the launcher in a character's hands ([`handling`]), `None` for an entity
+    /// that is not a character with a launcher.
+    pub fn handling(&self, id: EntityId) -> Option<&Handling> {
+        self.handlings.get(&id)
+    }
+
+    /// Moves the selector of the launcher of `id` to `mode` now. An error when the entity has
+    /// no launcher or the launcher has no such mode (it names the modes it has).
+    pub fn set_fire_mode(&mut self, id: EntityId, mode: FireMode) -> Result<(), SimError> {
+        let entity = self.world.entity(id).ok_or(SimError::NoEntity(id))?;
+        let launcher = entity.launcher().ok_or(SimError::NoLauncher(id))?;
+        if !launcher.modes.contains(&mode) {
+            return Err(SimError::BadInput(format!(
+                "the launcher of entity {id} has no fire mode \"{}\"; it has {}",
+                mode.name(),
+                mode_names(launcher)
+            )));
+        }
+        let mut magazine = self
+            .magazines
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| Magazine::full(launcher));
+        magazine.mode = mode;
+        self.magazines.insert(id, magazine);
+        if let Some(h) = self.handlings.get_mut(&id) {
+            h.pulled = 0;
+        }
+        Ok(())
     }
 
     /// The projectiles fly one tick.
@@ -890,6 +996,7 @@ impl Sim {
             }
         }
         let mut magazines = BTreeMap::new();
+        let mut handlings = BTreeMap::new();
         let mut brains = BTreeMap::new();
         for entity in world.entities() {
             if let Some(launcher) = entity.launcher() {
@@ -899,7 +1006,14 @@ impl Sim {
                     .copied()
                     .unwrap_or_else(|| Magazine::full(launcher));
                 magazine.left = magazine.left.min(launcher.magazine);
+                if !launcher.modes.contains(&magazine.mode) {
+                    magazine.mode = launcher.first_mode();
+                }
                 magazines.insert(entity.id, magazine);
+                if entity.character().is_some() {
+                    let handling = self.handlings.get(&entity.id).copied().unwrap_or_default();
+                    handlings.insert(entity.id, handling);
+                }
             }
             if let (Some(behaviour), Some(_)) = (entity.behaviour(), entity.character()) {
                 let mut brain = self
@@ -919,6 +1033,7 @@ impl Sim {
         self.taken_over.retain(|id| brains.contains_key(id));
         self.sounds.retain(|(id, _)| brains.contains_key(id));
         self.magazines = magazines;
+        self.handlings = handlings;
         self.brains = brains;
         self.solids = solid::solids_of(&world);
         self.watch = events::Watch::of(&world);
@@ -1020,6 +1135,7 @@ impl Sim {
             }
         }
         self.hash_combat(&mut hasher);
+        self.hash_handling(&mut hasher);
         hasher.finish()
     }
 
@@ -1146,6 +1262,87 @@ impl Sim {
             }
         }
     }
+
+    /// The handling part of [`Sim::state_hash`]: the selectors not at their launcher's first
+    /// mode, the launchers in a character's hands whose handling is not at rest (a kick, a
+    /// sway, a pull, ...), and the inputs that hold `ads`, `hold_breath`, `switch_mode` or
+    /// `reload`. Written only when there are any, so a world that uses none of it hashes as
+    /// before.
+    fn hash_handling(&self, hasher: &mut StateHasher) {
+        let held: Vec<(EntityId, [bool; 4])> = self
+            .inputs
+            .iter()
+            .map(|(id, i)| (*id, [i.ads, i.hold_breath, i.switch_mode, i.reload]))
+            .filter(|(_, bits)| bits.iter().any(|b| *b))
+            .collect();
+        let moved: Vec<(EntityId, &Handling)> = self
+            .handlings
+            .iter()
+            .filter(|(_, h)| **h != Handling::default())
+            .map(|(id, h)| (*id, h))
+            .collect();
+        let switched: Vec<(EntityId, FireMode)> = self
+            .magazines
+            .iter()
+            .filter(|(id, m)| {
+                self.world
+                    .entity(**id)
+                    .and_then(Entity::launcher)
+                    .is_some_and(|l| l.first_mode() != m.mode)
+            })
+            .map(|(id, m)| (*id, m.mode))
+            .collect();
+        if moved.is_empty() && held.is_empty() && switched.is_empty() {
+            return;
+        }
+        hasher.write_u64(HASH_MARK_HANDLING);
+        hasher.write_u64(switched.len() as u64);
+        for (id, mode) in switched {
+            hasher.write_u64(id.0);
+            hasher.write_str(mode.name());
+        }
+        hasher.write_u64(moved.len() as u64);
+        for (id, h) in moved {
+            hasher.write_u64(id.0);
+            hasher.write_u64(u64::from(h.pulled));
+            hasher.write_bool(h.switch_held);
+            hasher.write_bool(h.reload_held);
+            for v in h.recoil_mrad.iter().chain(&h.sway_mrad) {
+                hasher.write_f64(*v);
+            }
+            hasher.write_f64(h.sway_amplitude_mrad);
+            hasher.write_f64(h.fatigue);
+            hasher.write_str(h.breath.name());
+            hasher.write_f64(h.breath_s);
+            hasher.write_bool(h.ads);
+        }
+        hasher.write_u64(held.len() as u64);
+        for (id, bits) in held {
+            hasher.write_u64(id.0);
+            for b in bits {
+                hasher.write_bool(b);
+            }
+        }
+    }
+}
+
+/// The spread of a shot of `launcher`, milliradians: less while aiming down the sights.
+fn dispersion_of(launcher: &gamecraft_world::Launcher, ads: bool) -> f64 {
+    if ads {
+        launcher.dispersion_mrad * launcher.ads_dispersion_factor
+    } else {
+        launcher.dispersion_mrad
+    }
+}
+
+/// The fire modes of `launcher` as a list for a sentence: `"safe", "semi"`.
+fn mode_names(launcher: &gamecraft_world::Launcher) -> String {
+    let names: Vec<String> = launcher
+        .modes
+        .iter()
+        .map(|m| format!("\"{}\"", m.name()))
+        .collect();
+    names.join(", ")
 }
 
 /// The hash of a world's static content: its JSON text with every character's position and

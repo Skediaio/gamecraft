@@ -5,6 +5,7 @@
 
 use crate::WorldError;
 use crate::error::Ctx;
+use crate::handling::{self, FireMode, Recoil, Sway};
 use crate::limits::{
     AIM_ERROR_MAX_MRAD, BALLISTIC_COEFFICIENT_MAX, BEHAVIOUR_RANGE_MAX_M, BEHAVIOUR_TIME_MAX_S,
     COVER_SEARCH_MAX_M, DAMAGE_PER_JOULE_MAX, DISPERSION_MAX_MRAD, HEALTH_MAX, LAUNCHER_TIME_MAX_S,
@@ -14,7 +15,13 @@ use crate::limits::{
 use serde::{Deserialize, Serialize};
 
 /// `value` must be finite, above 0 and at most `max`.
-fn above_zero(ctx: Ctx, field: &str, value: f64, max: f64, unit: &str) -> Result<(), WorldError> {
+pub(crate) fn above_zero(
+    ctx: Ctx,
+    field: &str,
+    value: f64,
+    max: f64,
+    unit: &str,
+) -> Result<(), WorldError> {
     if value.is_finite() && value > 0.0 && value <= max {
         Ok(())
     } else {
@@ -45,11 +52,13 @@ pub struct Launcher {
     pub ballistic_coefficient: f64,
     /// Spread of the shots, milliradians (the radius of a uniform cone), 0 to 500. Default 0.5.
     pub dispersion_mrad: f64,
-    /// Seconds between two shots while firing is held, above 0 and at most 3600. Default 0.1.
+    /// Seconds between two shots while firing is held (and between two pulls of the trigger in
+    /// `semi`), above 0 and at most 3600. Default 0.1.
     pub rate_s: f64,
     /// Shots before a reload, 1 to 100000. Default 10.
     pub magazine: u32,
-    /// Seconds a reload takes once the magazine is empty, 0 to 3600. Default 2.5.
+    /// Seconds a reload takes, 0 to 3600: one asked for (the input's `reload`) with rounds
+    /// left, and one from empty unless `reload_empty_s` says otherwise. Default 2.5.
     pub reload_s: f64,
     /// Damage per joule of the projectile's kinetic energy at the hit, 0 to 1e6. Default 0.05.
     pub damage_per_joule: f64,
@@ -62,10 +71,39 @@ pub struct Launcher {
     /// Distance from the muzzle within which characters hear a shot, metres, 0 to 100000.
     /// Default 500.
     pub sound_range_m: f64,
+    /// The fire modes the selector offers, in the order a switch goes through them; the first
+    /// is the mode at the start. One to four distinct modes. Default `["auto"]`: it fires every
+    /// `rate_s` while the trigger is held, as a launcher always did.
+    #[serde(skip_serializing_if = "handling::is_default_modes")]
+    pub modes: Vec<FireMode>,
+    /// Shots of one pull of the trigger in `burst` mode, 1 to 100. Default 3.
+    #[serde(skip_serializing_if = "handling::is_default_burst")]
+    pub burst_count: u32,
+    /// Rounds per minute of `auto` and `burst` fire, above 0 and at most 6000; `null` fires
+    /// them every `rate_s`. `semi` waits `rate_s` between two pulls. Default null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cyclic_rpm: Option<f64>,
+    /// Seconds a reload takes from an empty magazine, 0 to 3600; `null` takes `reload_s`.
+    /// Default null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reload_empty_s: Option<f64>,
+    /// How each shot kicks the shooter's aim. Default no kick.
+    #[serde(skip_serializing_if = "handling::is_default_recoil")]
+    pub recoil: Recoil,
+    /// How a character's aim drifts while it holds the launcher. Default no drift.
+    #[serde(skip_serializing_if = "handling::is_default_sway")]
+    pub sway: Sway,
+    /// The share of the sway left while aiming down the sights, 0 to 1. Default 0.5.
+    #[serde(skip_serializing_if = "handling::is_default_ads_factor")]
+    pub ads_sway_factor: f64,
+    /// The share of `dispersion_mrad` left while aiming down the sights, 0 to 1. Default 0.5.
+    #[serde(skip_serializing_if = "handling::is_default_ads_factor")]
+    pub ads_dispersion_factor: f64,
 }
 
 impl Default for Launcher {
     fn default() -> Self {
+        let (modes, burst_count, ads_factor) = Launcher::handling_defaults();
         Launcher {
             muzzle_velocity_mps: 800.0,
             mass_kg: 0.01,
@@ -78,6 +116,14 @@ impl Default for Launcher {
             muzzle_height_m: 1.5,
             max_flight_s: 10.0,
             sound_range_m: 500.0,
+            modes,
+            burst_count,
+            cyclic_rpm: None,
+            reload_empty_s: None,
+            recoil: Recoil::default(),
+            sway: Sway::default(),
+            ads_sway_factor: ads_factor,
+            ads_dispersion_factor: ads_factor,
         }
     }
 }
@@ -160,7 +206,8 @@ impl Launcher {
             0.0,
             SOUND_RANGE_MAX_M,
             " metres",
-        )
+        )?;
+        self.validate_handling(ctx)
     }
 }
 

@@ -82,6 +82,8 @@ impl Pads {
             left_thumb: pad.is_pressed(Button::LeftThumb),
             south: pad.is_pressed(Button::South),
             west: pad.is_pressed(Button::West),
+            north: pad.is_pressed(Button::North),
+            east: pad.is_pressed(Button::East),
             start: pad.is_pressed(Button::Start),
             select: pad.is_pressed(Button::Select),
         }

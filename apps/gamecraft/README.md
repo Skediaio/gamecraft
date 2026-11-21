@@ -23,18 +23,22 @@ without rules, which allows both), and F1 or select switches only among those li
 with `"modes": ["first"]` stays in first person. The camera's vertical field of view is the
 world's `fov_y_deg` (70 by default) unless `--fov` (natively) or `?fov=` (browser) sets the
 player's own. In first person the player's `held_model` (a weapon's view model) is drawn at the
-camera along the aim. Keys:
+camera along the aim. While playing with a launcher, the bottom right corner shows the fire mode and the rounds
+left (`AUTO 27/30`, `RELOAD` while reloading). Keys:
 
 | Key | Does |
 |---|---|
 | W / S | walk forward / back |
 | A / D | strafe left / right |
-| Shift | run |
+| Shift | run; while aiming down the sights, hold the breath instead (`hold_breath`: a steadier sway for a few seconds, worse for a while after) |
 | Space | jump |
 | E | interact (`sim.input`'s `interact`) |
 | mouse | turn (the input's `yaw_deg`) and look up and down (the camera, and the input's `pitch_deg` for a launcher); click the window to lock the pointer |
 | Left Alt, held | free look: the mouse (and the right stick) turns only the head, at most 100 degrees to either side and within the usual tilt; the character's facing, its aim and its held model stay; let go and the camera is back on the aim |
-| left button | fire the character's launcher (`fire`) once the pointer is locked; tracers, impact puffs and, in first person, a crosshair are drawn |
+| left button | the trigger of the character's launcher (`fire`) once the pointer is locked: once per click in semi, a burst in burst, while held in auto, nothing on safe; tracers, impact puffs and, in first person, a crosshair are drawn; the recoil climbs the view and the mouse pulls it back |
+| right button, held | aim down the sights (`ads`): less sway and spread; in first person the held model comes up to its `ads_offset_m`, the view narrows by its `ads_fov_factor` (over its `ads_time_s`) and the crosshair is hidden |
+| B | switch the fire mode (`switch_mode`: the next of the launcher's `modes`) |
+| R | reload (`reload`) |
 | Esc | release the pointer |
 | F1 | the next view the world allows (first or third person) |
 | F5 | restart the simulation from the document |
@@ -51,7 +55,10 @@ and the right stick adds to the mouse's look.
 |---|---|
 | left stick | walk (radial dead zone of 0.2) |
 | right stick | look at up to 150 degrees per second, whatever the frame rate; `--invert-look` (natively) or `?invert_look=1` (browser) flips up and down |
-| left stick click, or left trigger held | run |
+| left stick click | run; while aiming down the sights, hold the breath |
+| left trigger | aim down the sights |
+| north button (Y, triangle) | switch the fire mode |
+| east button (B, circle) | reload |
 | south button (A, cross) | jump |
 | west button (X, square) | interact |
 | right trigger | fire |

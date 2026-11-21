@@ -9,7 +9,7 @@
 //! by rays.
 
 use crate::error::Ctx;
-use crate::limits::{HELD_OFFSET_MAX_M, SCALE_MAX, SCALE_MIN};
+use crate::limits::{ADS_FOV_FACTOR_MIN, ADS_TIME_MAX_S, HELD_OFFSET_MAX_M, SCALE_MAX, SCALE_MIN};
 use crate::{Entity, WorldError};
 use gamecraft_math::{Portable, deg_to_rad};
 use serde::{Deserialize, Serialize};
@@ -132,6 +132,100 @@ pub struct HeldModel {
     /// Default 1.
     #[serde(default = "default_model_scale")]
     pub scale: f64,
+    /// Where the model's origin sits while the character aims down the sights, as `offset_m`
+    /// (each -2 to 2): put the sight line on the camera's axis. `null` keeps it at `offset_m`.
+    /// Default null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ads_offset_m: Option<[f64; 3]>,
+    /// The share of the field of view left while aiming down the sights, 0.2 to 1. Default
+    /// 0.85.
+    #[serde(
+        default = "default_ads_fov_factor",
+        skip_serializing_if = "is_default_ads_fov_factor"
+    )]
+    pub ads_fov_factor: f64,
+    /// Seconds the model takes to come up to the sights (and the view to narrow), and to go
+    /// back, 0 to 5. Default 0.2.
+    #[serde(
+        default = "default_ads_time_s",
+        skip_serializing_if = "is_default_ads_time_s"
+    )]
+    pub ads_time_s: f64,
+}
+
+/// The share of the field of view a [`HeldModel`] leaves while aiming down the sights when its
+/// component leaves `ads_fov_factor` out.
+pub const DEFAULT_ADS_FOV_FACTOR: f64 = 0.85;
+/// Seconds a [`HeldModel`] takes to come up to the sights when its component leaves
+/// `ads_time_s` out.
+pub const DEFAULT_ADS_TIME_S: f64 = 0.2;
+
+fn default_ads_fov_factor() -> f64 {
+    DEFAULT_ADS_FOV_FACTOR
+}
+
+fn default_ads_time_s() -> f64 {
+    DEFAULT_ADS_TIME_S
+}
+
+fn is_default_ads_fov_factor(v: &f64) -> bool {
+    *v == DEFAULT_ADS_FOV_FACTOR
+}
+
+fn is_default_ads_time_s(v: &f64) -> bool {
+    *v == DEFAULT_ADS_TIME_S
+}
+
+/// The defaults of the `held_model`'s sights fields as JSON (`ads_offset_m`,
+/// `ads_fov_factor`, `ads_time_s`): a document leaves them out while they are at their
+/// defaults, so a listing of the component's defaults adds them from here.
+pub fn held_model_sights_defaults() -> serde_json::Value {
+    serde_json::json!({
+        "ads_offset_m": null,
+        "ads_fov_factor": DEFAULT_ADS_FOV_FACTOR,
+        "ads_time_s": DEFAULT_ADS_TIME_S,
+    })
+}
+
+impl HeldModel {
+    /// A held model of `asset` with every other field at its default.
+    pub fn of(asset: impl Into<String>) -> HeldModel {
+        HeldModel {
+            asset: asset.into(),
+            offset_m: DEFAULT_HELD_OFFSET_M,
+            scale: 1.0,
+            ads_offset_m: None,
+            ads_fov_factor: DEFAULT_ADS_FOV_FACTOR,
+            ads_time_s: DEFAULT_ADS_TIME_S,
+        }
+    }
+
+    /// Where the origin sits `ads` of the way (0 hip to 1 at the sights) from `offset_m` to
+    /// `ads_offset_m`.
+    pub fn offset_at(&self, ads: f64) -> [f64; 3] {
+        let t = if ads.is_finite() {
+            ads.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let to = self.ads_offset_m.unwrap_or(self.offset_m);
+        let mut out = self.offset_m;
+        // Weighted so that 0 and 1 give the two offsets exactly.
+        for (o, b) in out.iter_mut().zip(to) {
+            *o = *o * (1.0 - t) + b * t;
+        }
+        out
+    }
+
+    /// The share of the field of view `ads` of the way to the sights.
+    pub fn fov_factor_at(&self, ads: f64) -> f64 {
+        let t = if ads.is_finite() {
+            ads.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (1.0 - t) + self.ads_fov_factor * t
+    }
 }
 
 impl HeldModel {
@@ -157,7 +251,32 @@ impl HeldModel {
                 " metres",
             )?;
         }
-        ctx.range("held_model.scale", self.scale, SCALE_MIN, SCALE_MAX, "")
+        ctx.range("held_model.scale", self.scale, SCALE_MIN, SCALE_MAX, "")?;
+        if let Some(ads) = self.ads_offset_m {
+            for (axis, v) in ["right", "up", "forward"].iter().zip(ads) {
+                ctx.range(
+                    format!("held_model.ads_offset_m ({axis})"),
+                    v,
+                    -HELD_OFFSET_MAX_M,
+                    HELD_OFFSET_MAX_M,
+                    " metres",
+                )?;
+            }
+        }
+        ctx.range(
+            "held_model.ads_fov_factor",
+            self.ads_fov_factor,
+            ADS_FOV_FACTOR_MIN,
+            1.0,
+            "",
+        )?;
+        ctx.range(
+            "held_model.ads_time_s",
+            self.ads_time_s,
+            0.0,
+            ADS_TIME_MAX_S,
+            " seconds",
+        )
     }
 }
 

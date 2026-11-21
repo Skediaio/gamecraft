@@ -1,11 +1,14 @@
 //! Keys and the mouse turned into an input record (`sim.input`), and the window's own keys.
 //!
 //! W and S walk forward and back, A and D strafe, Shift runs, Space jumps, E interacts; the
-//! mouse turns the character (the record's `yaw_deg`) and tilts the camera; the left button
-//! fires the character's launcher along that tilt (the record's `fire` and `pitch_deg`). While
-//! Left Alt is held the mouse turns only the head ([`Freelook`]): the record's facing and aim
-//! stay. F1 switches among the world's allowed views, F5 restarts the simulation, P pauses and
-//! Esc releases the pointer: those are [`Action`]s for the window, not input.
+//! mouse turns the character (the record's `yaw_deg`) and tilts the camera; the left button is
+//! the trigger of the character's launcher along that tilt (the record's `fire` and
+//! `pitch_deg`), the right button aims down the sights while held (`ads`), and Shift while
+//! aiming down the sights holds the breath instead of running (`hold_breath`). B switches the
+//! fire mode (`switch_mode`), R reloads (`reload`). While Left Alt is held the mouse turns only
+//! the head ([`Freelook`]): the record's facing and aim stay. F1 switches among the world's
+//! allowed views, F5 restarts the simulation, P pauses and Esc releases the pointer: those are
+//! [`Action`]s for the window, not input.
 
 use crate::freelook::Freelook;
 use gamecraft_engine::Session;
@@ -32,12 +35,16 @@ pub enum Key {
     Left,
     /// D: strafe right.
     Right,
-    /// Shift: run.
+    /// Shift: run; while aiming down the sights, hold the breath.
     Run,
     /// Space: jump.
     Jump,
     /// E: interact.
     Interact,
+    /// B: switch the launcher's fire mode.
+    SwitchMode,
+    /// R: reload.
+    Reload,
     /// Left Alt, held: free look (the head turns, the aim stays).
     Freelook,
     /// F1: first or third person.
@@ -80,8 +87,16 @@ pub struct InputRecord {
     pub interact: bool,
     /// The aim's tilt, degrees up from level (the camera's pitch), for a launcher.
     pub pitch_deg: f64,
-    /// Fire the launcher while held.
+    /// The launcher's trigger is held.
     pub fire: bool,
+    /// Aim down the sights while held.
+    pub ads: bool,
+    /// Hold the breath while held.
+    pub hold_breath: bool,
+    /// Switch the fire mode once when it turns true.
+    pub switch_mode: bool,
+    /// Reload once when it turns true.
+    pub reload: bool,
 }
 
 impl InputRecord {
@@ -97,6 +112,10 @@ impl InputRecord {
             "interact": self.interact,
             "pitch_deg": self.pitch_deg,
             "fire": self.fire,
+            "ads": self.ads,
+            "hold_breath": self.hold_breath,
+            "switch_mode": self.switch_mode,
+            "reload": self.reload,
         })
     }
 
@@ -124,6 +143,16 @@ pub struct Controls {
     interact_tapped: bool,
     /// The left mouse button is held.
     fire: bool,
+    /// The trigger, the selector and a reload pressed since the last tick: a click shorter
+    /// than a tick still reaches one (a semi-automatic shot).
+    fire_tapped: bool,
+    switch_tapped: bool,
+    reload_tapped: bool,
+    /// B and R are held.
+    switch_mode: bool,
+    reload: bool,
+    /// The right mouse button is held: aim down the sights.
+    ads: bool,
     yaw_deg: f64,
     pitch_deg: f64,
     /// The gamepad's left stick, and whether it moved after the walking keys last changed
@@ -136,6 +165,9 @@ pub struct Controls {
     pad_jump: bool,
     pad_interact: bool,
     pad_fire: bool,
+    pad_ads: bool,
+    pad_switch: bool,
+    pad_reload: bool,
     /// The head's own turn while free look is held.
     freelook: Freelook,
 }
@@ -172,6 +204,14 @@ impl Controls {
                 self.interact_tapped |= pressed;
                 &mut self.interact
             }
+            Key::SwitchMode => {
+                self.switch_tapped |= pressed;
+                &mut self.switch_mode
+            }
+            Key::Reload => {
+                self.reload_tapped |= pressed;
+                &mut self.reload
+            }
             Key::Freelook => {
                 self.freelook.hold(pressed);
                 return None;
@@ -202,9 +242,21 @@ impl Controls {
         );
     }
 
-    /// The fire button (left mouse) went down or up.
+    /// The fire button (left mouse) went down or up. A press is a tap that reaches the next
+    /// tick even when it is let go before.
     pub fn set_fire(&mut self, held: bool) {
+        self.fire_tapped |= held && !self.fire;
         self.fire = held;
+    }
+
+    /// The sights button (right mouse) went down or up.
+    pub fn set_ads(&mut self, held: bool) {
+        self.ads = held;
+    }
+
+    /// Whether the sights are held (right mouse or the left trigger).
+    pub fn is_aiming(&self) -> bool {
+        self.ads || self.pad_ads
     }
 
     /// The gamepad's left stick, already past its dead zone: `forward` and `right`, -1 to 1.
@@ -231,7 +283,18 @@ impl Controls {
         self.pad_run = run;
         self.pad_jump = jump;
         self.pad_interact = interact;
+        self.fire_tapped |= fire && !self.pad_fire;
         self.pad_fire = fire;
+    }
+
+    /// The gamepad's weapon buttons as they are held now: the sights, the selector and a
+    /// reload (a press of the latter two is a tap, like a key's).
+    pub fn pad_weapon(&mut self, ads: bool, switch_mode: bool, reload: bool) {
+        self.switch_tapped |= switch_mode && !self.pad_switch;
+        self.reload_tapped |= reload && !self.pad_reload;
+        self.pad_ads = ads;
+        self.pad_switch = switch_mode;
+        self.pad_reload = reload;
     }
 
     /// Turns the view by `dyaw_deg` (counter-clockwise positive) and tilts it by `dpitch_deg`
@@ -286,15 +349,23 @@ impl Controls {
         } else {
             (axis(self.forward, self.back), axis(self.right, self.left))
         };
+        // Shift (or the left stick's click) runs, or while aiming down the sights holds the
+        // breath: a sim's usual choice, since the sights and running exclude each other.
+        let shift = self.run || self.pad_run;
+        let ads = self.is_aiming();
         InputRecord {
             forward,
             right,
             yaw_deg: self.yaw_deg,
-            run: self.run || self.pad_run,
+            run: shift && !ads,
             jump: self.jump || self.pad_jump || self.jump_tapped,
             interact: self.interact || self.pad_interact || self.interact_tapped,
             pitch_deg: self.pitch_deg,
-            fire: self.fire || self.pad_fire,
+            fire: self.fire || self.pad_fire || self.fire_tapped,
+            ads,
+            hold_breath: shift && ads,
+            switch_mode: self.switch_mode || self.pad_switch || self.switch_tapped,
+            reload: self.reload || self.pad_reload || self.reload_tapped,
         }
     }
 
@@ -302,6 +373,9 @@ impl Controls {
     pub fn ticked(&mut self) {
         self.jump_tapped = false;
         self.interact_tapped = false;
+        self.fire_tapped = false;
+        self.switch_tapped = false;
+        self.reload_tapped = false;
     }
 
     /// Lets go of every key (the window lost the focus and will not hear them come up).

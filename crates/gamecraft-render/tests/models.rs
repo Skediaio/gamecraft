@@ -19,8 +19,8 @@ use gamecraft_render::{
     Camera, Picture, PictureRequest, ViewModelAim, WorldRenderer, encode_png, headless_gpu,
 };
 use gamecraft_world::{
-    Character, Component, EntityDraft, HeightField, HeldModel, Model, ModelCollider, Terrain,
-    TerrainSource, World,
+    Character, Component, EntityDraft, HeightField, HeldModel, Model, ModelCollider, Shape,
+    ShapeKind, Terrain, TerrainSource, World,
 };
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -440,6 +440,7 @@ fn a_held_model_is_drawn_at_the_aim_of_the_hidden_character_and_moves_without_a_
                     asset: "models/crate.glb".into(),
                     offset_m: [0.0, -0.2, 1.0],
                     scale: 0.5,
+                    ..HeldModel::of("models/crate.glb")
                 }),
             ],
             ..EntityDraft::default()
@@ -457,6 +458,7 @@ fn a_held_model_is_drawn_at_the_aim_of_the_hidden_character_and_moves_without_a_
         eye,
         yaw_deg: 0.0,
         pitch_deg: 0.0,
+        ads: 0.0,
     }));
     let held = centre(&picture(&mut r, eyes(eye, 0.0)), 6);
     assert!(
@@ -475,6 +477,7 @@ fn a_held_model_is_drawn_at_the_aim_of_the_hidden_character_and_moves_without_a_
             eye: [at[0], eye_height, at[2]],
             yaw_deg: 9.0 * f64::from(step),
             pitch_deg: 0.0,
+            ads: 0.0,
         }));
     }
     assert_eq!(
@@ -494,4 +497,70 @@ fn a_held_model_is_drawn_at_the_aim_of_the_hidden_character_and_moves_without_a_
     let gone = centre(&picture(&mut r, eyes(moved, 90.0)), 6);
     assert!(!is_wood(gone), "no aim, no view model: {gone:?}");
     assert_eq!(r.rebuild_count(), rebuilds);
+}
+
+/// A player stands with its face against a blue wall (as near as its radius lets it); its
+/// held crate, a metre ahead of the eye where the wall is, is still seen: a view model is never
+/// hidden by a wall in front of the camera. `out/render-view-model-wall.png` shows it.
+#[test]
+fn a_held_model_is_not_hidden_by_a_wall_in_front_of_the_eyes() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let (mut world, hf) = flat();
+    let character = Character::default();
+    let player = world
+        .add_entity(EntityDraft {
+            name: "Player".into(),
+            components: vec![
+                Component::Character(character.clone()),
+                Component::HeldModel(HeldModel {
+                    offset_m: [0.0, -0.2, 1.0],
+                    scale: 0.5,
+                    ..HeldModel::of("models/crate.glb")
+                }),
+            ],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    // The wall's face is the character's radius (plus 2 cm) north of the eye.
+    let thickness = 0.1;
+    world
+        .add_entity(EntityDraft {
+            name: "Wall".into(),
+            position: [0.0, 0.0, -(character.radius_m + 0.02 + thickness / 2.0)],
+            components: vec![Component::Shape(Shape {
+                kind: ShapeKind::Box,
+                size: [4.0, 3.0, thickness],
+                color: [0.1, 0.2, 0.8],
+                solid: true,
+            })],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    r.provide_asset("models/crate.glb", CRATE.to_vec());
+    r.set_hidden_character(Some(player));
+    assert_eq!(r.sync(&world, Some(&hf)), Vec::<String>::new());
+    let eye = [0.0, character.eye_height_m, 0.0];
+    let wall = centre(&picture(&mut r, eyes(eye, 0.0)), 6);
+    assert!(!is_wood(wall), "the wall fills the view: {wall:?}");
+    r.set_view_model(Some(ViewModelAim {
+        eye,
+        yaw_deg: 0.0,
+        pitch_deg: 0.0,
+        ads: 0.0,
+    }));
+    let shown = picture(&mut r, eyes(eye, 0.0));
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("render-view-model-wall.png"),
+        encode_png(&shown.rgba, shown.width, shown.height).unwrap(),
+    )
+    .unwrap();
+    let held = centre(&shown, 6);
+    assert!(
+        is_wood(held),
+        "the crate is held in front of the wall: {held:?}"
+    );
 }

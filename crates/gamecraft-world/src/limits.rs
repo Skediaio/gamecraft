@@ -141,6 +141,16 @@ pub const DAMAGE_PER_JOULE_MAX: f64 = 1e6;
 pub const MAX_FLIGHT_MAX_S: f64 = 600.0;
 /// Largest range at which a shot is heard, metres.
 pub const SOUND_RANGE_MAX_M: f64 = 100_000.0;
+/// Fastest cyclic rate of a `launcher`'s automatic and burst fire, rounds per minute.
+pub const CYCLIC_RPM_MAX: f64 = 6000.0;
+/// Most shots of one burst of a `launcher`.
+pub const BURST_COUNT_MAX: u32 = 100;
+/// Largest kick of one shot of a `launcher`'s recoil, and largest sway, milliradians.
+pub const RECOIL_KICK_MAX_MRAD: f64 = 100.0;
+/// Longest recovery from recoil, and longest time of a `launcher`'s sway, seconds.
+pub const HANDLING_TIME_MAX_S: f64 = 600.0;
+/// Largest factor of a `launcher`'s sway (moving, fatigue, breath).
+pub const SWAY_FACTOR_MAX: f64 = 100.0;
 /// Most health (and armour) of a `health` component.
 pub const HEALTH_MAX: f64 = 1e9;
 /// Most points of a `behaviour`'s route.
@@ -159,3 +169,7 @@ pub const VIEW_FOV_MAX_DEG: f64 = 120.0;
 pub const HELD_OFFSET_MAX_M: f64 = 2.0;
 /// Farthest a `behaviour` looks for cover, metres.
 pub const COVER_SEARCH_MAX_M: f64 = 100.0;
+/// Narrowest a `held_model`'s aim down the sights makes the field of view, as a share of it.
+pub const ADS_FOV_FACTOR_MIN: f64 = 0.2;
+/// Longest a `held_model` takes to come up to the sights, seconds.
+pub const ADS_TIME_MAX_S: f64 = 5.0;

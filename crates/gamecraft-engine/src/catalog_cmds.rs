@@ -350,6 +350,25 @@ const HELD_MODEL_FIELDS: &[Field] = &[
         None,
         "Uniform scale of the asset, 0.001 to 1000; the entity's scale does not apply.",
     ),
+    field(
+        "ads_offset_m",
+        "[right, up, forward] | null",
+        Some("m"),
+        "Where the origin sits while aiming down the sights (the input's `ads`), each -2 to 2: \
+         put the sight line on the camera's axis. Null stays at offset_m.",
+    ),
+    field(
+        "ads_fov_factor",
+        "number",
+        None,
+        "The share of the field of view left while aiming down the sights, 0.2 to 1.",
+    ),
+    field(
+        "ads_time_s",
+        "number",
+        Some("s"),
+        "Seconds the model takes to come up to the sights and the view to narrow, 0 to 5.",
+    ),
 ];
 
 const LAUNCHER_FIELDS: &[Field] = &[
@@ -382,7 +401,8 @@ const LAUNCHER_FIELDS: &[Field] = &[
         "rate_s",
         "number",
         Some("s"),
-        "Seconds between two shots while firing is held, above 0 and at most 3600.",
+        "Seconds between two shots while firing is held (auto and burst without cyclic_rpm), \
+         and at least between two pulls in semi; above 0 and at most 3600.",
     ),
     field(
         "magazine",
@@ -394,7 +414,8 @@ const LAUNCHER_FIELDS: &[Field] = &[
         "reload_s",
         "number",
         Some("s"),
-        "Seconds a reload takes once the magazine is empty, 0 to 3600.",
+        "Seconds a reload takes, 0 to 3600: one asked for (the input's `reload`), and one from \
+         empty unless reload_empty_s is given.",
     ),
     field(
         "damage_per_joule",
@@ -421,6 +442,65 @@ const LAUNCHER_FIELDS: &[Field] = &[
         "number",
         Some("m"),
         "Characters within this distance of the muzzle hear a shot (`heard`), 0 to 100000.",
+    ),
+    field(
+        "modes",
+        "[\"safe\"|\"semi\"|\"auto\"|\"burst\"]",
+        None,
+        "The selector's fire modes, one to four, in the order a switch goes; the first is the \
+         one at the start. safe never fires, semi once per pull (at most every rate_s), auto \
+         while held, burst burst_count per pull.",
+    ),
+    field(
+        "burst_count",
+        "integer",
+        None,
+        "Shots of one pull in burst mode, 1 to 100.",
+    ),
+    field(
+        "cyclic_rpm",
+        "number | null",
+        Some("rpm"),
+        "Rounds per minute of auto and burst fire, above 0 and at most 6000; null fires them \
+         every rate_s.",
+    ),
+    field(
+        "reload_empty_s",
+        "number | null",
+        Some("s"),
+        "Seconds a reload from an empty magazine takes, 0 to 3600; null takes reload_s.",
+    ),
+    field(
+        "recoil",
+        "{kick_up_mrad, kick_side_mrad, recovery_s}",
+        Some("mrad, s"),
+        "Each shot kicks the shooter's aim kick_up_mrad up and up to kick_side_mrad to a seeded \
+         side (each 0 to 100); the kick decays back to the aim, about 5 % left after \
+         recovery_s (0 to 600). Kicks of fast shots stack.",
+    ),
+    field(
+        "sway",
+        "{standing_mrad, crouched_mrad, prone_mrad, moving_factor, fatigue_factor, \
+         fatigue_build_s, fatigue_fade_s, breath_hold_s, breath_steady_factor, \
+         breath_recover_s, breath_recover_factor, period_s}",
+        Some("mrad, s"),
+        "A smooth seeded drift of a character's aim: the stance's amplitude (every character \
+         stands for now), times moving_factor while moving, up to fatigue_factor after running \
+         (built over fatigue_build_s, faded over fatigue_fade_s), steadier while the breath is \
+         held (breath_steady_factor, at most breath_hold_s) and worse after \
+         (breath_recover_factor for breath_recover_s); period_s is its slowest period.",
+    ),
+    field(
+        "ads_sway_factor",
+        "number",
+        None,
+        "The share of the sway left while aiming down the sights, 0 to 1.",
+    ),
+    field(
+        "ads_dispersion_factor",
+        "number",
+        None,
+        "The share of dispersion_mrad left while aiming down the sights, 0 to 1.",
     ),
 ];
 
@@ -631,7 +711,7 @@ const KINDS: &[Kind] = &[
                   gravity, G7 drag, air density and wind, and hit terrain, shapes and characters.",
         fields: LAUNCHER_FIELDS,
         minimal: || json!({"type": "launcher"}),
-        example: || json!({"type": "launcher", "muzzle_velocity_mps": 790, "mass_kg": 0.0109, "ballistic_coefficient": 200, "dispersion_mrad": 0.3, "rate_s": 1.2, "magazine": 5, "reload_s": 3}),
+        example: || json!({"type": "launcher", "muzzle_velocity_mps": 870, "mass_kg": 0.004, "ballistic_coefficient": 135, "dispersion_mrad": 0.5, "rate_s": 0.1, "magazine": 30, "reload_s": 2.5, "reload_empty_s": 3.5, "modes": ["safe", "semi", "auto"], "cyclic_rpm": 650, "recoil": {"kick_up_mrad": 1.5, "kick_side_mrad": 0.6, "recovery_s": 0.25}, "sway": {"standing_mrad": 2, "crouched_mrad": 1.2, "prone_mrad": 0.5, "fatigue_factor": 2.5, "fatigue_fade_s": 10}}),
     },
     Kind {
         kind: "health",
@@ -668,7 +748,7 @@ const KINDS: &[Kind] = &[
                   character is seen in first person.",
         fields: HELD_MODEL_FIELDS,
         minimal: || json!({"type": "held_model", "asset": "models/rifle.glb"}),
-        example: || json!({"type": "held_model", "asset": "models/rifle.glb", "offset_m": [0.12, -0.14, 0.32], "scale": 1}),
+        example: || json!({"type": "held_model", "asset": "models/rifle.glb", "offset_m": [0.12, -0.14, 0.32], "scale": 1, "ads_offset_m": [0, -0.05, 0.25], "ads_fov_factor": 0.85}),
     },
 ];
 
@@ -680,25 +760,31 @@ fn defaults(kind: &Kind) -> Result<Value, CommandError> {
             kind.kind
         ))
     })?;
-    let mut v = serde_json::to_value(&component).map_err(failed)?;
-    // A behaviour leaves its skill, detection and cover numbers out of the file at their
-    // defaults (older worlds read and write as before); list them anyway.
-    if let (Component::Behaviour(b), Value::Object(m)) = (&component, &mut v) {
-        for (name, value) in [
-            ("skill", json!(b.skill)),
-            ("precision", json!(b.precision)),
-            ("spot_time_s", json!(b.spot_time_s)),
-            ("aim_settle_s", json!(b.aim_settle_s)),
-            ("aim_error_floor_mrad", json!(b.aim_error_floor_mrad)),
-            ("courage", json!(b.courage)),
-            ("cover_search_m", json!(b.cover_search_m)),
-            ("calm_s", json!(b.calm_s)),
-            ("alertness", json!(b.alertness.name())),
-        ] {
-            m.entry(name).or_insert(value);
+    let mut value = serde_json::to_value(&component).map_err(failed)?;
+    // Fields a document leaves out at their defaults (so old documents keep their text and
+    // hashes); list them anyway.
+    let omitted = match (&component, kind.kind) {
+        (Component::Behaviour(b), _) => json!({
+            "skill": b.skill,
+            "precision": b.precision,
+            "spot_time_s": b.spot_time_s,
+            "aim_settle_s": b.aim_settle_s,
+            "aim_error_floor_mrad": b.aim_error_floor_mrad,
+            "courage": b.courage,
+            "cover_search_m": b.cover_search_m,
+            "calm_s": b.calm_s,
+            "alertness": b.alertness.name(),
+        }),
+        (_, "launcher") => gamecraft_world::launcher_handling_defaults(),
+        (_, "held_model") => gamecraft_world::held_model_sights_defaults(),
+        _ => Value::Null,
+    };
+    if let (Value::Object(all), Value::Object(omitted)) = (&mut value, omitted) {
+        for (key, v) in omitted {
+            all.entry(key).or_insert(v);
         }
     }
-    Ok(v)
+    Ok(value)
 }
 
 fn components_spec() -> CommandSpec {

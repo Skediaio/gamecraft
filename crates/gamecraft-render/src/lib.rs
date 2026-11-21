@@ -16,7 +16,9 @@
 //!   model that cannot be drawn is a small magenta box with a problem line.
 //! - **Held models**: a character's `held_model` (a weapon's view model), drawn at the
 //!   first-person camera along the aim for the hidden character only
-//!   ([`WorldRenderer::set_view_model`]), moved every frame without a rebuild.
+//!   ([`WorldRenderer::set_view_model`]), moved every frame without a rebuild. It is shrunk
+//!   towards the eye so no wall in front of the camera hides it, and casts no shadow
+//!   ([`view_model`]); it moves from its hip offset to its sights as the aim says.
 //! - **Characters**: a body (cylinder and head) with a small dark visor at eye height on the
 //!   side the character faces.
 //! - **Sky and light**: the physical sky, the sun from the environment, clouds, mist, rain, wind
@@ -42,12 +44,14 @@
 mod blit;
 mod camera;
 pub mod effects;
+pub mod hud;
 mod image;
 mod light;
 pub mod mesh;
 pub mod model;
 mod plants;
 mod renderer;
+pub mod view_model;
 
 #[cfg(test)]
 mod tests;

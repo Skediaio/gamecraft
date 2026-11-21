@@ -25,6 +25,7 @@ mod component;
 mod entity;
 mod environment;
 mod error;
+mod handling;
 pub mod limits;
 mod model;
 mod prefab;
@@ -45,9 +46,11 @@ pub use component::{
 pub use entity::{Entity, EntityDraft, EntityId, MAX_LAYER_CHARS, is_layer_name};
 pub use environment::{Environment, STANDARD_TEMPERATURE_C, SunPosition};
 pub use error::WorldError;
+pub use handling::{FireMode, Recoil, Sway, launcher_handling_defaults};
 pub use model::{
-    DEFAULT_HELD_OFFSET_M, HeldModel, MAX_ASSET_PATH_CHARS, MODEL_EXTENSIONS, Model, ModelBounds,
-    ModelBox, ModelCollider, is_asset_path, is_model_path,
+    DEFAULT_ADS_FOV_FACTOR, DEFAULT_ADS_TIME_S, DEFAULT_HELD_OFFSET_M, HeldModel,
+    MAX_ASSET_PATH_CHARS, MODEL_EXTENSIONS, Model, ModelBounds, ModelBox, ModelCollider,
+    held_model_sights_defaults, is_asset_path, is_model_path,
 };
 pub use prefab::{Prefab, PrefabChild, Spawn, Spawned};
 pub use scenario::{

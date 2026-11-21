@@ -16,7 +16,7 @@ use gamecraft_automation::{Access, Host, rpc};
 use gamecraft_engine::Session;
 use gamecraft_render::effects::IMPACT_LIFE_S;
 use gamecraft_render::{Camera, Effects, Impact, Tracer, ViewModelAim};
-use gamecraft_sim::DT;
+use gamecraft_sim::{DT, Handling};
 use gamecraft_world::{EntityId, HeightField, World};
 use serde_json::{Value, json};
 
@@ -48,7 +48,12 @@ pub struct Game {
     hits: Vec<([f64; 3], [f64; 3], f64)>,
     /// Asset files waiting for the view ([`Game::take_assets`]): what the browser fetched.
     assets: Vec<(String, Vec<u8>)>,
+    /// How far the held model is up to the sights: 0 at the hip, 1 at the sights.
+    ads_blend: f64,
 }
+
+/// The steepest the camera tilts with the recoil on top of the aim, degrees.
+const RECOIL_PITCH_LIMIT_DEG: f64 = 89.0;
 
 impl Game {
     /// A game of `world`: the simulation is started at once (`sim.start`), and the first
@@ -100,6 +105,7 @@ impl Game {
             last_error: None,
             hits: Vec::new(),
             assets: Vec::new(),
+            ads_blend: 0.0,
         };
         game.start();
         game
@@ -218,9 +224,69 @@ impl Game {
         self.controls.look(dx, dy);
     }
 
-    /// The fire button (left mouse) went down or up; the launcher fires while it is held.
+    /// The fire button (left mouse) went down or up: the launcher's trigger.
     pub fn fire(&mut self, held: bool) {
         self.controls.set_fire(held);
+    }
+
+    /// The sights button (right mouse) went down or up: aim down the sights while held.
+    pub fn aim_down_sights(&mut self, held: bool) {
+        self.controls.set_ads(held);
+    }
+
+    /// Whether the player aims down the sights (right mouse or the left trigger held).
+    pub fn is_aiming(&self) -> bool {
+        self.controls.is_aiming()
+    }
+
+    /// How far the held model is up to the sights: 0 at the hip, 1 at the sights; it moves
+    /// over the held model's `ads_time_s` while the sights are held in first person.
+    pub fn ads_blend(&self) -> f64 {
+        self.ads_blend
+    }
+
+    /// The player's held model, if it has one.
+    fn held_model(&self) -> Option<&gamecraft_world::HeldModel> {
+        let id = self.player()?;
+        self.session().current_world().entity(id)?.held_model()
+    }
+
+    /// What recoil and sway add to the player's aim now: (recoil, recoil plus sway), each as
+    /// (yaw, pitch) degrees; zero without a launcher or a simulation.
+    fn aim_offsets_deg(&self) -> ((f64, f64), (f64, f64)) {
+        let handling = self.player().and_then(|id| {
+            self.session()
+                .live()
+                .and_then(|sim| sim.handling(id))
+                .copied()
+        });
+        match handling {
+            Some(h) => (
+                Handling::to_deg(h.recoil_mrad),
+                Handling::to_deg(h.offset_mrad()),
+            ),
+            None => ((0.0, 0.0), (0.0, 0.0)),
+        }
+    }
+
+    /// The line the window shows in its bottom right corner: the player's fire mode and rounds
+    /// left of the magazine (`AUTO 27/30`, `RELOAD` while reloading), while playing with a
+    /// launcher; `None` otherwise.
+    pub fn hud_text(&self) -> Option<String> {
+        let id = self.player()?;
+        let sim = self.session().live()?;
+        let magazine = sim.magazine(id)?;
+        let launcher = sim.world().entity(id)?.launcher()?;
+        let mut line = format!(
+            "{} {}/{}",
+            magazine.mode.name().to_ascii_uppercase(),
+            magazine.left,
+            launcher.magazine
+        );
+        if magazine.reloading {
+            line.push_str(" RELOAD");
+        }
+        Some(line)
     }
 
     /// The window lost the keyboard: every key is let go.
@@ -232,6 +298,7 @@ impl Game {
     /// due (none while paused or stopped) and reads what the scenario tells. Returns the ticks
     /// run.
     pub fn frame(&mut self, frame_s: f64) -> u32 {
+        self.raise_sights(frame_s);
         if !self.session().is_playing() || self.paused {
             self.step.reset();
             let world = self.host.session().current_world();
@@ -263,6 +330,30 @@ impl Game {
             self.read_notices();
         }
         ran
+    }
+
+    /// Moves the held model towards the sights (while they are held in first person) or back
+    /// to the hip over its `ads_time_s`, for a frame of `frame_s` seconds.
+    fn raise_sights(&mut self, frame_s: f64) {
+        let target = if self.is_aiming() && self.view() == ViewMode::FirstPerson {
+            1.0
+        } else {
+            0.0
+        };
+        let time_s = self
+            .held_model()
+            .map_or(gamecraft_world::DEFAULT_ADS_TIME_S, |h| h.ads_time_s);
+        let step = if time_s > 0.0 && frame_s.is_finite() {
+            frame_s.max(0.0) / time_s
+        } else {
+            1.0
+        };
+        let blend = if target > self.ads_blend {
+            (self.ads_blend + step).min(target)
+        } else {
+            (self.ads_blend - step).max(target)
+        };
+        self.ads_blend = if blend.is_finite() { blend } else { target };
     }
 
     /// Runs one line of the control protocol (`gamecraft-cli serve`'s JSON lines) on the
@@ -305,12 +396,22 @@ impl Game {
         let Some((pose, eye_height_m)) = self.player_pose() else {
             return Camera::framing(world, heights, aspect);
         };
+        // The recoil climbs the view on top of where the player looks; the player pulls it
+        // back with the mouse, and it settles by itself.
         let (yaw, pitch) = self.controls.view_deg();
+        let ((kick_yaw, kick_pitch), _) = self.aim_offsets_deg();
+        let (yaw, pitch) = (
+            yaw + kick_yaw,
+            (pitch + kick_pitch).clamp(-RECOIL_PITCH_LIMIT_DEG, RECOIL_PITCH_LIMIT_DEG),
+        );
         let mut camera = match self.view() {
             ViewMode::FirstPerson => rig::first_person(&pose, eye_height_m, yaw, pitch),
             ViewMode::ThirdPerson => rig::third_person(&pose, eye_height_m, yaw, pitch, heights),
         };
-        camera.fov_y_deg = self.fov_y_deg();
+        let narrowing = self
+            .held_model()
+            .map_or(1.0, |h| h.fov_factor_at(self.ads_blend));
+        camera.fov_y_deg = self.fov_y_deg() * narrowing;
         if camera.validate().is_ok() {
             camera
         } else {
@@ -319,18 +420,22 @@ impl Game {
     }
 
     /// Where the player's held model (a weapon's view model) is drawn: in first person, at the
-    /// eyes along the aim (the input record's yaw and pitch), which free look does not turn;
-    /// `None` in third person or without a player.
+    /// eyes along the aim (the input record's yaw and pitch plus the recoil and the sway, so
+    /// the sights wander and climb), which free look does not turn, as far up to the sights as
+    /// [`Game::ads_blend`]; `None` in third person or without a player.
     pub fn view_model_aim(&self) -> Option<ViewModelAim> {
         if self.view() != ViewMode::FirstPerson {
             return None;
         }
         let (pose, eye_height_m) = self.player_pose()?;
         let [x, y, z] = pose.position;
+        let (_, (yaw, pitch)) = self.aim_offsets_deg();
         Some(ViewModelAim {
             eye: [x, y + eye_height_m, z],
-            yaw_deg: self.controls.yaw_deg(),
-            pitch_deg: self.controls.pitch_deg(),
+            yaw_deg: self.controls.yaw_deg() + yaw,
+            pitch_deg: (self.controls.pitch_deg() + pitch)
+                .clamp(-RECOIL_PITCH_LIMIT_DEG, RECOIL_PITCH_LIMIT_DEG),
+            ads: self.ads_blend,
         })
     }
 
@@ -468,6 +573,7 @@ impl Game {
         self.notices.clear();
         self.noticed = false;
         self.hits.clear();
+        self.ads_blend = 0.0;
         // A character's first input starts from standing still facing its rotation: that is
         // what the controls ask for now, so nothing is sent until they change (and an agent's
         // input is not overwritten meanwhile).
