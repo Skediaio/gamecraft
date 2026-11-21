@@ -48,6 +48,9 @@ pub struct Ammo {
     pub spare: Option<u32>,
     /// Whether a reload is running.
     pub reloading: bool,
+    /// Rounds in each spare magazine, when the simulation tells; the HUD then says how many
+    /// are full and how many partly used instead of a bare count.
+    pub pouch: Option<Vec<u32>>,
 }
 
 /// Who killed the player, and how far away.
@@ -100,6 +103,20 @@ pub fn magazine_word(left: u32, capacity: u32) -> &'static str {
     }
 }
 
+/// The pouch as a soldier knows it by feel, never in rounds: how many magazines are full
+/// (`capacity` rounds or more) and how many partly used, such as `2 FULL, 3 PARTLY USED`;
+/// `NO MAGAZINES` for none.
+pub fn pouch_text(pouch: &[u32], capacity: u32) -> String {
+    let full = pouch.iter().filter(|&&r| r >= capacity.max(1)).count();
+    let partly = pouch.len().saturating_sub(full);
+    match (full, partly) {
+        (0, 0) => "NO MAGAZINES".to_string(),
+        (f, 0) => format!("{f} FULL"),
+        (0, p) => format!("{p} PARTLY USED"),
+        (f, p) => format!("{f} FULL, {p} PARTLY USED"),
+    }
+}
+
 /// The ammunition's lines, top to bottom: the fire mode, the magazine (or the reload), and the
 /// spare magazines (none for unlimited).
 pub fn ammo_lines(ammo: &Ammo) -> Vec<String> {
@@ -112,6 +129,10 @@ pub fn ammo_lines(ammo: &Ammo) -> Vec<String> {
             magazine_word(ammo.left, ammo.capacity).to_ascii_uppercase()
         )
     });
+    if let Some(pouch) = &ammo.pouch {
+        lines.push(pouch_text(pouch, ammo.capacity));
+        return lines;
+    }
     match ammo.spare {
         None => {}
         Some(0) => lines.push("NO MAGAZINES".to_string()),
@@ -222,6 +243,7 @@ mod tests {
             capacity: 30,
             spare,
             reloading,
+            pouch: None,
         }
     }
 
@@ -277,6 +299,37 @@ mod tests {
         );
         // Unlimited magazines say nothing about spares.
         assert_eq!(ammo_lines(&ammo(30, None, false)).len(), 2);
+    }
+
+    #[test]
+    fn the_pouch_is_told_by_feel_never_in_rounds() {
+        assert_eq!(
+            pouch_text(&[30, 30, 12, 29, 1], 30),
+            "2 FULL, 3 PARTLY USED"
+        );
+        assert_eq!(pouch_text(&[30, 30], 30), "2 FULL");
+        assert_eq!(pouch_text(&[7], 30), "1 PARTLY USED");
+        assert_eq!(pouch_text(&[], 30), "NO MAGAZINES");
+        assert_eq!(
+            pouch_text(&[1], 0),
+            "1 FULL",
+            "a zero capacity does not divide"
+        );
+        let with = Ammo {
+            pouch: Some(vec![30, 12, 12]),
+            ..ammo(30, Some(3), false)
+        };
+        assert_eq!(
+            ammo_lines(&with),
+            ["AUTO", "MAGAZINE FULL", "1 FULL, 2 PARTLY USED"]
+        );
+        let text = ammo_lines(&with).join(" ");
+        assert!(!text.contains("12"), "{text}");
+        // Without pouch information the text is what it was.
+        assert_eq!(
+            ammo_lines(&ammo(30, Some(3), false)),
+            ["AUTO", "MAGAZINE FULL", "3 SPARE MAGAZINES"]
+        );
     }
 
     #[test]

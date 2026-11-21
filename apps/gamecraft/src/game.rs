@@ -64,6 +64,15 @@ pub struct Game {
     dead_s: Option<f64>,
 }
 
+/// How far through a reload of `total_s` seconds a timer with `ready_in_s` seconds left is,
+/// 0 to 1; 1 for a reload that takes no time or a number that is not finite.
+pub fn reload_progress_of(ready_in_s: f64, total_s: f64) -> f64 {
+    if !(ready_in_s.is_finite() && total_s.is_finite()) || total_s <= 0.0 {
+        return 1.0;
+    }
+    (1.0 - ready_in_s / total_s).clamp(0.0, 1.0)
+}
+
 /// The steepest the camera tilts with the recoil on top of the aim, degrees.
 const RECOIL_PITCH_LIMIT_DEG: f64 = 89.0;
 
@@ -313,7 +322,14 @@ impl Game {
             capacity: launcher.magazine,
             spare: magazine.spare,
             reloading: magazine.reloading,
+            pouch: self.pouch_rounds(),
         })
+    }
+
+    /// The rounds in each of the player's spare magazines. The hook for the simulation's
+    /// `magazine.pouch`; `None` until the simulation tells, so the HUD shows a bare count.
+    fn pouch_rounds(&self) -> Option<Vec<u32>> {
+        None
     }
 
     /// What the window shows over the world: the ammunition for a few seconds after the weapon
@@ -515,7 +531,33 @@ impl Game {
             pitch_deg: (self.controls.pitch_deg() + pitch)
                 .clamp(-RECOIL_PITCH_LIMIT_DEG, RECOIL_PITCH_LIMIT_DEG),
             ads: self.ads_blend,
+            reload: self.reload_progress(),
         })
+    }
+
+    /// How far through a reload the player's launcher is, 0 to 1, `None` when it is not
+    /// reloading. Read from the simulation's magazine: the reload timer against the launcher's
+    /// reload time. This is the one place to read `handling.reload_progress` instead when the
+    /// simulation tells it.
+    pub fn reload_progress(&self) -> Option<f64> {
+        let id = self.player()?;
+        let sim = self.session().live()?;
+        let magazine = sim.magazine(id)?;
+        if !magazine.reloading {
+            return None;
+        }
+        let launcher = sim.world().entity(id)?.launcher()?;
+        let total_s = if magazine.left == 0 {
+            launcher.empty_reload_s()
+        } else {
+            launcher.reload_s
+        };
+        Some(reload_progress_of(magazine.ready_in_s, total_s))
+    }
+
+    /// Whether the world's view rules let the window draw a crosshair.
+    pub fn crosshair_allowed(&self) -> bool {
+        self.session().current_world().view.crosshair
     }
 
     /// What is in flight and what just hit, for the renderer: a streak behind the head of each

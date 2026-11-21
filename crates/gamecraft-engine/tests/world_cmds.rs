@@ -270,6 +270,35 @@ fn view_set_changes_only_the_fields_given_and_world_inspect_shows_it() {
 }
 
 #[test]
+fn view_set_turns_the_crosshair_off_and_back_on() {
+    let mut s = example();
+    assert!(s.document().view.crosshair, "a crosshair by default");
+    let r = s.run("view.set", &json!({"crosshair": false})).unwrap();
+    assert_eq!(r["view"]["crosshair"], json!(false));
+    assert!(!s.document().view.crosshair);
+    assert_eq!(
+        s.document().view.fov_y_deg,
+        70.0,
+        "the other fields are untouched"
+    );
+    assert!(
+        s.document()
+            .to_json()
+            .unwrap()
+            .contains("\"crosshair\": false")
+    );
+    let r = s.run("view.set", &json!({"crosshair": true})).unwrap();
+    assert!(r["view"].get("crosshair").is_none(), "{r}");
+    assert!(!s.document().to_json().unwrap().contains("crosshair"));
+    refuse(
+        &mut s,
+        "view.set",
+        json!({"crosshair": "no"}),
+        &["`crosshair`"],
+    );
+}
+
+#[test]
 fn view_set_acts_on_a_running_world_until_it_is_kept() {
     let mut s = playing();
     s.run("view.set", &json!({"modes": ["first"], "fov_y_deg": 90}))

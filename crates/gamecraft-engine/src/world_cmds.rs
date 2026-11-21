@@ -304,7 +304,7 @@ fn view_set_spec() -> CommandSpec {
     spec(
         "view.set",
         "Set View Rules",
-        "Sets which views a player may use and how wide the player's camera sees; only the \
+        "Sets which views a player may use, how wide the player's camera sees and whether a crosshair is drawn; only the \
          fields given change. A window starts in the first view listed and switches only \
          among those listed; [\"first\"] forbids the third-person view. A player may still \
          widen or narrow the field of view for themselves (the window's --fov).",
@@ -321,9 +321,15 @@ fn view_set_spec() -> CommandSpec {
                 "Vertical field of view of the player's camera, 30 to 120.",
             )
             .unit("deg"),
+            param(
+                "crosshair",
+                T::Boolean,
+                "Whether the window draws a crosshair in the first-person view; false for a \
+                 realistic game (none at the hip, none down the sights). Default true.",
+            ),
         ],
-        "{view: {modes, fov_y_deg}}",
-        json!({"modes": ["first"], "fov_y_deg": 65}),
+        "{view: {modes, fov_y_deg, crosshair?}}; `crosshair` is present only when false",
+        json!({"modes": ["first"], "fov_y_deg": 65, "crosshair": false}),
     )
 }
 
@@ -340,6 +346,9 @@ fn view_set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
     }
     if let Some(fov) = p.f64("fov_y_deg")? {
         rules.fov_y_deg = fov;
+    }
+    if let Some(on) = p.bool("crosshair")? {
+        rules.crosshair = on;
     }
     probe(|w| w.view = rules.clone())?;
     let view = serde_json::to_value(&rules).map_err(failed)?;

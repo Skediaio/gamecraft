@@ -135,6 +135,7 @@ fn rifleman() -> World {
     world.view = ViewRules {
         modes: vec![WorldView::First],
         fov_y_deg: 70.0,
+        ..Default::default()
     };
     world
         .add_entity(EntityDraft {
@@ -711,6 +712,7 @@ fn ruled(modes: &[WorldView], fov_y_deg: f64) -> World {
     world.view = ViewRules {
         modes: modes.to_vec(),
         fov_y_deg,
+        ..Default::default()
     };
     world
 }
@@ -720,6 +722,7 @@ fn the_views_cycle_among_those_the_rules_allow() {
     let rules = |modes: &[WorldView]| ViewRules {
         modes: modes.to_vec(),
         fov_y_deg: 70.0,
+        ..Default::default()
     };
     let first = rules(&[WorldView::First]);
     assert_eq!(ViewMode::first_allowed(&first), ViewMode::FirstPerson);
@@ -1142,6 +1145,46 @@ fn the_ammunition_shows_after_a_shot_a_reload_or_a_check_and_hides_after_three_s
     frames(&mut game, 2);
     let lines: Vec<String> = game.hud().corner.iter().map(|l| l.text.clone()).collect();
     assert_eq!(lines, ["SEMI", "RELOADING", "1 SPARE MAGAZINE"]);
+}
+
+#[test]
+fn a_reloading_weapon_is_lowered_by_the_reload_progress() {
+    use crate::game::reload_progress_of;
+    assert_eq!(reload_progress_of(2.5, 2.5), 0.0);
+    assert_eq!(reload_progress_of(0.0, 2.5), 1.0);
+    assert!(close(reload_progress_of(1.0, 2.5), 0.6, 1e-12));
+    for (ready, total) in [
+        (f64::NAN, 2.5),
+        (1.0, 0.0),
+        (1.0, f64::INFINITY),
+        (9.0, 2.5),
+    ] {
+        let p = reload_progress_of(ready, total);
+        assert!((0.0..=1.0).contains(&p), "{ready} {total}: {p}");
+    }
+    let mut game = Game::new(duel(Some(2)));
+    frames(&mut game, 2);
+    assert_eq!(game.reload_progress(), None);
+    assert_eq!(game.view_model_aim().unwrap().reload, None);
+    game.fire(true);
+    game.fire(false);
+    frames(&mut game, 2);
+    game.key(Key::Reload, true);
+    game.key(Key::Reload, false);
+    frames(&mut game, 60);
+    let early = game.reload_progress().expect("reloading");
+    assert!(early > 0.0 && early < 1.0, "{early}");
+    assert_eq!(game.view_model_aim().unwrap().reload, Some(early));
+    frames(&mut game, 400);
+    assert_eq!(game.reload_progress(), None, "the reload is over");
+}
+
+#[test]
+fn the_crosshair_follows_the_view_rules() {
+    let mut world = duel(Some(2));
+    assert!(Game::new(world.clone()).crosshair_allowed());
+    world.view.crosshair = false;
+    assert!(!Game::new(world).crosshair_allowed());
 }
 
 #[test]

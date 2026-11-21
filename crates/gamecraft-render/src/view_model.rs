@@ -24,6 +24,34 @@ pub const VIEW_MODEL_CLEAR_SHARE: f64 = 0.9;
 /// its next level, which the shadow passes draw, is empty.
 pub const VIEW_MODEL_LOD_M: f32 = 1000.0;
 
+/// How far a reloading weapon dips, metres, at the deepest point of a reload.
+pub const RELOAD_DIP_M: f64 = 0.12;
+/// How far a reloading weapon rolls towards the chest, degrees, at the deepest point.
+pub const RELOAD_ROLL_DEG: f64 = 25.0;
+/// The share of a reload spent going down, and again coming back up.
+pub const RELOAD_EASE_SHARE: f64 = 0.2;
+
+fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// The pose of a weapon `progress` (0 at the start of a reload, 1 at its end) through a reload:
+/// the offset from its normal place in the aim's axes (right, up, forward; metres) and the
+/// roll about the aim's forward axis (degrees; positive tilts the top to the left, towards the
+/// chest of a right-handed shooter). It dips and tilts smoothly over the first
+/// [`RELOAD_EASE_SHARE`], stays down, and comes back over the last; `([0; 3], 0)` at both ends
+/// and for a progress that is not finite.
+pub fn reload_pose(progress: f64) -> ([f64; 3], f64) {
+    if !progress.is_finite() {
+        return ([0.0; 3], 0.0);
+    }
+    let p = progress.clamp(0.0, 1.0);
+    let w =
+        smoothstep(0.0, RELOAD_EASE_SHARE, p) * (1.0 - smoothstep(1.0 - RELOAD_EASE_SHARE, 1.0, p));
+    ([0.0, -RELOAD_DIP_M * w, 0.0], RELOAD_ROLL_DEG * w)
+}
+
 /// The box a model's vertices lie in, in the model's own axes and units.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ModelExtent {
@@ -102,6 +130,33 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    #[test]
+    fn a_reload_pose_dips_smoothly_and_returns() {
+        assert_eq!(reload_pose(0.0), ([0.0; 3], 0.0));
+        assert_eq!(reload_pose(1.0), ([0.0; 3], 0.0));
+        let (offset, roll) = reload_pose(0.5);
+        assert_eq!(offset, [0.0, -RELOAD_DIP_M, 0.0]);
+        assert_eq!(roll, RELOAD_ROLL_DEG);
+        // Smooth and monotone down, then up, never beyond the dip.
+        let mut last = 0.0;
+        for i in 1..=10 {
+            let (o, r) = reload_pose(f64::from(i) * 0.02);
+            assert!(
+                r >= last && r <= RELOAD_ROLL_DEG && o[1] >= -RELOAD_DIP_M,
+                "{i}"
+            );
+            last = r;
+        }
+        let (_, a) = reload_pose(0.1);
+        let (_, b) = reload_pose(0.9);
+        assert!((a - b).abs() < 1e-9, "symmetric: {a} {b}");
+        // Out of range and not finite: clamped, or the normal pose.
+        assert_eq!(reload_pose(-3.0), ([0.0; 3], 0.0));
+        assert_eq!(reload_pose(7.0), ([0.0; 3], 0.0));
+        assert_eq!(reload_pose(f64::NAN), ([0.0; 3], 0.0));
+        assert_eq!(reload_pose(f64::INFINITY), ([0.0; 3], 0.0));
+    }
 
     /// A crate 1 m on a side standing on its origin.
     const CRATE: ModelExtent = ModelExtent {

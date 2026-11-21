@@ -21,6 +21,7 @@ fn view_rules_round_trip_through_the_file() {
     w.view = ViewRules {
         modes: vec![ViewMode::First],
         fov_y_deg: 62.5,
+        ..Default::default()
     };
     let text = w.to_json().unwrap();
     assert!(
@@ -76,4 +77,21 @@ fn bad_view_rules_name_the_field_and_what_is_allowed() {
             .contains("view.fov_y_deg")
     );
     assert!(w.to_json().is_err(), "an invalid world is never written");
+}
+
+#[test]
+fn the_crosshair_is_on_by_default_and_written_only_when_off() {
+    let mut w = World::new("v", 1);
+    assert!(w.view.crosshair && w.view.is_default());
+    w.view.crosshair = false;
+    assert!(!w.view.is_default());
+    let text = w.to_json().unwrap();
+    assert!(text.contains("\"crosshair\": false"), "{text}");
+    assert_eq!(World::from_json(&text).unwrap(), w);
+    let old = World::from_json(r#"{"gamecraft": 1, "view": {"modes": ["first"]}}"#).unwrap();
+    assert!(old.view.crosshair, "a file without the field keeps it on");
+    let e = World::from_json(r#"{"gamecraft": 1, "view": {"crosshair": "no"}}"#)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("crosshair") || e.contains("bool"), "{e}");
 }

@@ -472,6 +472,7 @@ fn a_game_saves_its_view_rules_into_its_own_world_json() {
     world.view = ViewRules {
         modes: vec![ViewMode::First],
         fov_y_deg: 60.0,
+        ..Default::default()
     };
     let saving = project.plan_save(&world).unwrap();
     assert_eq!(

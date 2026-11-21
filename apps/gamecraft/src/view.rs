@@ -65,7 +65,8 @@ impl GameView {
         // The crosshair marks the aim, which the camera leaves while free look is held; down
         // the sights the sights are the mark.
         self.renderer.set_crosshair(
-            game.view() == ViewMode::FirstPerson
+            game.crosshair_allowed()
+                && game.view() == ViewMode::FirstPerson
                 && game.player().is_some()
                 && !game.is_freelooking()
                 && !game.is_aiming()

@@ -459,6 +459,7 @@ fn a_held_model_is_drawn_at_the_aim_of_the_hidden_character_and_moves_without_a_
         yaw_deg: 0.0,
         pitch_deg: 0.0,
         ads: 0.0,
+        reload: None,
     }));
     let held = centre(&picture(&mut r, eyes(eye, 0.0)), 6);
     assert!(
@@ -478,6 +479,7 @@ fn a_held_model_is_drawn_at_the_aim_of_the_hidden_character_and_moves_without_a_
             yaw_deg: 9.0 * f64::from(step),
             pitch_deg: 0.0,
             ads: 0.0,
+            reload: None,
         }));
     }
     assert_eq!(
@@ -549,6 +551,7 @@ fn a_held_model_is_not_hidden_by_a_wall_in_front_of_the_eyes() {
         yaw_deg: 0.0,
         pitch_deg: 0.0,
         ads: 0.0,
+        reload: None,
     }));
     let shown = picture(&mut r, eyes(eye, 0.0));
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out");
@@ -622,6 +625,7 @@ fn an_attachment_rides_on_the_held_model_and_the_dot_marks_the_aim() {
         yaw_deg,
         pitch_deg: 0.0,
         ads,
+        reload: None,
     };
     r.set_view_model(Some(aim(0.0, 1.0)));
     let low = centre(&picture(&mut r, eyes(eye, 0.0)), 4);
@@ -675,4 +679,73 @@ fn an_attachment_rides_on_the_held_model_and_the_dot_marks_the_aim() {
     assert!(is_red(moved), "the dot followed the barrel: {moved:?}");
     let left = centre(&swayed, 1);
     assert!(!is_red(left), "and left the centre: {left:?}");
+}
+
+/// The mean row of the wood-coloured pixels of a picture, `None` without any.
+fn wood_row(p: &Picture) -> Option<f64> {
+    let (w, h) = (p.width as usize, p.height as usize);
+    let (mut sum, mut n) = (0.0, 0.0);
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 4;
+            let px = &p.rgba[i..i + 3];
+            if is_wood([f64::from(px[0]), f64::from(px[1]), f64::from(px[2])]) {
+                sum += y as f64;
+                n += 1.0;
+            }
+        }
+    }
+    (n > 0.0).then(|| sum / n)
+}
+
+#[test]
+fn a_reloading_held_model_is_drawn_lower() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let (mut world, hf) = flat();
+    let player = world
+        .add_entity(EntityDraft {
+            name: "Player".into(),
+            components: vec![
+                Component::Character(Character::default()),
+                Component::HeldModel(HeldModel {
+                    asset: "models/crate.glb".into(),
+                    offset_m: [0.0, -0.1, 0.8],
+                    scale: 0.3,
+                    ..HeldModel::of("models/crate.glb")
+                }),
+            ],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    r.provide_asset("models/crate.glb", CRATE.to_vec());
+    r.set_hidden_character(Some(player));
+    assert_eq!(r.sync(&world, Some(&hf)), Vec::<String>::new());
+    let eye = [0.0, Character::default().eye_height_m, 0.0];
+    let aim = |reload: Option<f64>| ViewModelAim {
+        eye,
+        yaw_deg: 0.0,
+        pitch_deg: 0.0,
+        ads: 0.0,
+        reload,
+    };
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut rows = Vec::new();
+    for (name, reload) in [("hip", None), ("reload", Some(0.5)), ("done", Some(1.0))] {
+        r.set_view_model(Some(aim(reload)));
+        let shown = picture(&mut r, eyes(eye, 0.0));
+        std::fs::write(
+            dir.join(format!("render-view-model-{name}.png")),
+            encode_png(&shown.rgba, shown.width, shown.height).unwrap(),
+        )
+        .unwrap();
+        rows.push(wood_row(&shown).expect("the crate is in view"));
+    }
+    assert!(
+        rows[1] > rows[0] + 2.0,
+        "mid-reload the weapon is lower: {rows:?}"
+    );
+    assert!((rows[2] - rows[0]).abs() < 0.5, "back at the end: {rows:?}");
 }

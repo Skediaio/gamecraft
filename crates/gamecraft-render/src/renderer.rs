@@ -152,6 +152,9 @@ pub struct ViewModelAim {
     pub pitch_deg: f64,
     /// 0 at the hip (`offset_m`), 1 at the sights (`ads_offset_m`), between while it moves.
     pub ads: f64,
+    /// How far through a reload the weapon is, 0 to 1, or `None` when it is not reloading: it
+    /// dips and tilts ([`view_model::reload_pose`]).
+    pub reload: Option<f64>,
 }
 
 /// Where a held model is drawn for `aim`, before it is shrunk towards the eye: turned to the
@@ -164,12 +167,16 @@ fn held_pose_unshrunk(
     held: &HeldModel,
     size: f64,
 ) -> Option<(glam::DMat4, DVec3)> {
-    let offset = held.offset_at(aim.ads);
+    let (dip, roll_deg) = aim.reload.map_or(([0.0; 3], 0.0), view_model::reload_pose);
+    let mut offset = held.offset_at(aim.ads);
+    for (o, d) in offset.iter_mut().zip(dip) {
+        *o += d;
+    }
     let finite = aim
         .eye
         .iter()
         .chain(&offset)
-        .chain(&[aim.yaw_deg, aim.pitch_deg, held.scale, size])
+        .chain(&[aim.yaw_deg, aim.pitch_deg, held.scale, size, roll_deg])
         .all(|v| v.is_finite());
     if !finite {
         return None;
@@ -179,8 +186,9 @@ fn held_pose_unshrunk(
     let [right, up, forward] = offset;
     let local = DVec3::new(right, up, -forward);
     let at = DVec3::from_array(aim.eye) + turn * local;
+    let rolled = turn * DQuat::from_rotation_z(deg_to_rad(roll_deg));
     Some((
-        glam::DMat4::from_scale_rotation_translation(DVec3::splat(held.scale * size), turn, at),
+        glam::DMat4::from_scale_rotation_translation(DVec3::splat(held.scale * size), rolled, at),
         local,
     ))
 }
@@ -2038,6 +2046,7 @@ mod tests {
             yaw_deg: 0.0,
             pitch_deg: 0.0,
             ads: 0.0,
+            reload: None,
         };
         let m = held_pose(&level, &held, 1.0).unwrap();
         // Facing north (-Z): right is +X, forward -Z.
@@ -2075,6 +2084,52 @@ mod tests {
             ..level
         };
         assert!(held_pose(&bad, &held, 1.0).is_none());
+    }
+
+    #[test]
+    fn a_reloading_weapon_dips_and_rolls_towards_the_chest() {
+        let close = |a: Vec3, b: Vec3| (a - b).length() < 1e-5;
+        let held = rifle([0.1, -0.2, 0.5], 1.0);
+        let aim = ViewModelAim {
+            eye: [1.0, 1.6, 3.0],
+            yaw_deg: 0.0,
+            pitch_deg: 0.0,
+            ads: 0.0,
+            reload: None,
+        };
+        let normal = held_pose(&aim, &held, 1.0).unwrap();
+        // Not reloading, and at both ends of a reload: the normal pose.
+        for reload in [Some(0.0), Some(1.0)] {
+            let m = held_pose(&ViewModelAim { reload, ..aim }, &held, 1.0).unwrap();
+            assert!(close(
+                m.transform_point3(Vec3::ZERO),
+                normal.transform_point3(Vec3::ZERO)
+            ));
+            assert!(close(m.transform_vector3(Vec3::Y), Vec3::Y));
+        }
+        // Midway: lower by the dip, the top tilted to the left (-X) by the roll.
+        let m = held_pose(
+            &ViewModelAim {
+                reload: Some(0.5),
+                ..aim
+            },
+            &held,
+            1.0,
+        )
+        .unwrap();
+        let down = normal.transform_point3(Vec3::ZERO) - m.transform_point3(Vec3::ZERO);
+        assert!(
+            close(down, Vec3::new(0.0, view_model::RELOAD_DIP_M as f32, 0.0)),
+            "{down:?}"
+        );
+        let up = m.transform_vector3(Vec3::Y);
+        assert!(up.x < -0.4 && up.y > 0.8, "{up:?}");
+        // Not finite: no pose at all, never a panic.
+        let bad = ViewModelAim {
+            reload: Some(f64::NAN),
+            ..aim
+        };
+        assert!(held_pose(&bad, &held, 1.0).is_some_and(|m| m.is_finite()));
     }
 
     #[test]

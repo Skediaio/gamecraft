@@ -621,3 +621,62 @@ fn a_project_seen_down_the_sights() {
         &read_back(&device, &queue, &texture),
     );
 }
+
+/// A world that turns the crosshair off draws none: writes `out/window-hip.png` (with one)
+/// and `out/window-no-crosshair.png`; the reload runs through its progress. (The lowered
+/// weapon itself is drawn in `gamecraft-render`'s `models` test.)
+#[test]
+fn a_world_can_turn_the_crosshair_off() {
+    let (device, queue) = match headless_gpu() {
+        Ok(gpu) => gpu,
+        Err(e) => {
+            if std::env::var("GAMECRAFT_REQUIRE_GPU").as_deref() == Ok("1") {
+                panic!("GAMECRAFT_REQUIRE_GPU=1 but there is no GPU: {e}");
+            }
+            println!("skipping GPU test: {e}");
+            return;
+        }
+    };
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/skirmish/project");
+    let texture = target(&device);
+    let mut view = GameView::new(
+        device.clone(),
+        queue.clone(),
+        Quality::Medium,
+        (WIDTH, HEIGHT),
+    );
+    let mut game = Game::from_project(&path).unwrap();
+    game.key(Key::ToggleView, true);
+    game.key(Key::ToggleView, false);
+    assert_eq!(game.view(), ViewMode::FirstPerson);
+    for _ in 0..3 {
+        game.frame(DT);
+    }
+    let hip = shoot(&device, &queue, &mut view, &texture, &mut game);
+    save("window-hip.png", &hip);
+    let arm = |picture: &[u8]| {
+        let i = ((HEIGHT as usize / 2) * WIDTH as usize + WIDTH as usize / 2 + 9) * 4;
+        picture[i..i + 3].iter().copied().min().unwrap()
+    };
+    assert!(arm(&hip) >= 225, "a crosshair by default");
+    game.session_mut()
+        .run("view.set", &serde_json::json!({"crosshair": false}))
+        .unwrap();
+    game.frame(DT);
+    let bare = shoot(&device, &queue, &mut view, &texture, &mut game);
+    save("window-no-crosshair.png", &bare);
+    assert!(arm(&bare) < 225, "no crosshair when the rules say none");
+    game.fire(true);
+    game.frame(DT);
+    game.fire(false);
+    game.key(Key::Reload, true);
+    game.key(Key::Reload, false);
+    let mut frames = 0;
+    while game.reload_progress().is_none_or(|p| p < 0.5) && frames < 600 {
+        game.frame(DT);
+        frames += 1;
+    }
+    let progress = game.reload_progress().expect("reloading");
+    assert!((0.5..0.75).contains(&progress), "{progress}");
+}
