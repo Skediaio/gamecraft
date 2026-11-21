@@ -108,13 +108,40 @@ struct CharacterGroup {
     item: vc::ItemId,
     ids: Vec<EntityId>,
     instances: Vec<Mat4>,
-    /// The body's radius, metres: a downed body lies this high above the ground.
-    radius_m: f64,
+    body: Body,
+}
+
+/// What a character item draws, which says how it places its characters.
+#[derive(Clone, Copy)]
+enum Body {
+    /// The capsule and visor of one character size, unscaled; a downed body lies `radius_m`
+    /// (the body's radius, metres) above the ground.
+    Capsule { radius_m: f64 },
+    /// The character's model, or its magenta stand-in: `size` times the model's scale times
+    /// the entity's, as a model without a character is placed.
+    Model { size: f64 },
+}
+
+/// Where a character item draws `e`: standing at its position, turned to its facing, or
+/// lying on its side when it is down.
+fn character_pose(e: &Entity, body: Body) -> Mat4 {
+    let (scale, radius_m) = match body {
+        Body::Capsule { radius_m } => (1.0, radius_m),
+        Body::Model { size } => (
+            size * e.model().map_or(1.0, |m| m.scale) * e.scale,
+            e.character().map_or(0.0, |c| c.radius_m),
+        ),
+    };
+    if e.is_down() {
+        lying(e.position, e.rotation_y_deg, radius_m, scale)
+    } else {
+        placement(e.position, e.rotation_y_deg, [scale; 3])
+    }
 }
 
 /// What of an entity the scene's geometry is built from. A character's position and rotation
 /// are left out (unless it also has a shape or a plant): a character that walks moves its
-/// instance, it does not rebuild the scene.
+/// instance (its capsule's or its model's), it does not rebuild the scene.
 #[derive(PartialEq)]
 struct DrawnEntity {
     id: EntityId,
@@ -138,8 +165,7 @@ impl DrawnEntity {
         if !draws(e) {
             return None;
         }
-        let walks =
-            character.is_some() && shape.is_none() && plant.is_none() && e.model().is_none();
+        let walks = character.is_some() && shape.is_none() && plant.is_none();
         Some(DrawnEntity {
             id: e.id,
             pose: (!walks).then_some((e.position, e.rotation_y_deg)),
@@ -617,13 +643,7 @@ impl WorldRenderer {
                 .iter()
                 .filter(|&&id| Some(id) != hidden)
                 .filter_map(|&id| world.entity(id))
-                .map(|e| {
-                    if e.is_down() {
-                        lying(e.position, e.rotation_y_deg, group.radius_m)
-                    } else {
-                        placement(e.position, e.rotation_y_deg, [1.0; 3])
-                    }
-                })
+                .map(|e| character_pose(e, group.body))
                 .collect();
             if instances != group.instances {
                 self.renderer.set_instances(group.item, &instances);
@@ -1078,10 +1098,11 @@ fn placement(position: [f64; 3], yaw_deg: f64, scale: [f64; 3]) -> Mat4 {
     .as_mat4()
 }
 
-/// A downed character's transform: the body lies on its side, its feet at `position`, its head
-/// to the left of where it faced, and its side resting on the ground.
-fn lying(position: [f64; 3], yaw_deg: f64, radius_m: f64) -> Mat4 {
-    glam::DMat4::from_rotation_translation(
+/// A downed character's transform: the body, scaled by `scale`, lies on its side, its feet at
+/// `position`, its head to the left of where it faced, and its side resting on the ground.
+fn lying(position: [f64; 3], yaw_deg: f64, radius_m: f64, scale: f64) -> Mat4 {
+    glam::DMat4::from_scale_rotation_translation(
+        DVec3::splat(scale),
         DQuat::from_rotation_y(deg_to_rad(yaw_deg)) * DQuat::from_rotation_z(deg_to_rad(LYING_DEG)),
         DVec3::from_array(position) + DVec3::new(0.0, radius_m, 0.0),
     )
@@ -1213,8 +1234,10 @@ impl Scene<'_> {
     }
 
     /// Models: one upload per asset (kept from one rebuild to the next), one item per asset
-    /// with an instance per entity. A model that cannot be drawn is a small magenta box at
-    /// each entity, with a problem line that names the asset, why and the entities.
+    /// with an instance per entity. Characters with a model get an item of their own per
+    /// asset, whose instances follow them without a rebuild. A model that cannot be drawn is a
+    /// small magenta box at each entity, with a problem line that names the asset, why and the
+    /// entities.
     fn models(
         &mut self,
         world: &World,
@@ -1230,7 +1253,12 @@ impl Scene<'_> {
             }
         }
         let mut missing: Vec<Mat4> = Vec::new();
+        let mut missing_characters: Vec<&Entity> = Vec::new();
         for (asset, entities) in groups {
+            let (characters, statics): (Vec<&Entity>, Vec<&Entity>) = entities
+                .iter()
+                .copied()
+                .partition(|e| e.character().is_some());
             if !resident.contains_key(&asset) {
                 let made = upload_model(self.r, &asset, files);
                 if made.is_ok() {
@@ -1241,13 +1269,6 @@ impl Scene<'_> {
             match resident.get(&asset) {
                 None => {}
                 Some(Ok(m)) => {
-                    let instances: Vec<Mat4> = entities
-                        .iter()
-                        .filter_map(|e| {
-                            let s = e.model()?.scale * e.scale;
-                            Some(placement(e.position, e.rotation_y_deg, [s; 3]))
-                        })
-                        .collect();
                     if let Some(note) = &m.note {
                         self.problems.push(format!("Model `{asset}`: {note}"));
                     }
@@ -1256,8 +1277,30 @@ impl Scene<'_> {
                         .iter()
                         .map(|&(mesh, material)| (mesh, material, f32::INFINITY))
                         .collect();
-                    let id = self.r.add_lod_item(&lods, &instances);
-                    self.built.items.push(id);
+                    if !statics.is_empty() {
+                        let instances: Vec<Mat4> = statics
+                            .iter()
+                            .filter_map(|e| {
+                                let s = e.model()?.scale * e.scale;
+                                Some(placement(e.position, e.rotation_y_deg, [s; 3]))
+                            })
+                            .collect();
+                        let id = self.r.add_lod_item(&lods, &instances);
+                        self.built.items.push(id);
+                    }
+                    if !characters.is_empty() {
+                        let body = Body::Model { size: 1.0 };
+                        let instances: Vec<Mat4> =
+                            characters.iter().map(|e| character_pose(e, body)).collect();
+                        let item = self.r.add_lod_item(&lods, &instances);
+                        self.built.items.push(item);
+                        self.built.characters.push(CharacterGroup {
+                            item,
+                            ids: characters.iter().map(|e| e.id).collect(),
+                            instances,
+                            body,
+                        });
+                    }
                 }
                 Some(Err(why)) => {
                     let named: Vec<String> = entities
@@ -1274,32 +1317,60 @@ impl Scene<'_> {
                          drawn as a small magenta box.",
                         named.join(", ")
                     ));
-                    missing.extend(entities.iter().map(|e| {
+                    missing.extend(statics.iter().map(|e| {
                         let s = e.model().map_or(1.0, |m| m.scale) * e.scale;
                         placement(e.position, e.rotation_y_deg, [MISSING_MODEL_SIZE_M * s; 3])
                     }));
+                    missing_characters.extend(characters);
                 }
             }
         }
-        if let (Some(units), false) = (units, missing.is_empty()) {
+        let Some(units) = units else { return };
+        if !missing.is_empty() {
             let material = self.color(MISSING_MODEL_COLOR);
             self.add_item(&[(units.cube, material)], &missing);
         }
+        if !missing_characters.is_empty() {
+            let material = self.color(MISSING_MODEL_COLOR);
+            let body = Body::Model {
+                size: MISSING_MODEL_SIZE_M,
+            };
+            let instances: Vec<Mat4> = missing_characters
+                .iter()
+                .map(|e| character_pose(e, body))
+                .collect();
+            let item = self.add_item(&[(units.cube, material)], &instances);
+            self.built.characters.push(CharacterGroup {
+                item,
+                ids: missing_characters.iter().map(|e| e.id).collect(),
+                instances,
+                body,
+            });
+        }
     }
 
-    /// Characters: one body and visor mesh per distinct size, an instance per character.
+    /// Characters without a model: one body and visor mesh per distinct size, an instance per
+    /// character. A character with a model is drawn by [`Scene::models`].
     fn characters(&mut self, world: &World) {
         // Per size: the body, the characters and their instances.
         type Group = (Character, Vec<EntityId>, Vec<Mat4>);
         let mut groups: BTreeMap<[u64; 3], Group> = BTreeMap::new();
         for e in world.entities() {
             let Some(c) = e.character() else { continue };
+            if e.model().is_some() {
+                continue;
+            }
             let key = [c.height_m, c.radius_m, c.eye_height_m].map(f64::to_bits);
             let (_, ids, instances) = groups
                 .entry(key)
                 .or_insert_with(|| (c.clone(), Vec::new(), Vec::new()));
             ids.push(e.id);
-            instances.push(placement(e.position, e.rotation_y_deg, [1.0; 3]));
+            instances.push(character_pose(
+                e,
+                Body::Capsule {
+                    radius_m: c.radius_m,
+                },
+            ));
         }
         if groups.is_empty() {
             return;
@@ -1319,7 +1390,9 @@ impl Scene<'_> {
                     item,
                     ids,
                     instances,
-                    radius_m: character.radius_m,
+                    body: Body::Capsule {
+                        radius_m: character.radius_m,
+                    },
                 });
             }
         }
@@ -1481,5 +1554,120 @@ fn plant_material(kind: PartKind, tex: PlantTextures, tint: [f32; 3]) -> vc::Mat
         PartKind::Foliage => leaf([r, g, b, 1.0], true),
         PartKind::Flower => leaf([1.0; 4], true),
         PartKind::Twigs => leaf([1.0; 4], false),
+    }
+}
+
+/// GPU-free tests of what a sync rebuilds and where character items place their characters.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gamecraft_world::{Component, EntityDraft, ModelCollider};
+
+    fn crate_model(scale: f64) -> Component {
+        Component::Model(Model {
+            asset: "models/crate.glb".into(),
+            scale,
+            solid: false,
+            collider: ModelCollider::Box,
+        })
+    }
+
+    fn world_with(components: Vec<Component>) -> (World, EntityId) {
+        let mut world = World::new("key", 1);
+        let id = world
+            .add_entity(EntityDraft {
+                name: "Subject".into(),
+                scale: 2.0,
+                components,
+                ..EntityDraft::default()
+            })
+            .unwrap();
+        (world, id)
+    }
+
+    /// Walks and turns entity `id` ten steps; whether the first key still matches each time.
+    fn still_matches_while_walking(world: &mut World, id: EntityId) -> bool {
+        let key = GeometryKey::of(world, None, 0);
+        (1..=10).all(|step| {
+            let e = world.entity_mut(id).unwrap();
+            e.position = [0.3 * f64::from(step), 0.0, -0.1 * f64::from(step)];
+            e.rotation_y_deg = 9.0 * f64::from(step);
+            key.matches(world, None, 0)
+        })
+    }
+
+    #[test]
+    fn a_character_with_a_model_walks_without_a_rebuild() {
+        let (mut world, id) = world_with(vec![
+            Component::Character(Character::default()),
+            crate_model(1.5),
+        ]);
+        assert!(
+            still_matches_while_walking(&mut world, id),
+            "walking and turning keeps the geometry"
+        );
+        // Another asset or another scale is other geometry.
+        let key = GeometryKey::of(&world, None, 0);
+        world
+            .entity_mut(id)
+            .unwrap()
+            .set_component(crate_model(2.5));
+        assert!(!key.matches(&world, None, 0), "a new model scale rebuilds");
+    }
+
+    #[test]
+    fn a_character_without_a_model_still_walks_and_a_static_model_still_rebuilds() {
+        let (mut world, id) = world_with(vec![Component::Character(Character::default())]);
+        assert!(still_matches_while_walking(&mut world, id));
+        let (mut world, id) = world_with(vec![crate_model(1.0)]);
+        assert!(
+            !still_matches_while_walking(&mut world, id),
+            "a model without a character is static geometry"
+        );
+    }
+
+    #[test]
+    fn a_character_with_a_model_is_placed_as_its_model_and_falls_on_its_side() {
+        let (mut world, id) = world_with(vec![
+            Component::Character(Character::default()),
+            crate_model(1.5),
+        ]);
+        let e = world.entity_mut(id).unwrap();
+        e.position = [4.0, 1.0, -2.0];
+        e.rotation_y_deg = 30.0;
+        let e = world.entity(id).unwrap();
+        // The model's scale times the entity's, as a model without a character is placed.
+        let drawn = character_pose(e, Body::Model { size: 1.0 });
+        assert_eq!(drawn, placement([4.0, 1.0, -2.0], 30.0, [3.0; 3]));
+        let stand_in = character_pose(
+            e,
+            Body::Model {
+                size: MISSING_MODEL_SIZE_M,
+            },
+        );
+        assert_eq!(
+            stand_in,
+            placement([4.0, 1.0, -2.0], 30.0, [MISSING_MODEL_SIZE_M * 3.0; 3])
+        );
+        // The capsule is not scaled, as before.
+        let capsule = character_pose(e, Body::Capsule { radius_m: 0.3 });
+        assert_eq!(capsule, placement([4.0, 1.0, -2.0], 30.0, [1.0; 3]));
+        // Down: lying on its side, scaled, its side on the ground.
+        world
+            .entity_mut(id)
+            .unwrap()
+            .set_component(Component::Health(gamecraft_world::Health {
+                max: 100.0,
+                current: 0.0,
+                armor: 0.0,
+            }));
+        let e = world.entity(id).unwrap();
+        let radius = Character::default().radius_m;
+        assert_eq!(
+            character_pose(e, Body::Model { size: 1.0 }),
+            lying([4.0, 1.0, -2.0], 30.0, radius, 3.0)
+        );
+        let up = character_pose(e, Body::Model { size: 1.0 }).transform_vector3(Vec3::Y);
+        assert!(up.y.abs() < 1e-5, "the model's up lies flat: {up}");
     }
 }

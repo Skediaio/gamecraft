@@ -2,7 +2,8 @@
 //! upload per asset with an instance per entity, a crate drawn in its texture's colours, and a
 //! missing or broken model drawn as a magenta box with a problem line. The GPU tests skip
 //! without an adapter (and fail with `GAMECRAFT_REQUIRE_GPU=1`); `models_in_a_yard` writes
-//! `out/render-models.png`.
+//! `out/render-models.png`. A character with a model is drawn as that model, which follows it
+//! without a rebuild.
 
 #![allow(
     clippy::unwrap_used,
@@ -15,7 +16,8 @@
 use gamecraft_render::model::{self, Alpha};
 use gamecraft_render::{Camera, Picture, PictureRequest, WorldRenderer, encode_png, headless_gpu};
 use gamecraft_world::{
-    Component, EntityDraft, HeightField, Model, ModelCollider, Terrain, TerrainSource, World,
+    Character, Component, EntityDraft, HeightField, Model, ModelCollider, Terrain, TerrainSource,
+    World,
 };
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -310,4 +312,98 @@ fn a_missing_or_broken_model_is_a_magenta_box_and_a_problem_line() {
     r.provide_asset("models/ghost.glb", CRATE.to_vec());
     assert_eq!(r.sync(&world, Some(&hf)), Vec::<String>::new());
     assert_eq!(r.model_uploads(), 1);
+}
+
+/// A character entity wearing `asset` at `scale`, at the origin facing north.
+fn add_walker(world: &mut World, asset: &str, scale: f64) -> gamecraft_world::EntityId {
+    world
+        .add_entity(EntityDraft {
+            name: "Walker".into(),
+            components: vec![
+                Component::Character(Character::default()),
+                Component::Model(Model {
+                    asset: asset.into(),
+                    scale,
+                    solid: false,
+                    collider: ModelCollider::Box,
+                }),
+            ],
+            ..EntityDraft::default()
+        })
+        .unwrap()
+}
+
+/// A view of the model at `x` on the ground, from the south.
+fn looking_at(x: f64) -> Camera {
+    Camera {
+        position: [x, 2.2, 6.0],
+        target: [x, 1.2, 0.0],
+        fov_y_deg: 50.0,
+    }
+}
+
+#[test]
+fn a_character_with_a_model_is_drawn_as_the_model_and_walks_without_a_rebuild() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let (mut world, hf) = flat();
+    r.sync(&world, Some(&hf));
+    let ground_items = r.item_count();
+    let walker = add_walker(&mut world, "models/crate.glb", 3.0);
+    r.provide_asset("models/crate.glb", CRATE.to_vec());
+    assert_eq!(r.sync(&world, Some(&hf)), Vec::<String>::new());
+    // One item, the model's: no capsule beside it.
+    assert_eq!(r.item_count(), ground_items + 1, "the model alone");
+    assert_eq!(r.model_uploads(), 1);
+    let [red, green, blue] = centre(&picture(&mut r, looking_at(0.0)), 6);
+    assert!(
+        red > 1.3 * blue && green > 0.6 * blue,
+        "wood at the start: {red} {green} {blue}"
+    );
+    let rebuilds = r.rebuild_count();
+    for step in 1..=10 {
+        let e = world.entity_mut(walker).unwrap();
+        e.position = [f64::from(step), 0.0, 0.0];
+        e.rotation_y_deg = 25.0;
+        r.sync(&world, Some(&hf));
+    }
+    assert_eq!(r.rebuild_count(), rebuilds, "walking is no rebuild");
+    assert_eq!(r.item_count(), ground_items + 1);
+    let [red, green, blue] = centre(&picture(&mut r, looking_at(10.0)), 6);
+    assert!(
+        red > 1.3 * blue && green > 0.6 * blue,
+        "the model followed: {red} {green} {blue}"
+    );
+}
+
+#[test]
+fn a_character_with_a_missing_model_is_a_magenta_box_that_follows_it() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let (mut world, hf) = flat();
+    let walker = add_walker(&mut world, "models/ghost.glb", 6.0);
+    let problems = r.sync(&world, Some(&hf));
+    assert!(
+        problems.len() == 1
+            && problems[0].contains("models/ghost.glb")
+            && problems[0].contains("\"Walker\"")
+            && problems[0].contains("magenta"),
+        "{problems:?}"
+    );
+    let rebuilds = r.rebuild_count();
+    world.entity_mut(walker).unwrap().position = [10.0, 0.0, 0.0];
+    r.sync(&world, Some(&hf));
+    assert_eq!(r.rebuild_count(), rebuilds, "walking is no rebuild");
+    let camera = Camera {
+        position: [10.0, 2.0, 8.0],
+        target: [10.0, 1.5, 0.0],
+        fov_y_deg: 40.0,
+    };
+    let [red, green, blue] = centre(&picture(&mut r, camera), 5);
+    assert!(
+        red > 1.5 * green && blue > 1.5 * green,
+        "magenta where the character went: {red} {green} {blue}"
+    );
 }
