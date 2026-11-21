@@ -18,4 +18,4 @@ serde_json = { workspace = true }
 # Turso without its default features: no full-text search engine (tantivy), no C allocator
 # (mimalloc). What an embedded local database needs is all.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-turso = { workspace = true, default-features = false }
+turso = { workspace = true }
