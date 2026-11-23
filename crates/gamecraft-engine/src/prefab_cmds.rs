@@ -39,7 +39,7 @@ pub(crate) const SPECS: &[Registration] = &[
 ];
 
 /// The keys of one child in `children`.
-const CHILD_KEYS: [&str; 4] = ["name", "offset", "rotation_y_deg", "components"];
+const CHILD_KEYS: [&str; 5] = ["name", "offset", "rotation_y_deg", "prefab", "components"];
 
 const COMPONENTS_DOC: &str = "Components as in the file format, at most one of each type \
     ({\"type\": \"shape\", ...}, {\"type\": \"character\", ...}, ...); fields left out take \
@@ -47,11 +47,15 @@ const COMPONENTS_DOC: &str = "Components as in the file format, at most one of e
 
 const CHILDREN_DOC: &str = "Entities placed with every instance, relative to it, at most 64: \
     [{\"name\": \"\", \"offset\": [x, y, z] (metres in the parent's frame: -Z its forward, +X \
-    its right), \"rotation_y_deg\": 0, \"components\": [...]}]. Each becomes an entity of its \
-    own with the instance as its `parent`: it moves with it (entity.set) and is removed with it.";
+    its right), \"rotation_y_deg\": 0, \"prefab\": \"id\" (optional: the child is itself an \
+    instance of that prefab, its components are overrides; at most 8 levels deep), \
+    \"components\": [...]}]. Each becomes an entity of its own with the instance as its `parent`: \
+    it moves with it (entity.set) and is removed with it. The file does not store children: \
+    they are placed from the prefab again when the world is read, and only a child changed \
+    (entity.set) or removed (entity.remove) is written, as a change of its instance.";
 
 const PREFAB_DOC: &str = "{id, name, components: [...], children: [{name, offset, \
-    rotation_y_deg, components}], instances: [ids], instance_count}";
+    rotation_y_deg, prefab?, components}], instances: [ids], instance_count}";
 
 /// The components of the list parameter `name` (`components[2]` in errors).
 fn components(p: Params<'_>, name: &str) -> Result<Option<Vec<Component>>, CommandError> {
@@ -140,10 +144,21 @@ fn children(p: Params<'_>) -> Result<Option<Vec<PrefabChild>>, CommandError> {
                 )));
             }
         };
+        let prefab = match object.get("prefab") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(other) => {
+                return Err(bad(format!(
+                    "`{at}.prefab` must be the id of a prefab (a string), got {}",
+                    kind_of(other)
+                )));
+            }
+        };
         out.push(PrefabChild {
             name,
             offset,
             rotation_y_deg,
+            prefab,
             components,
         });
     }
@@ -216,7 +231,11 @@ fn set_spec() -> CommandSpec {
         "Edit Prefab",
         "Changes a prefab; only the fields given change, each replaced as a whole. Its \
          instances change with it: each keeps its overrides and takes the rest from the new \
-         prefab. Children already placed stay as they are; new spawns get the new children.",
+         prefab. Their children follow the same rule, child by child in the prefab's order: a \
+         child keeps what was edited in it and takes the rest from the new prefab child; a \
+         child the prefab no longer has is removed unless it was edited or has entities of its \
+         own below it (then it stays, as an entity of its own); a child the prefab gained is \
+         placed in every instance; a child removed from an instance stays removed.",
         vec![
             param("id", T::String, "The prefab's id.").required(),
             param("name", T::String, "Its new name."),

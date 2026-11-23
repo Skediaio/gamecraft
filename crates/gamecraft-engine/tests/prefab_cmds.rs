@@ -338,3 +338,141 @@ fn a_spawn_is_one_undo_step_and_round_trips_through_the_file() {
     s.undo().unwrap();
     assert_eq!(*s.document(), before);
 }
+
+/// The state hash of `s`'s document after a second of play.
+fn hash_after_play(world: World) -> Value {
+    let mut s = Session::new(world);
+    run(&mut s, "sim.start", json!({}));
+    run(&mut s, "sim.step", json!({"ticks": 60}));
+    run(&mut s, "sim.state", json!({}))["hash"].clone()
+}
+
+#[test]
+fn children_are_derived_in_the_file_and_the_state_hash_survives_save_and_load() {
+    let mut s = example();
+    run(&mut s, "prefab.add", house());
+    let a = run(
+        &mut s,
+        "prefab.spawn",
+        json!({"prefab": "house", "at": [5, 5]}),
+    );
+    let b = run(
+        &mut s,
+        "prefab.spawn",
+        json!({"prefab": "house", "at": [-6, 9], "rotation_y_deg": 33}),
+    );
+    let door = a["children"][0].as_u64().unwrap();
+    let yard = b["children"][1].as_u64().unwrap();
+    let got = run(&mut s, "entity.get", json!({"id": door}));
+    assert_eq!(got["prefab_child"], 0);
+    run(
+        &mut s,
+        "entity.set",
+        json!({"id": door, "name": "Front door", "rotation_y_deg": 15}),
+    );
+    run(&mut s, "entity.remove", json!({"id": yard}));
+    // Move a whole house: its children go along and stay derived.
+    run(
+        &mut s,
+        "entity.set",
+        json!({"id": b["id"], "at": [-7.5, 11.25], "rotation_y_deg": 200}),
+    );
+
+    let world = s.document().clone();
+    let text = world.to_json().unwrap();
+    let file: Value = serde_json::from_str(&text).unwrap();
+    let written: Vec<u64> = file["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_u64().unwrap())
+        .collect();
+    assert!(
+        !written.contains(&door),
+        "the edited door is written on its house"
+    );
+    let house_a = file["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == a["id"])
+        .unwrap();
+    assert_eq!(house_a["child_edits"][0]["name"], "Front door");
+    let back = World::from_json(&text).unwrap();
+    assert_eq!(back, world);
+    assert_eq!(back.to_json().unwrap(), text);
+    assert_eq!(hash_after_play(back), hash_after_play(world));
+}
+
+#[test]
+fn undo_takes_back_a_spawn_and_an_edit_of_a_child() {
+    let mut s = example();
+    run(&mut s, "prefab.add", house());
+    let before = s.document().to_json().unwrap();
+    let a = run(
+        &mut s,
+        "prefab.spawn",
+        json!({"prefab": "house", "at": [5, 5]}),
+    );
+    let spawned = s.document().to_json().unwrap();
+    let door = a["children"][0].as_u64().unwrap();
+    run(
+        &mut s,
+        "entity.set",
+        json!({"id": door, "name": "Back door"}),
+    );
+    assert!(s.document().to_json().unwrap().contains("Back door"));
+    s.undo().unwrap();
+    assert_eq!(s.document().to_json().unwrap(), spawned);
+    assert_eq!(
+        s.document()
+            .entity(gamecraft_world::EntityId(door))
+            .unwrap()
+            .name,
+        "Door"
+    );
+    s.undo().unwrap();
+    assert_eq!(s.document().to_json().unwrap(), before);
+    s.redo().unwrap();
+    s.redo().unwrap();
+    let back = World::from_json(&s.document().to_json().unwrap()).unwrap();
+    assert_eq!(&back, s.document());
+}
+
+#[test]
+fn a_prefab_inside_a_prefab_by_command() {
+    let mut s = example();
+    run(&mut s, "prefab.add", house());
+    run(
+        &mut s,
+        "prefab.add",
+        json!({"id": "farm", "children": [
+            {"prefab": "house", "offset": [4, 0, 0], "components": [{"type": "tags", "tags": ["farmhouse"]}]},
+            {"name": "Fence", "offset": [0, 0, -6], "components": [{"type": "shape", "kind": "box", "size": [12, 1, 0.1]}]}
+        ]}),
+    );
+    let farm = run(
+        &mut s,
+        "prefab.spawn",
+        json!({"prefab": "farm", "at": [0, 0]}),
+    );
+    let home = farm["children"][0].as_u64().unwrap();
+    let got = run(&mut s, "entity.get", json!({"id": home}));
+    assert_eq!(got["prefab"], "house");
+    assert_eq!(got["children"].as_array().unwrap().len(), 2);
+    refuse(
+        &mut s,
+        "prefab.remove",
+        json!({"id": "house"}),
+        &["farm", "child 0"],
+    );
+    refuse(
+        &mut s,
+        "prefab.set",
+        json!({"id": "house", "children": [{"prefab": "farm"}]}),
+        &["never inside themselves"],
+    );
+    let world = s.document().clone();
+    let back = World::from_json(&world.to_json().unwrap()).unwrap();
+    assert_eq!(back, world);
+}

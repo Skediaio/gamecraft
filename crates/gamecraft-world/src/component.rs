@@ -9,6 +9,7 @@ use crate::limits::{
     SHAPE_SIZE_MIN_M,
 };
 use crate::model::Model;
+use crate::road::Road;
 use serde::{Deserialize, Serialize};
 
 /// One component of an entity. An entity has at most one component of each type.
@@ -40,11 +41,13 @@ pub enum Component {
     Behaviour(Behaviour),
     /// A glTF model of a pack.
     Model(Model),
+    /// A road lying on the terrain.
+    Road(Road),
 }
 
 impl Component {
     /// Every component type name, in the order the engine lists them.
-    pub const KINDS: [&'static str; 11] = [
+    pub const KINDS: [&'static str; 12] = [
         "shape",
         "plant",
         "character",
@@ -56,11 +59,12 @@ impl Component {
         "health",
         "behaviour",
         "model",
+        "road",
     ];
 
     /// The type name of this component (`shape`, `plant`, `character`, `zone`,
-    /// `interactable`, `light`, `tags`, `launcher`, `health`, `behaviour` or `model`), as in
-    /// JSON.
+    /// `interactable`, `light`, `tags`, `launcher`, `health`, `behaviour`, `model` or `road`),
+    /// as in JSON.
     pub fn kind(&self) -> &'static str {
         match self {
             Component::Shape(_) => "shape",
@@ -74,6 +78,7 @@ impl Component {
             Component::Health(_) => "health",
             Component::Behaviour(_) => "behaviour",
             Component::Model(_) => "model",
+            Component::Road(_) => "road",
         }
     }
 
@@ -91,6 +96,7 @@ impl Component {
             Component::Health(h) => h.validate(ctx),
             Component::Behaviour(b) => b.validate(ctx),
             Component::Model(m) => m.validate(ctx),
+            Component::Road(r) => r.validate(ctx),
         }
     }
 }

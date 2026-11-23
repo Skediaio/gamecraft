@@ -13,4 +13,5 @@ workspace = true
 [dependencies]
 gamecraft-math = { workspace = true }
 serde = { workspace = true }
+postcard = { workspace = true }
 serde_json = { workspace = true }

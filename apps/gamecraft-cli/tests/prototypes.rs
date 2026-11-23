@@ -113,7 +113,12 @@ fn skirmish_world_is_what_its_build_script_builds() {
 /// the five rings (which also shift the beacons' ids), and the player's passing through the rings
 /// is zone membership in the hash. The beacons' own components, the player's path and the
 /// objectives are unchanged.
-const LANTERN_HASH: &str = "143a88eedd10f8c6";
+///
+/// Moved on 2026-11-23 from 143a88eedd10f8c6: the children of prefab instances became derived
+/// data, so the world's text no longer holds the five rings (each is placed again from the
+/// `beacon` prefab when the world is read) and says `"derived_children": true`. The entities,
+/// their ids, the player's path and the objectives are unchanged.
+const LANTERN_HASH: &str = "7a6d3895ca9f8949";
 
 #[test]
 fn lantern_is_won_by_the_playthrough_and_replays_to_the_same_hash() {

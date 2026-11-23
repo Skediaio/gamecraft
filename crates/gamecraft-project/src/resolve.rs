@@ -48,6 +48,11 @@ impl Resolved {
             .to_string()
     }
 
+    /// The cell size the merged fields give, when the layers are split into cells.
+    pub(crate) fn cell_size(&self) -> Option<f64> {
+        self.fields.get("cell_size_m").and_then(Value::as_f64)
+    }
+
     /// The order of the layers the merged fields give.
     pub(crate) fn layer_order(&self) -> Vec<String> {
         self.fields

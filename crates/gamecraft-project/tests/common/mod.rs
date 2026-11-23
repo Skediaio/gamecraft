@@ -60,6 +60,7 @@ pub fn village() -> World {
             }),
         ],
         children: vec![PrefabChild {
+            prefab: None,
             name: "Hat".into(),
             offset: [0.0, 1.8, 0.0],
             rotation_y_deg: 0.0,

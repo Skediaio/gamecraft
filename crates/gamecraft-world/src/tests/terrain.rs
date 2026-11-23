@@ -1,4 +1,110 @@
 use crate::{HeightField, Terrain, TerrainSource, WorldError};
+
+fn grid_terrain(size_m: f64, cell_m: f64, cols: u32, rows: u32, heights: Vec<f64>) -> Terrain {
+    Terrain {
+        size_m,
+        cell_m,
+        source: TerrainSource::Grid {
+            cols,
+            rows,
+            heights: heights.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn corners() -> Vec<f64> {
+    vec![1.0, 3.0, 5.0, 9.0]
+}
+
+#[test]
+fn grid_terrain_round_trips_through_json() {
+    let t = grid_terrain(100.0, 4.0, 3, 2, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let json = serde_json::to_string(&t).unwrap();
+    assert!(json.contains(r#""kind":"grid""#));
+    assert!(json.contains(r#""cols":3"#));
+    assert!(json.contains(r#""rows":2"#));
+    let back: Terrain = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, t);
+}
+
+#[test]
+fn grid_terrain_interpolates_bilinearly() {
+    // A 2x2 grid over a 100 m square: corners (1, 3) on row 0 and (5, 9) on row 1.
+    let t = grid_terrain(100.0, 2.0, 2, 2, corners());
+    t.validate().unwrap();
+    assert_eq!(t.source_height(-50.0, -50.0), 1.0);
+    assert_eq!(t.source_height(50.0, -50.0), 3.0);
+    assert_eq!(t.source_height(-50.0, 50.0), 5.0);
+    assert_eq!(t.source_height(50.0, 50.0), 9.0);
+    // The centre is the average of the four corners.
+    assert_eq!(t.source_height(0.0, 0.0), 4.5);
+    // A quarter of the way along x on row 0.
+    assert_eq!(t.source_height(-25.0, -50.0), 1.5);
+}
+
+#[test]
+fn grid_terrain_clamps_outside_the_square() {
+    let t = grid_terrain(100.0, 2.0, 2, 2, corners());
+    // Beyond the corners the edge value holds.
+    assert_eq!(t.source_height(-500.0, -500.0), 1.0);
+    assert_eq!(t.source_height(500.0, -500.0), 3.0);
+    assert_eq!(t.source_height(-500.0, 500.0), 5.0);
+    assert_eq!(t.source_height(500.0, 500.0), 9.0);
+    assert_eq!(t.source_height(0.0, 500.0), 7.0);
+}
+
+#[test]
+fn grid_terrain_builds_node_heights() {
+    // A 5x5 control grid over 16 m at 4 m cells: the nodes of the field are the
+    // nodes of the grid, so the built heights are the given ones.
+    let heights: Vec<f64> = (0..25).map(|i| i as f64).collect();
+    let t = grid_terrain(16.0, 4.0, 5, 5, heights.clone());
+    let hf = t.build().unwrap();
+    assert_eq!((hf.cols(), hf.rows()), (5, 5));
+    let got: Vec<f64> = hf.heights().iter().map(|&h| f64::from(h)).collect();
+    assert_eq!(got, heights);
+}
+
+#[test]
+fn grid_terrain_rejects_a_wrong_length() {
+    let t = grid_terrain(16.0, 4.0, 3, 3, vec![0.0; 8]);
+    let err = t.validate().unwrap_err().to_string();
+    assert!(err.contains("terrain.source.heights"), "{err}");
+    assert!(err.contains("8") && err.contains("9"), "{err}");
+}
+
+#[test]
+fn grid_terrain_rejects_a_non_finite_height() {
+    let t = grid_terrain(16.0, 4.0, 2, 2, vec![0.0, f64::NAN, 0.0, 0.0]);
+    let err = t.validate().unwrap_err().to_string();
+    assert!(err.contains("terrain.source.heights"), "{err}");
+    assert!(err.contains("heights[1]"), "{err}");
+    let t = grid_terrain(16.0, 4.0, 2, 2, vec![0.0, f64::INFINITY, 0.0, 0.0]);
+    let err = t.validate().unwrap_err().to_string();
+    assert!(err.contains("terrain.source.heights"), "{err}");
+}
+
+#[test]
+fn grid_terrain_rejects_a_height_out_of_range() {
+    let t = grid_terrain(16.0, 4.0, 2, 2, vec![0.0, 2e6, 0.0, 0.0]);
+    let err = t.validate().unwrap_err().to_string();
+    assert!(err.contains("terrain.source.heights"), "{err}");
+}
+
+#[test]
+fn grid_terrain_rejects_a_bad_side() {
+    let t = grid_terrain(16.0, 4.0, 1, 2, vec![0.0; 2]);
+    let err = t.validate().unwrap_err().to_string();
+    assert!(err.contains("terrain.source.cols"), "{err}");
+    let t = grid_terrain(16.0, 4.0, 514, 2, vec![0.0; 1028]);
+    let err = t.validate().unwrap_err().to_string();
+    assert!(err.contains("terrain.source.cols"), "{err}");
+    let t = grid_terrain(16.0, 4.0, 2, 1, vec![0.0; 2]);
+    let err = t.validate().unwrap_err().to_string();
+    assert!(err.contains("terrain.source.rows"), "{err}");
+}
+
 use gamecraft_math::{Rng, StateHasher};
 
 fn noise_terrain(size_m: f64, cell_m: f64) -> Terrain {

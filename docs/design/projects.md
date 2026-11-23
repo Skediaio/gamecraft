@@ -36,6 +36,47 @@ skirmish/                      a pack (a game is a pack too)
 
 A **game** is a pack with `worlds`. A **mod** is a pack that depends on the game and changes it.
 
+### A large world is stored in cells
+
+A layer may be split into a regular grid of cells, one file per cell, so no file holds the whole
+world, an edit touches the files of the places it changed, and a streamer can later load the
+cells near a player (`gamecraft-project/src/cells.rs`):
+
+```text
+worlds/fallujah/
+  world.json                 {"gamecraft_world": 1, "cell_size_m": 512.0, ...}
+  layers/
+    town/                    the layer `town`, split into cells
+      -6_-3.json             cell (cx, cz) = (-6, -3): a layer file, one entity per line
+      -6_-2.json
+    markers.json             a layer that is still one file
+```
+
+- `cell_size_m` in `world.json` (16 to 16384 m; `DEFAULT_CELL_SIZE_M` is 512) turns cells on for
+  the root pack's layers; without it each layer is one file. Cell `(cx, cz)` covers
+  `cx * size <= x < (cx + 1) * size`, and the same for z. A cell file is an ordinary layer file;
+  its name is written plainly (`3_-2.json`, never `+3_02.json`). A layer is one file or a folder
+  of cells, never both.
+- **An entity goes to the cell of its root**, the entity at the top of its chain of parents, so a
+  prefab instance's children are in their instance's file. A removal marker goes where the
+  removed entity stood.
+- **Loading reads every cell** and joins them in cell order (x, then z), each cell's lines in
+  their order: the authoritative simulation needs the whole world. `Project::load_cells`
+  (`project.open` with `cells`) loads only some cells of layers split into cells, for the
+  streamer to come; such a project refuses to save. `cells_in_area` (`project.cells`) lists the
+  cells an area touches.
+- **Saving** splits each layer by cell, writes the cells whose text changed and removes the files
+  of cells that became empty; `project.save {cell_size_m}` switches between one file per layer
+  and cells (0 for one file), removing the files of the old layout. The same world saves to the
+  same bytes, and reopening a saved project gives the same world, ids included.
+- The cap on a file of a pack applies to each cell file; at 512 m a cell of a dense city holds a
+  few thousand entities, well under it.
+
+Known limits: the runtime ids of a project come from the order of its lines, so an entity that
+moves to another cell gets another id at the next open (as a new entity in an earlier layer does
+today), and layer files still write every child of a prefab instance in full (the `.gamecraft`
+file derives them; `docs/decisions.md`).
+
 ### Layering
 
 Packs are loaded in dependency order; a later pack overrides an earlier one by **id**:

@@ -2,13 +2,14 @@
 
 use crate::ProjectError;
 use crate::assets::{PackAsset, check_assets};
+use crate::cells::Cell;
 use crate::fields::parse_world;
 use crate::layer::Layer;
 use crate::manifest::Manifest;
 use crate::paths::{FileKind, classify};
 use gamecraft_world::{Prefab, TerrainEdit};
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Most layer files in one world of one pack.
 pub const MAX_LAYERS: usize = 1024;
@@ -41,8 +42,11 @@ pub(crate) enum PrefabEntry {
 pub(crate) struct WorldDir {
     /// `world.json` without its version, if the pack has one.
     pub fields: Option<Map<String, Value>>,
-    /// The layer files by name.
+    /// The layers by name; a layer split into cells is here as one, its cells' entries in
+    /// cell order.
     pub layers: BTreeMap<String, Layer>,
+    /// The layers split into cells, with each cell's file.
+    pub cells: BTreeMap<String, BTreeMap<Cell, Layer>>,
     /// `terrain/edits.json`, if the pack has one.
     pub edits: Option<Vec<TerrainEdit>>,
 }
@@ -78,8 +82,12 @@ pub(crate) fn manifest_of(source: &PackSource) -> Result<Manifest, ProjectError>
     Manifest::parse(text, &file)
 }
 
-/// Parses every file of `source`.
-pub(crate) fn parse_pack(source: &PackSource) -> Result<Pack, ProjectError> {
+/// Parses every file of `source`; with `only`, the cell files of other cells are left out (a
+/// world loaded in part).
+pub(crate) fn parse_pack(
+    source: &PackSource,
+    only: Option<&BTreeSet<Cell>>,
+) -> Result<Pack, ProjectError> {
     let manifest = manifest_of(source)?;
     let mut pack = Pack {
         manifest,
@@ -127,6 +135,41 @@ pub(crate) fn parse_pack(source: &PackSource) -> Result<Pack, ProjectError> {
                 }
                 dir.layers.insert(layer, parsed);
             }
+            FileKind::LayerCell(world, layer, cell) => {
+                if only.is_some_and(|o| !o.contains(&cell)) {
+                    continue;
+                }
+                let parsed = Layer::parse(text, &file)?;
+                let dir = pack.worlds.entry(world).or_default();
+                if !dir.cells.contains_key(&layer)
+                    && dir.layers.len().saturating_add(dir.cells.len()) >= MAX_LAYERS
+                {
+                    return Err(ProjectError::in_file(
+                        &file,
+                        format!("a world of a pack holds at most {MAX_LAYERS} layers"),
+                    ));
+                }
+                dir.cells.entry(layer).or_default().insert(cell, parsed);
+            }
+        }
+    }
+    for (name, dir) in &mut pack.worlds {
+        for (layer, cells) in &dir.cells {
+            if dir.layers.contains_key(layer) {
+                return Err(ProjectError::in_file(
+                    &pack.location,
+                    format!(
+                        "the layer `{layer}` of the world `{name}` is both one file \
+                         (layers/{layer}.json) and split into cells (layers/{layer}/); keep one \
+                         of them"
+                    ),
+                ));
+            }
+            let merged = Layer {
+                replace: cells.values().any(|c| c.replace),
+                entries: cells.values().flat_map(|c| c.entries.clone()).collect(),
+            };
+            dir.layers.insert(layer.clone(), merged);
         }
     }
     Ok(pack)

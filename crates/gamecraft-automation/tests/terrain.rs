@@ -149,6 +149,8 @@ fn a_read_only_project_builds_without_writing() {
         gamecraft_automation::Access {
             read_root: Some(dir.path().to_path_buf()),
             write_root: None,
+            max_world_bytes: None,
+            cache_beside_files: false,
         },
     );
     let opened = ok(&mut h, "project.open", json!({"path": "game"}));

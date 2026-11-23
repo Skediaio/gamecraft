@@ -11,8 +11,17 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Largest `.gamecraft` file `file.open` reads, bytes.
-pub(crate) const MAX_OPEN_BYTES: u64 = 64 * 1024 * 1024;
+/// Largest asset file (a model, a texture) read, bytes.
+pub(crate) const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
+
+/// How a host raises the world-file cap, for error messages.
+pub(crate) const RAISE_CAP: &str = "it is a safety net; raise it with `--max-world-mb` (or \
+    `GAMECRAFT_MAX_WORLD_MB`) on gamecraft-cli, or `Access::max_world_bytes` in a host";
+
+/// Mebibytes of `bytes`, rounded up.
+pub(crate) fn mb(bytes: u64) -> u64 {
+    bytes.div_ceil(1024 * 1024)
+}
 
 /// Which root a path is resolved against.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,23 +129,125 @@ pub(crate) fn resolve(
     Ok(target)
 }
 
-/// Reads and checks the `.gamecraft` document at `path` (`given` is how the request named it).
-pub(crate) fn read_world(path: &Path, given: &str) -> Result<World, String> {
+/// The folder beside a world file that holds its cooked cache: derived data, ignored by git
+/// (it holds a `.gitignore` of `*`) and safe to delete.
+pub const CACHE_DIR: &str = ".gamecraft-cache";
+
+/// Where the cooked cache of the world file `path` is: `<folder>/.gamecraft-cache/<name>.cooked`.
+pub(crate) fn cache_path(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    Some(
+        path.parent()?
+            .join(CACHE_DIR)
+            .join(format!("{name}.cooked")),
+    )
+}
+
+/// Whether `access` lets a cooked cache be written beside the world file `path`.
+pub(crate) fn may_cache(access: &Access, path: &Path) -> bool {
+    access.cache_beside_files
+        || path
+            .parent()
+            .and_then(|p| fs::canonicalize(p).ok())
+            .is_some_and(|dir| crate::projects::writable(access, &dir))
+}
+
+/// Writes the cooked form of `world`, read from (or saved as) source bytes with hash `source`,
+/// as the cache of `path`. Returns its size; a failure is reported, never fatal.
+pub(crate) fn write_cache(path: &Path, world: &World, source: u64) -> Result<u64, String> {
+    let target = cache_path(path).ok_or("the file has no folder for a cache")?;
+    let bytes = world.to_cooked(source).map_err(|e| e.to_string())?;
+    if let Some(dir) = target.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("cannot create `{}`: {e}", dir.display()))?;
+        let ignore = dir.join(".gitignore");
+        if !ignore.exists() {
+            write_whole(
+                &ignore,
+                b"# Derived data (cooked worlds): never commit.\n*\n",
+            )?;
+        }
+    }
+    write_whole(&target, &bytes)?;
+    Ok(bytes.len() as u64)
+}
+
+/// Reads and checks the `.gamecraft` document at `path` (`given` is how the request named it),
+/// refusing a file of more than `cap` bytes. With `cache`, the cooked cache beside it is used
+/// when it was made from these very bytes, and written after reading the text otherwise
+/// (when `may_write`); a cache that is missing, stale, of another version or damaged is
+/// ignored, never an error. Returns the world and what happened to the cache.
+pub(crate) fn read_world_cached(
+    path: &Path,
+    given: &str,
+    cap: u64,
+    may_write: bool,
+) -> Result<(World, serde_json::Value), String> {
+    use serde_json::json;
+    let clock = crate::commands::Stopwatch::start();
+    let bytes = read_capped(path, given, cap)?;
+    let source = gamecraft_world::cooked::source_hash(&bytes);
+    let cache = cache_path(path);
+    let mut ignored: Option<String> = None;
+    if let Some(cache) = &cache {
+        match fs::metadata(cache) {
+            Ok(m) if m.len() > cap => ignored = Some("larger than the cap".into()),
+            Ok(_) => match fs::read(cache) {
+                Ok(cooked) => match World::from_cooked(&cooked, source) {
+                    Ok(world) => {
+                        let report = json!({
+                            "used": true,
+                            "path": cache.display().to_string(),
+                            "bytes": cooked.len(),
+                            "source_bytes": bytes.len(),
+                            "ms": clock.ms(),
+                        });
+                        return Ok((world, report));
+                    }
+                    Err(e) => ignored = Some(e.to_string()),
+                },
+                Err(e) => ignored = Some(format!("cannot read it: {e}")),
+            },
+            Err(_) => ignored = Some("none yet".into()),
+        }
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| format!("`{given}` is not UTF-8 text, so it is no .gamecraft file"))?;
+    let world =
+        World::from_json(&text).map_err(|e| format!("`{given}` is not a valid world: {e}"))?;
+    let read_ms = clock.ms();
+    let written = if may_write {
+        match write_cache(path, &world, source) {
+            Ok(n) => json!(n),
+            Err(e) => json!({"error": e}),
+        }
+    } else {
+        serde_json::Value::Null
+    };
+    let report = json!({
+        "used": false,
+        "path": cache.map(|c| c.display().to_string()),
+        "ignored": ignored,
+        "written": written,
+        "source_bytes": text.len(),
+        "ms": read_ms,
+    });
+    Ok((world, report))
+}
+
+/// The bytes of the file at `path`, refusing a folder or more than `cap` bytes.
+fn read_capped(path: &Path, given: &str, cap: u64) -> Result<Vec<u8>, String> {
     let meta = fs::metadata(path).map_err(|e| format!("cannot read `{given}`: {e}"))?;
     if meta.is_dir() {
         return Err(format!("`{given}` is a folder, not a .gamecraft file"));
     }
-    if meta.len() > MAX_OPEN_BYTES {
+    if meta.len() > cap {
         return Err(format!(
-            "`{given}` is {} MB; a world file may be at most {} MB",
-            meta.len().div_ceil(1024 * 1024),
-            MAX_OPEN_BYTES / (1024 * 1024)
+            "`{given}` is {} MB; this host reads world files of at most {} MB ({RAISE_CAP})",
+            mb(meta.len()),
+            mb(cap)
         ));
     }
-    let bytes = fs::read(path).map_err(|e| format!("cannot read `{given}`: {e}"))?;
-    let text = String::from_utf8(bytes)
-        .map_err(|_| format!("`{given}` is not UTF-8 text, so it is no .gamecraft file"))?;
-    World::from_json(&text).map_err(|e| format!("`{given}` is not a valid world: {e}"))
+    fs::read(path).map_err(|e| format!("cannot read `{given}`: {e}"))
 }
 
 /// Writes `bytes` to `target` through a temporary file beside it and a rename, so a failed

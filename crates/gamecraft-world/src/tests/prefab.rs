@@ -29,6 +29,7 @@ fn beacon() -> Prefab {
         })],
         children: vec![
             PrefabChild {
+                prefab: None,
                 name: "Beacon post".into(),
                 offset: [0.0, 0.0, -2.0],
                 rotation_y_deg: 0.0,
@@ -40,6 +41,7 @@ fn beacon() -> Prefab {
                 })],
             },
             PrefabChild {
+                prefab: None,
                 name: "Beacon zone".into(),
                 offset: [1.0, 0.0, 0.0],
                 rotation_y_deg: 30.0,
@@ -220,8 +222,17 @@ fn round_trip_keeps_prefabs_overrides_and_children() {
     assert_eq!(g["overrides"].as_array().unwrap().len(), 1);
     let p = find(plain.id);
     assert!(p.get("overrides").is_none(), "no overrides: {p}");
-    let child = find(beacon.children[0]);
-    assert_eq!(child["parent"].as_u64(), Some(beacon.id.0));
+    // The children follow from the prefab: not written, placed again when read.
+    assert_eq!(file["derived_children"], true);
+    assert!(
+        entities
+            .iter()
+            .all(|e| e["id"].as_u64() != Some(beacon.children[0].0)),
+        "a child the prefab places is not written"
+    );
+    let child = back.entity(beacon.children[0]).unwrap();
+    assert_eq!(child.parent, Some(beacon.id));
+    assert_eq!(child.prefab_child, Some(0));
     assert_eq!(file["prefabs"].as_array().unwrap().len(), 2);
 }
 

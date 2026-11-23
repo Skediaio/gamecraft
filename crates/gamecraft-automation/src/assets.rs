@@ -10,7 +10,7 @@
 
 use crate::commands::{host_spec, strip_owner};
 use crate::fields::Fields;
-use crate::files::{Direction, MAX_OPEN_BYTES, resolve, write_whole};
+use crate::files::{Direction, MAX_ASSET_BYTES, resolve, write_whole};
 use crate::host::Host;
 use gamecraft_engine::{CommandSpec, ParamType as T, param};
 use gamecraft_project::model::{folder_of, references};
@@ -56,10 +56,10 @@ fn read_pack_file(dir: &Path, relative: &str) -> Result<Vec<u8>, String> {
     let size = fs::metadata(&real)
         .map_err(|e| format!("cannot read `{shown}`: {e}"))?
         .len();
-    if size > MAX_OPEN_BYTES {
+    if size > MAX_ASSET_BYTES {
         return Err(format!(
             "`{shown}` is too large: an asset file may be at most {} MB",
-            MAX_OPEN_BYTES / (1024 * 1024)
+            MAX_ASSET_BYTES / (1024 * 1024)
         ));
     }
     fs::read(&real).map_err(|e| format!("cannot read `{shown}`: {e}"))
@@ -353,11 +353,11 @@ impl Host {
         let read = |path: &Path| -> Result<Vec<u8>, String> {
             let meta =
                 fs::metadata(path).map_err(|e| format!("cannot read `{}`: {e}", path.display()))?;
-            if !meta.is_file() || meta.len() > MAX_OPEN_BYTES {
+            if !meta.is_file() || meta.len() > MAX_ASSET_BYTES {
                 return Err(format!(
                     "`{}` is not a file of at most {} MB",
                     path.display(),
-                    MAX_OPEN_BYTES / (1024 * 1024)
+                    MAX_ASSET_BYTES / (1024 * 1024)
                 ));
             }
             fs::read(path).map_err(|e| format!("cannot read `{}`: {e}", path.display()))

@@ -15,7 +15,7 @@ mod common;
 use common::*;
 use gamecraft_automation::{Access, Host};
 use gamecraft_world::World;
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[test]
 fn save_then_open_gives_the_same_document() {
@@ -44,12 +44,20 @@ fn save_then_open_gives_the_same_document() {
     );
     assert!(!h.is_dirty());
     assert!(h.path().unwrap().ends_with("valley.gamecraft"));
-    // Nothing else is left in the folder (no temporary file).
-    let names: Vec<String> = std::fs::read_dir(dir.path())
-        .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(names, ["valley.gamecraft"]);
+    // Nothing else is left in the folder (no temporary file), only the cooked cache.
+    let names = |d: &std::path::Path| {
+        let mut n: Vec<String> = std::fs::read_dir(d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        n.sort();
+        n
+    };
+    assert_eq!(names(dir.path()), [".gamecraft-cache", "valley.gamecraft"]);
+    assert_eq!(
+        names(&dir.join(".gamecraft-cache")),
+        [".gitignore", "valley.gamecraft.cooked"]
+    );
 
     let new = ok(&mut h, "file.new", json!({"name": "Blank", "seed": 9}));
     assert_eq!(new, json!({"name": "Blank", "seed": 9}));
@@ -241,7 +249,9 @@ fn a_bad_file_is_an_error_and_the_session_stays() {
     std::fs::write(dir.join("binary.gamecraft"), [0xff, 0xfe, 0x00, 0x80]).unwrap();
     std::fs::create_dir(dir.join("folder.gamecraft")).unwrap();
     let big = std::fs::File::create(dir.join("big.gamecraft")).unwrap();
-    big.set_len(64 * 1024 * 1024 + 1).unwrap();
+    // Sparse: over the default cap of 512 MiB without using the disk.
+    big.set_len(gamecraft_automation::DEFAULT_MAX_WORLD_BYTES + 1)
+        .unwrap();
     drop(big);
     let mut h = host_in(&dir);
     ok(
@@ -256,7 +266,7 @@ fn a_bad_file_is_an_error_and_the_session_stays() {
         ("version.gamecraft", "version"),
         ("binary.gamecraft", "UTF-8"),
         ("folder.gamecraft", "folder.gamecraft"),
-        ("big.gamecraft", "64 MB"),
+        ("big.gamecraft", "512 MB"),
         ("missing.gamecraft", "missing.gamecraft"),
     ] {
         let error = err(&mut h, "file.open", json!({"path": path}));
@@ -275,8 +285,94 @@ fn a_root_that_does_not_exist_is_an_error() {
         Access {
             read_root: Some(std::env::temp_dir().join("gamecraft-automation-no-such-root-xyz")),
             write_root: None,
+            max_world_bytes: None,
+            cache_beside_files: false,
         },
     );
     let error = err(&mut h, "file.open", json!({"path": "a.gamecraft"}));
     assert!(error.contains("read root"), "{error}");
+}
+
+#[test]
+fn the_world_file_cap_names_itself_and_how_to_raise_it() {
+    let dir = TempDir::new("cap");
+    let text = format!("{{\"gamecraft\": 1{}}}", " ".repeat(4000));
+    std::fs::write(dir.join("padded.gamecraft"), text).unwrap();
+    let access = |cap: Option<u64>| Access {
+        read_root: Some(dir.path().to_path_buf()),
+        write_root: None,
+        max_world_bytes: cap,
+        cache_beside_files: false,
+    };
+    assert_eq!(access(None).max_world_bytes(), 512 * 1024 * 1024);
+    assert_eq!(
+        gamecraft_automation::DEFAULT_MAX_WORLD_BYTES,
+        512 * 1024 * 1024
+    );
+    let mut small = Host::new(World::new("x", 0), access(Some(1000)));
+    let error = err(&mut small, "file.open", json!({"path": "padded.gamecraft"}));
+    assert!(error.contains("at most 1 MB"), "{error}");
+    assert!(error.contains("safety net"), "{error}");
+    assert!(error.contains("max_world_bytes"), "{error}");
+    let mut wide = Host::new(World::new("x", 0), access(Some(10_000)));
+    ok(&mut wide, "file.open", json!({"path": "padded.gamecraft"}));
+}
+
+#[test]
+fn the_cooked_cache_is_used_when_current_and_ignored_otherwise() {
+    let dir = TempDir::new("cooked");
+    let mut h = host_in(&dir);
+    ok(&mut h, "entity.add", json!({"name": "Rock", "at": [3, 4]}));
+    let saved = ok(&mut h, "file.save", json!({"path": "w.gamecraft"}));
+    assert!(saved["cache_bytes"].as_u64().unwrap() > 0, "{saved}");
+    let cache = dir.join(".gamecraft-cache/w.gamecraft.cooked");
+    assert!(cache.exists());
+    assert!(dir.join(".gamecraft-cache/.gitignore").exists());
+    let document = h.session().document().clone();
+
+    // Second load: from the cache, the very same world.
+    let opened = ok(&mut h, "file.open", json!({"path": "w.gamecraft"}));
+    assert_eq!(opened["cache"]["used"], true, "{opened}");
+    assert_eq!(h.session().document(), &document);
+
+    // The source edited (by hand): the cache is ignored, the text read, the cache renewed.
+    let text = std::fs::read_to_string(dir.join("w.gamecraft")).unwrap();
+    std::fs::write(
+        dir.join("w.gamecraft"),
+        text.replace("\"Rock\"", "\"Stone\""),
+    )
+    .unwrap();
+    let opened = ok(&mut h, "file.open", json!({"path": "w.gamecraft"}));
+    assert_eq!(opened["cache"]["used"], false, "{opened}");
+    assert!(
+        opened["cache"]["ignored"]
+            .as_str()
+            .unwrap()
+            .contains("another source"),
+        "{opened}"
+    );
+    assert!(h.session().document().entities().any(|e| e.name == "Stone"));
+    let opened = ok(&mut h, "file.open", json!({"path": "w.gamecraft"}));
+    assert_eq!(opened["cache"]["used"], true, "renewed: {opened}");
+
+    // A damaged cache is ignored, never an error.
+    std::fs::write(&cache, b"not a cooked world").unwrap();
+    let opened = ok(&mut h, "file.open", json!({"path": "w.gamecraft"}));
+    assert_eq!(opened["cache"]["used"], false, "{opened}");
+    assert!(h.session().document().entities().any(|e| e.name == "Stone"));
+
+    // A host that may only read writes no cache.
+    std::fs::remove_dir_all(dir.join(".gamecraft-cache")).unwrap();
+    let mut reader = Host::new(
+        World::new("x", 0),
+        Access {
+            read_root: Some(dir.path().to_path_buf()),
+            write_root: None,
+            max_world_bytes: None,
+            cache_beside_files: false,
+        },
+    );
+    let opened = ok(&mut reader, "file.open", json!({"path": "w.gamecraft"}));
+    assert_eq!(opened["cache"]["written"], Value::Null, "{opened}");
+    assert!(!cache.exists());
 }

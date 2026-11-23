@@ -33,7 +33,11 @@ fn project_dir(a: &Args, what: &str) -> Result<(String, PathBuf), CliError> {
 
 /// `project new DIR --id ID --name NAME [--world W] [--from FILE]`.
 fn new(raw: &[String]) -> Res {
-    let a = Args::parse(raw, &["--id", "--name", "--world", "--from"], &[])?;
+    let a = Args::parse(
+        raw,
+        &["--id", "--name", "--world", "--from", "--cell-size-m"],
+        &[],
+    )?;
     if a.help() {
         return print(help::PROJECT);
     }
@@ -54,6 +58,16 @@ fn new(raw: &[String]) -> Res {
     let mut params = json!({"path": dir.display().to_string(), "id": id, "name": name});
     if let (Some(world), Some(map)) = (a.value("--world")?, params.as_object_mut()) {
         map.insert("world".into(), json!(world));
+    }
+    if let Some(size) = a.value("--cell-size-m")? {
+        let size: f64 = size.parse().map_err(|_| {
+            CliError::Usage(format!(
+                "`--cell-size-m {size}`: the side of a cell in metres, 16 to 16384 (512 is usual)"
+            ))
+        })?;
+        if let Some(map) = params.as_object_mut() {
+            map.insert("cell_size_m".into(), json!(size));
+        }
     }
     print_json(&exec(&mut host, "project.new", &params)?)
 }

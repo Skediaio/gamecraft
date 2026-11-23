@@ -406,27 +406,7 @@ fn fade_to_first(weights: [u8; 8], share: f64) -> [u8; 8] {
 /// The unit upward normal of the height field at sample (`col`, `row`), from central
 /// differences of the neighbouring samples (one-sided at the border).
 pub fn terrain_normal(heights: &HeightField, col: usize, row: usize) -> [f64; 3] {
-    let h = |c: usize, r: usize| heights.sample(c, r).map_or(0.0, f64::from);
-    let cell = heights.cell_m();
-    let (c0, c1) = (
-        col.saturating_sub(1),
-        (col + 1).min(heights.cols().saturating_sub(1)),
-    );
-    let (r0, r1) = (
-        row.saturating_sub(1),
-        (row + 1).min(heights.rows().saturating_sub(1)),
-    );
-    let dx = if c1 > c0 {
-        (h(c1, row) - h(c0, row)) / ((c1 - c0) as f64 * cell)
-    } else {
-        0.0
-    };
-    let dz = if r1 > r0 {
-        (h(col, r1) - h(col, r0)) / ((r1 - r0) as f64 * cell)
-    } else {
-        0.0
-    };
-    normalised([-dx, 1.0, -dz])
+    heights.sample_normal(col, row)
 }
 
 /// The layer weights of ground whose normal has `normal_y` as its upward part: grass up to

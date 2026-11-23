@@ -142,7 +142,17 @@ with read-only SQL (`project.query`). Example: `examples/skirmish/project` and t
 `examples/skirmish-night-mod`. Terrain editing (2026-11-19): sculpting (raise, lower,
 flatten, smooth, ramp, noise) and painted material layers with slope and height rules, as edits
 over the recipe that rebuild only the tiles they touch, a binary tile cache in projects, terrains
-of 4 km at 2 m (built in about 2 s, a crater in 45 ms).
+of 4 km at 2 m (built in about 2 s, a crater in 45 ms). Large worlds (2026-11-23): a prefab
+instance's children are derived data in the `.gamecraft` file (only changed or removed children
+are written; prefabs inside prefabs), the world-file cap is a host setting (512 MiB default),
+and a project's layers can be split into spatial cells (`cell_size_m`, `project.cells`,
+`project.open {cells}`), and a world file loads from a cooked binary cache when it is current.
+Roads (2026-11-23): a `road` component (a polyline with a width) whose surface is draped on
+the terrain's triangles, junctions ordered by a tier so no two surfaces are coplanar, drawn per
+terrain chunk, hit by rays, lines of sight and projectiles with the road's id (`road.add`,
+`road.set`; `decisions.md`, *Roads are a component*). Open: streaming cells near the player in
+the renderer and the simulation, derived children in layer files, cooking projects, flattening
+the terrain under a road.
 
 
 Worlds of real size, made of reusable parts, by anyone.
@@ -159,7 +169,8 @@ Worlds of real size, made of reusable parts, by anyone.
 - A second example game, a small puzzle of GameCraft's own design that loads no pack: the guard
   that the engine assumes no genre.
 - Generators as document entries: forests and scatter by area, density and slope; roads and
-  rivers along splines that shape the terrain.
+  rivers along splines that shape the terrain (roads that lie on the terrain: done 2026-11-23;
+  shaping the terrain under them is open).
 - Terrain: sculpting as edits over the source, painted material layers, tiles streamed and
   refined by distance, positions relative to the camera.
 - Water: sea level, lakes, rivers, through VisionCraft's water.

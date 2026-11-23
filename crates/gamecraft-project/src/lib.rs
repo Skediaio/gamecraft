@@ -30,6 +30,7 @@
 //! Pure: no files, no clock. The host reads and writes the files (`gamecraft-automation`).
 
 pub mod assets;
+pub mod cells;
 mod error;
 mod fields;
 mod layer;
@@ -45,6 +46,7 @@ mod text;
 pub use assets::{
     ASSETS_DIR, AssetRecord, License, PackAsset, RECORD_SUFFIX, check_assets, credits, record_path,
 };
+pub use cells::{Cell, DEFAULT_CELL_SIZE_M, cells_in_area};
 pub use error::ProjectError;
 pub use fields::WORLD_FORMAT;
 pub use layer::LAYER_FORMAT;

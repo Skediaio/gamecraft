@@ -398,6 +398,7 @@ fn scatter(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
         prefab: None,
         parent: None,
         layer: None,
+        prefab_child: None,
         components: template.clone(),
     };
     probe

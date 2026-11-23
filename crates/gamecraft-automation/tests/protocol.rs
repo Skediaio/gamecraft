@@ -17,7 +17,7 @@ use common::*;
 use gamecraft_automation::{MAX_BATCH_STEPS, MAX_REQUEST_BYTES, rpc};
 use serde_json::{Value, json};
 
-const HOST_COMMANDS: [&str; 17] = [
+const HOST_COMMANDS: [&str; 18] = [
     "asset.credits",
     "asset.import",
     "asset.list",
@@ -28,6 +28,7 @@ const HOST_COMMANDS: [&str; 17] = [
     "file.save",
     "journal.save",
     "pack.add_dependency",
+    "project.cells",
     "project.export",
     "project.info",
     "project.new",

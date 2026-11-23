@@ -14,6 +14,9 @@
 //!   ([`WorldRenderer::provide_asset`]), read with their PBR materials and PNG or JPEG textures
 //!   ([`model`]), uploaded once per asset and drawn as one item with an instance per entity. A
 //!   model that cannot be drawn is a small magenta box with a problem line.
+//! - **Roads**: every `road` draped on the terrain's triangles a few centimetres above them
+//!   ([`roads`]), one item per terrain chunk and colour, rough and lit like the ground under
+//!   it; where roads overlap the higher tier lies on top, so no two surfaces are coplanar.
 //! - **Characters**: a body (cylinder and head) with a small dark visor at eye height on the
 //!   side the character faces.
 //! - **Sky and light**: the physical sky, the sun from the environment, clouds, mist, rain, wind
@@ -45,6 +48,7 @@ pub mod mesh;
 pub mod model;
 mod plants;
 mod renderer;
+pub mod roads;
 
 #[cfg(test)]
 mod tests;

@@ -33,6 +33,13 @@ pub const SMOOTH_ITERATIONS_MAX: u32 = 8;
 /// square times a smooth's passes): about a second of work.
 pub const TERRAIN_EDIT_WORK_MAX: u64 = 1 << 28;
 
+/// Fewest nodes of a terrain source grid along one side.
+pub const GRID_SIDE_MIN: u32 = 2;
+/// Most nodes of a terrain source grid along one side.
+pub const GRID_SIDE_MAX: u32 = 513;
+/// Most samples of a terrain source grid (cols * rows).
+pub const GRID_SAMPLES_MAX: usize = GRID_SIDE_MAX as usize * GRID_SIDE_MAX as usize;
+
 /// Fewest noise octaves.
 pub const NOISE_OCTAVES_MIN: u32 = 1;
 /// Most noise octaves.
@@ -54,6 +61,11 @@ pub const NOISE_FEATURE_MAX_M: f64 = 100_000.0;
 pub const MAX_PREFABS: usize = 1000;
 /// Most children of one prefab.
 pub const MAX_PREFAB_CHILDREN: usize = 64;
+/// Most levels of prefabs placed inside prefabs (a prefab's child that is itself a prefab's
+/// instance): an instance and the instances below it span at most this many prefabs.
+pub const MAX_PREFAB_NESTING: usize = 8;
+/// Most entities one instance of a prefab places, itself and everything below it included.
+pub const MAX_INSTANCE_ENTITIES: usize = 4096;
 /// Deepest chain of parents above an entity (a loop in a bad file is longer than any).
 pub const MAX_HIERARCHY_DEPTH: usize = 16;
 /// Most entities in one world.
@@ -151,3 +163,28 @@ pub const BEHAVIOUR_RANGE_MAX_M: f64 = 10_000.0;
 pub const AIM_ERROR_MAX_MRAD: f64 = 1000.0;
 /// Longest reaction or search time of a `behaviour`, seconds.
 pub const BEHAVIOUR_TIME_MAX_S: f64 = 3600.0;
+
+/// Fewest points of a `road`'s centre line.
+pub const ROAD_POINTS_MIN: usize = 2;
+/// Most points of a `road`'s centre line.
+pub const ROAD_POINTS_MAX: usize = 4096;
+/// Narrowest `road`, metres (before the entity's scale).
+pub const ROAD_WIDTH_MIN_M: f64 = 0.1;
+/// Widest `road`, metres (before the entity's scale).
+pub const ROAD_WIDTH_MAX_M: f64 = 200.0;
+/// Shortest distance between two consecutive points of a `road`, metres (before the entity's
+/// scale): a repeated point has no direction.
+pub const ROAD_POINT_GAP_MIN_M: f64 = 0.01;
+/// Lowest lift of a `road`'s surface above the ground, metres: closer, the depth buffer cannot
+/// tell the road from the ground it lies on.
+pub const ROAD_LIFT_MIN_M: f64 = 0.005;
+/// Highest lift of a `road`'s surface above the ground, metres.
+pub const ROAD_LIFT_MAX_M: f64 = 1.0;
+/// Highest `tier` of a `road`.
+pub const ROAD_TIER_MAX: u32 = 7;
+/// How much higher a `road` lies per tier, metres: where roads overlap, the higher tier is on
+/// top and the two surfaces are never coplanar.
+pub const ROAD_TIER_STEP_M: f64 = 0.01;
+/// Most terrain triangles one `road`'s surface is clipped against (the cells under its pieces,
+/// two triangles each): about a second of work.
+pub const ROAD_DRAPE_WORK_MAX: u64 = 1 << 24;

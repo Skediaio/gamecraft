@@ -330,6 +330,54 @@ const MODEL_FIELDS: &[Field] = &[
     ),
 ];
 
+const ROAD_FIELDS: &[Field] = &[
+    field(
+        "points",
+        "[[x, z], ...]",
+        Some("m"),
+        "Required. The centre line as offsets from the entity's position (turned by its \
+         rotation_y_deg, times its scale), 2 to 4096 points, consecutive points at least \
+         0.01 m apart; road.add takes world points and makes the offsets.",
+    ),
+    field(
+        "width_m",
+        "number",
+        Some("m"),
+        "Width, 0.1 to 200 (times the entity's scale).",
+    ),
+    field(
+        "widths_m",
+        "[number, ...]",
+        Some("m"),
+        "A width per point, each 0.1 to 200, replacing width_m; [] (none) or one per point.",
+    ),
+    field(
+        "color",
+        "[r, g, b]",
+        None,
+        "Surface colour, linear RGB 0 to 1.",
+    ),
+    field(
+        "lift_m",
+        "number",
+        Some("m"),
+        "Height of the surface above the ground, 0.005 to 1.",
+    ),
+    field(
+        "tier",
+        "integer",
+        None,
+        "Which road is on top where roads overlap, 0 to 7; each tier lies 0.01 m higher. \
+         road.add picks the lowest one free.",
+    ),
+    field(
+        "ends",
+        "\"round\"|\"flat\"",
+        None,
+        "A half disc at each end (roads meeting end to end leave no gap) or a square cut.",
+    ),
+];
+
 const LAUNCHER_FIELDS: &[Field] = &[
     field(
         "muzzle_velocity_mps",
@@ -577,6 +625,16 @@ const KINDS: &[Kind] = &[
         fields: MODEL_FIELDS,
         minimal: || json!({"type": "model", "asset": "models/crate.glb"}),
         example: || json!({"type": "model", "asset": "models/crate.glb", "scale": 1, "solid": true, "collider": "box"}),
+    },
+    Kind {
+        kind: "road",
+        summary: "A road lying on the terrain: a centre line with a width. Its surface is \
+                  draped on the terrain's triangles a few centimetres above them, drawn, and \
+                  hit by rays and lines of sight (with the road's id); where roads overlap the \
+                  higher tier is on top. Characters walk on the terrain beneath it.",
+        fields: ROAD_FIELDS,
+        minimal: || json!({"type": "road", "points": [[0, 0], [20, 0]]}),
+        example: || json!({"type": "road", "points": [[0, 0], [20, 0], [35, 12]], "width_m": 7, "widths_m": [], "color": [0.05, 0.05, 0.055], "lift_m": 0.03, "tier": 0, "ends": "round"}),
     },
 ];
 

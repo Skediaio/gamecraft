@@ -49,7 +49,14 @@ pub struct PrefabChild {
     /// Default 0.
     #[serde(default)]
     pub rotation_y_deg: f64,
-    /// The child's components, at most one of each type. Default none.
+    /// The prefab the child is itself an instance of, by id: a prefab inside a prefab. Its
+    /// `components` then replace that prefab's components of the same type, as an instance's
+    /// overrides do, and it places that prefab's children in turn, at most
+    /// [`crate::limits::MAX_PREFAB_NESTING`] levels deep. Default none: a plain entity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefab: Option<String>,
+    /// The child's components, at most one of each type (with `prefab`: its overrides).
+    /// Default none.
     #[serde(default)]
     pub components: Vec<Component>,
 }
@@ -154,6 +161,9 @@ impl Prefab {
             }
             ctx.finite(format!("{at}.rotation_y_deg"), child.rotation_y_deg)
                 .map_err(wrap)?;
+            if let Some(id) = &child.prefab {
+                ctx.id(format!("{at}.prefab"), id).map_err(wrap)?;
+            }
             check_components(&child.components, &format!("{at}.components")).map_err(wrap)?;
         }
         Ok(())

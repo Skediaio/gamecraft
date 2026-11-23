@@ -182,6 +182,36 @@ children with it, `entity.remove` removes them too.
 - `prefab.spawn` works on a running world: the game master's "drop a squad here". What is
   spawned takes part from the next tick.
 
+## Roads
+
+A road is a centre line with a width that lies on the terrain. `road.add {points, width_m?,
+name?}` takes the centre line in world `[x, z]` (heights follow the ground) and answers `{id,
+tier, length_m}`:
+
+```json
+{"command": "road.add", "params": {"name": "High Street", "points": [[-30, 20], [0, 18], [24, 36]], "width_m": 7}}
+```
+
+- The engine drapes the surface on the terrain's own triangles, `lift_m` (default 3 cm) above
+  them, so it follows the ground exactly on any slope; bends get round joins and the ends are
+  round (`ends: "flat"` cuts them square), so two roads that meet end to end at a point, as
+  OpenStreetMap ways do, leave no gap. A road is one surface, not a row of boxes.
+- Junctions: where roads overlap, the one with the higher `tier` (0 to 7) lies on top, 1 cm
+  per tier higher, so two surfaces are never at the same height and nothing flickers.
+  `road.add` picks the lowest tier no overlapping road uses; give `tier` to choose (a main road
+  over a side street). For roads written as data (a pack's layer files, `entity.add` with a
+  `road` component), `road.set {id, retier_all: true}` on any road gives every road a tier again.
+- `query.raycast` straight down answers with the road's id where there is a road (`kind:
+  "entity"`), else `kind: "terrain"`: the way to ask "is this point on asphalt?". Lines of sight
+  and projectiles hit the surface too.
+- `road.set {id, points?, width_m?, widths_m?, color?, lift_m?, tier?}` changes only what it is
+  given; `widths_m` gives a width per point (a road that widens at a junction). Remove a road
+  with `entity.remove`. Roads work on a running world like every world command.
+- Characters walk on the terrain beneath the road (its surface is a few centimetres higher).
+  The terrain is not flattened under a road yet: on a side slope the road tilts with the ground.
+- A road needs a terrain: without one, or beyond its edge, nothing is drawn or hit. One road
+  covers at most 16.7 million terrain triangles; split a longer one.
+
 ## Projects, packs and layers
 
 A game on disk is a **project**: a folder of text files you can read, diff and merge

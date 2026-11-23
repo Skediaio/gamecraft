@@ -104,9 +104,32 @@ fn help_for(rest: &[String]) -> Res {
     }
 }
 
+/// Takes the global `--max-world-mb N` out of `raw` (it may stand anywhere) and records it.
+fn take_global(raw: &mut Vec<String>) -> Res {
+    const FLAG: &str = "--max-world-mb";
+    if let Ok(env) = std::env::var(commands::MAX_WORLD_ENV) {
+        commands::parse_world_mb(&env, commands::MAX_WORLD_ENV)?;
+    }
+    let Some(at) = raw.iter().position(|a| a == FLAG) else {
+        return Ok(());
+    };
+    let value = raw.get(at + 1).cloned().ok_or_else(|| {
+        CliError::Usage(format!(
+            "`{FLAG}` needs a value: the cap in MiB, e.g. `{FLAG} 2048`"
+        ))
+    })?;
+    let cap = commands::parse_world_mb(&value, FLAG)?;
+    raw.drain(at..at + 2);
+    if raw.iter().any(|a| a == FLAG) {
+        return Err(CliError::Usage(format!("`{FLAG}` is given more than once")));
+    }
+    let _ = commands::MAX_WORLD_BYTES.set(cap);
+    Ok(())
+}
+
 fn main() -> ExitCode {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
-    match dispatch(&raw) {
+    let mut raw: Vec<String> = std::env::args().skip(1).collect();
+    match take_global(&mut raw).and_then(|()| dispatch(&raw)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(CliError::Usage(message)) => {
             let _ = writeln!(std::io::stderr(), "gamecraft-cli: {message}");

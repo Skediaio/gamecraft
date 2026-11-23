@@ -37,7 +37,8 @@ mod terrain_cache;
 
 pub use docs::{CommandDoc, ParamDoc};
 pub use host::{
-    Access, CameraRequest, Host, Indexer, Pictures, ProjectIndex, RenderRequest, Rendered,
+    Access, CameraRequest, DEFAULT_MAX_WORLD_BYTES, Host, Indexer, Pictures, ProjectIndex,
+    RenderRequest, Rendered,
 };
 pub use lines::{Line, read_line};
 

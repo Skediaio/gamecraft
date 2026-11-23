@@ -3,7 +3,7 @@
 use crate::error::{CommandError, bad, failed};
 use crate::params::Params;
 use crate::session::{Edit, Handler, Registration};
-use crate::spec::{CommandSpec, ParamType as T, param, spec};
+use crate::spec::{CommandSpec, ParamType as T, kind_of, param, spec};
 use gamecraft_world::{Environment, Terrain, TerrainSource, World};
 use serde_json::{Value, json};
 
@@ -67,18 +67,21 @@ fn probe(set: impl FnOnce(&mut World)) -> Result<(), CommandError> {
 
 const NOISE_ONLY: [&str; 5] = ["seed", "relief_m", "feature_m", "octaves", "roughness"];
 const FLAT_ONLY: [&str; 1] = ["height_m"];
+const GRID_ONLY: [&str; 3] = ["cols", "rows", "heights"];
 
 fn terrain_set_spec() -> CommandSpec {
     spec(
         "terrain.set",
         "Set Terrain",
-        "Replaces the terrain with a square centred on the origin: flat, or rolling land from \
-         seeded noise. Its painted layers, paint rules and sculpt edits (in world coordinates) \
-         stay; terrain.clear drops them. Entities are not moved (entity.snap_to_ground puts \
-         them on the new ground). Parameters of the other kind are refused.",
+        "Replaces the terrain with a square centred on the origin: flat, rolling land from \
+         seeded noise, or real ground as a control grid of cols x rows height nodes reduced \
+         from elevation data. Its painted layers, paint rules and sculpt edits (in world \
+         coordinates) stay; terrain.clear drops them. Entities are not moved \
+         (entity.snap_to_ground puts them on the new ground). Parameters of the other kind \
+         are refused.",
         vec![
             param("kind", T::String, "Where the heights come from.")
-                .allowed(&["flat", "noise"])
+                .allowed(&["flat", "noise", "grid"])
                 .default(json!("noise")),
             param(
                 "size_m",
@@ -123,37 +126,95 @@ fn terrain_set_spec() -> CommandSpec {
                 "noise: amplitude ratio between layers, 0 (smooth) to 1 (rough).",
             )
             .default(json!(0.5)),
+            param(
+                "cols",
+                T::Integer,
+                "grid: nodes along x, 2 to 513; the grid spans the whole square.",
+            ),
+            param("rows", T::Integer, "grid: nodes along z, 2 to 513."),
+            param(
+                "heights",
+                T::Array,
+                "grid: every node's height in metres, row-major (index row * cols + col), \
+                 exactly cols * rows finite numbers.",
+            )
+            .unit("m"),
         ],
         "{cols, rows, min_height_m, max_height_m}",
         json!({"kind": "noise", "size_m": 128, "cell_m": 2, "relief_m": 20, "seed": 3}),
     )
 }
 
+/// The `heights` parameter: an array of finite numbers. The count against `cols` x `rows` is
+/// checked by the world's validation, which names the parameter.
+fn grid_heights(p: &Params<'_>) -> Result<Vec<f64>, CommandError> {
+    let Some(v) = p.value("heights") else {
+        return Err(bad("`heights` is required for kind \"grid\""));
+    };
+    let items = v.as_array().ok_or_else(|| {
+        bad(format!(
+            "`heights` must be an array of numbers, got {}",
+            kind_of(v)
+        ))
+    })?;
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            item.as_f64().filter(|x| x.is_finite()).ok_or_else(|| {
+                bad(format!(
+                    "`heights` must be an array of finite numbers; heights[{i}] is {}",
+                    kind_of(item)
+                ))
+            })
+        })
+        .collect()
+}
+
 fn terrain_set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
     let kind = p.str("kind")?.unwrap_or("noise");
-    let (other, foreign): (&str, &[&str]) = if kind == "flat" {
-        ("noise", &NOISE_ONLY)
-    } else {
-        ("flat", &FLAT_ONLY)
-    };
-    if let Some(name) = foreign.iter().find(|n| p.has(n)) {
+    // Every kind names its own parameters; the parameters of the other kinds are refused.
+    const KINDS: [(&str, &[&str]); 3] = [
+        ("flat", &FLAT_ONLY),
+        ("noise", &NOISE_ONLY),
+        ("grid", &GRID_ONLY),
+    ];
+    if !KINDS.iter().any(|(k, _)| *k == kind) {
         return Err(bad(format!(
-            "`{name}` belongs to kind \"{other}\", not to kind \"{kind}\"; leave it out or set \
-             kind \"{other}\""
+            "`kind` must be one of flat, noise, grid, not {kind:?}"
         )));
     }
-    let source = if kind == "flat" {
-        TerrainSource::Flat {
-            height_m: p.f64("height_m")?.unwrap_or(0.0),
+    for (other, foreign) in KINDS {
+        if other == kind {
+            continue;
         }
-    } else {
-        TerrainSource::Noise {
+        if let Some(name) = foreign.iter().find(|n| p.has(n)) {
+            return Err(bad(format!(
+                "`{name}` belongs to kind \"{other}\", not to kind \"{kind}\"; leave it out or \
+                 set kind \"{other}\""
+            )));
+        }
+    }
+    let source = match kind {
+        "flat" => TerrainSource::Flat {
+            height_m: p.f64("height_m")?.unwrap_or(0.0),
+        },
+        "grid" => TerrainSource::Grid {
+            cols: p
+                .u32("cols")?
+                .ok_or_else(|| bad("`cols` is required for kind \"grid\""))?,
+            rows: p
+                .u32("rows")?
+                .ok_or_else(|| bad("`rows` is required for kind \"grid\""))?,
+            heights: grid_heights(&p)?.into(),
+        },
+        _ => TerrainSource::Noise {
             seed: p.u64("seed")?.unwrap_or(edit.world.seed),
             relief_m: p.f64("relief_m")?.unwrap_or(40.0),
             feature_m: p.f64("feature_m")?.unwrap_or(200.0),
             octaves: p.u32("octaves")?.unwrap_or(5),
             roughness: p.f64("roughness")?.unwrap_or(0.5),
-        }
+        },
     };
     // The layers, rules and edits are in world coordinates: they stay.
     let kept = edit.world.terrain.take().unwrap_or_default();

@@ -6,7 +6,8 @@
 //! `out/render-night.png`, at the workspace root for a person (or agent) to look at. The combat
 //! tests write `out/skirmish-fight.png` (the skirmish world mid-fight: two tracers in the air,
 //! one impact, one enemy down) and `out/lantern-night.png` (the Lantern world at night with
-//! three of five beacons lit).
+//! three of five beacons lit). `a_street_view_on_a_sloped_road_shows_only_asphalt_ahead`
+//! writes `out/render-roads.png`: eye height on a road climbing a slope, crossed by others.
 
 // Integration tests are compiled as their own crates, outside `cfg(test)`, so clippy.toml's
 // test allowances do not reach their helper functions. Picture statistics are not part of the
@@ -25,7 +26,7 @@ use gamecraft_render::{
     headless_gpu,
 };
 use gamecraft_world::{
-    Character, Component, EntityDraft, HeightField, Light, Plant, Shape, ShapeKind, Terrain,
+    Character, Component, EntityDraft, HeightField, Light, Plant, Road, Shape, ShapeKind, Terrain,
     TerrainSource, World,
 };
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -145,8 +146,13 @@ fn luminance(rgb: [f64; 3]) -> f64 {
     0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
 }
 
+/// Writes a picture to `out/` at the workspace root, or to `GAMECRAFT_OUT_DIR` when set (a
+/// test binary built on another machine).
 fn save(name: &str, p: &Picture) {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out");
+    let dir = std::env::var_os("GAMECRAFT_OUT_DIR").map_or_else(
+        || std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out"),
+        std::path::PathBuf::from,
+    );
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
     std::fs::write(&path, encode_png(&p.rgba, p.width, p.height).unwrap()).unwrap();
@@ -1073,4 +1079,126 @@ fn painted_layers_are_drawn_in_their_colours() {
     let p = r.render(&request(480, 320, camera)).unwrap();
     let plain = rgb_at(&p, &camera, [0.0, 0.0, 0.0], 4);
     assert!(plain[1] > plain[0], "{plain:?}");
+}
+
+/// A slope rising 1 in 12 to the north, with a cross slope and rolling bumps, 256 m at 2 m
+/// cells; a main street climbing it, crossed by an avenue, a diagonal and a dirt lane.
+fn street_world() -> (World, HeightField) {
+    let cols = 17u32;
+    let heights: Vec<f64> = (0..cols * cols)
+        .map(|i| {
+            let (c, r) = (f64::from(i % cols), f64::from(i / cols));
+            let (x, z) = (c * 16.0 - 128.0, r * 16.0 - 128.0);
+            -z / 12.0 + x * 0.02 + 1.5 * (x / 23.0).sin() * (z / 31.0).cos()
+        })
+        .collect();
+    let terrain = Terrain::new(
+        256.0,
+        2.0,
+        TerrainSource::Grid {
+            cols,
+            rows: cols,
+            heights: heights.into(),
+        },
+    );
+    let hf = terrain.build().unwrap();
+    let mut world = World::new("streets", 3);
+    world.terrain = Some(terrain);
+    world.environment.time_of_day_h = 15.0;
+    let roads = [
+        (
+            vec![[0.0, 110.0], [0.0, 30.0], [6.0, -30.0], [10.0, -110.0]],
+            8.0,
+            None,
+            0,
+        ),
+        (vec![[-110.0, 0.0], [110.0, 4.0]], 7.0, None, 1),
+        (vec![[-90.0, -90.0], [90.0, 70.0]], 6.0, None, 2),
+        (
+            vec![
+                [-60.0, 60.0],
+                [-20.0, 45.0],
+                [10.0, 20.0],
+                [40.0, 25.0],
+                [80.0, 50.0],
+            ],
+            4.0,
+            Some([0.20, 0.15, 0.10]),
+            3,
+        ),
+    ];
+    for (points, width_m, color, tier) in roads {
+        let mut road = Road::new(points);
+        road.width_m = width_m;
+        road.tier = tier;
+        if let Some(c) = color {
+            road.color = c;
+        }
+        add(&mut world, [0.0, 0.0, 0.0], 0.0, Component::Road(road));
+    }
+    (world, hf)
+}
+
+#[test]
+fn a_street_view_on_a_sloped_road_shows_only_asphalt_ahead() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let (world, hf) = street_world();
+    let built = gamecraft_render::roads::road_meshes(&world, Some(&hf));
+    assert!(built.problems.is_empty(), "{:?}", built.problems);
+    let eye_at = |x: f64, z: f64| [x, hf.height_at(x, z).unwrap() + 1.7, z];
+    let camera = Camera {
+        position: eye_at(0.0, 70.0),
+        target: eye_at(1.0, 20.0),
+        fov_y_deg: 60.0,
+    };
+    let mut bare = world.clone();
+    let roads: Vec<_> = bare.entities().map(|e| e.id).collect();
+    for id in roads {
+        bare.remove_entity(id);
+    }
+    assert!(r.sync(&bare, Some(&hf)).is_empty());
+    let without = r.render(&request(960, 540, camera)).unwrap();
+    assert!(r.sync(&world, Some(&hf)).is_empty());
+    let p = r.render(&request(960, 540, camera)).unwrap();
+    save("render-roads.png", &p);
+    println!(
+        "roads: {} chunks, {} triangles, {} clips; frame {:?}, without roads {:?}",
+        built.chunks.len(),
+        built.triangles,
+        built.clips,
+        p.stats,
+        without.stats
+    );
+    // Work: one item per chunk and colour, drawn at least once each, with all its triangles.
+    assert!(p.stats.draws >= without.stats.draws + built.chunks.len() as u64);
+    assert!(p.stats.triangles >= without.stats.triangles + built.triangles);
+    // The road ahead (the lower middle of the picture) is asphalt: grey, and no grass shows
+    // through it anywhere (z-fighting with the ground would).
+    let (w, h) = (p.width as usize, p.height as usize);
+    let (mut grass, mut n) = (0usize, 0usize);
+    let mut sum = [0.0; 3];
+    for y in h * 3 / 4..h {
+        for x in w * 2 / 5..w * 3 / 5 {
+            let i = (y * w + x) * 4;
+            let [r, g, b] = [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2]].map(f64::from);
+            if g > r * 1.15 && g > b * 1.15 {
+                grass += 1;
+            }
+            sum[0] += r;
+            sum[1] += g;
+            sum[2] += b;
+            n += 1;
+        }
+    }
+    let mean = sum.map(|s| s / n as f64);
+    println!("road ahead: mean {mean:?}, {grass} of {n} pixels green");
+    assert_eq!(grass, 0, "the ground shows through the road");
+    let spread = mean.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        - mean.iter().copied().fold(f64::INFINITY, f64::min);
+    assert!(spread < 0.2 * mean[1] + 6.0, "asphalt is grey: {mean:?}");
+    // Without the roads the same pixels are the green ground.
+    let ground = mean_rgb(&without, (h * 3 / 4) as u32..h as u32);
+    assert!(ground[1] > ground[0], "{ground:?}");
 }

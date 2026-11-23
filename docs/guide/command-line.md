@@ -195,6 +195,15 @@ port. Files are touched only inside the roots given: `file.open` reads inside
 grants it. `--file` starts with a world open (read once; its path is not remembered, so `file.save`
 needs a `path`).
 
+World files of up to 512 MiB are read by default. That cap is a safety net against a file that
+would exhaust memory; raise it with the global `--max-world-mb N` (any subcommand, anywhere on the
+line) or the environment variable `GAMECRAFT_MAX_WORLD_MB`.
+
+Opening a world file writes a cooked cache beside it (`.gamecraft-cache/<file>.cooked`, binary,
+derived data, ignored by git), and later opens of the unchanged file read that instead of the
+text, about twice as fast for a large world. Edit the text and the cache is ignored and made
+again. Delete the folder at will; `GAMECRAFT_NO_CACHE=1` stops the command line from writing it.
+
 ## An example: a small valley
 
 A world with a hilly terrain, a stand of oaks and a character, built with `run`:

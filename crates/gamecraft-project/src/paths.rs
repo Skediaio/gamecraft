@@ -1,6 +1,7 @@
 //! The paths of a pack: which file is which, and the names that may appear in them.
 
 use crate::ProjectError;
+use crate::cells::Cell;
 
 /// Most characters in a pack id, a world name or a layer name.
 pub const MAX_PLAIN_NAME_CHARS: usize = 64;
@@ -58,6 +59,8 @@ pub(crate) enum FileKind {
     World(String),
     /// `worlds/<world>/layers/<layer>.json`.
     Layer(String, String),
+    /// `worlds/<world>/layers/<layer>/<cx>_<cz>.json`: one cell of a layer split into cells.
+    LayerCell(String, String, Cell),
     /// `worlds/<world>/terrain/edits.json`.
     TerrainEdits(String),
     /// Anything else (assets, notes): not read.
@@ -121,6 +124,22 @@ pub(crate) fn classify(path: &str, location: &str) -> Result<FileKind, ProjectEr
                     return Err(ProjectError::in_file(&shown, name_rule()));
                 }
                 FileKind::Layer((*world).to_string(), layer)
+            }
+            None => FileKind::Other,
+        },
+        ["worlds", world, "layers", layer, file] => match stem(file) {
+            Some(stem) => {
+                if !is_plain_name(world) || !is_plain_name(layer) {
+                    return Err(ProjectError::in_file(&shown, name_rule()));
+                }
+                let cell = Cell::parse(&stem).ok_or_else(|| {
+                    ProjectError::in_file(
+                        &shown,
+                        "a cell file of a layer is named after its cell, `<cx>_<cz>.json` with \
+                         whole numbers as written plainly (`3_-2.json`, not `+3_02.json`)",
+                    )
+                })?;
+                FileKind::LayerCell((*world).to_string(), (*layer).to_string(), cell)
             }
             None => FileKind::Other,
         },

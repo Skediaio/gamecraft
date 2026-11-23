@@ -51,6 +51,36 @@ pub fn folder(file: &Path) -> PathBuf {
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
+/// The world-file cap of this run, bytes: `--max-world-mb` (taken out of the arguments by
+/// `main`), else `GAMECRAFT_MAX_WORLD_MB`, else the host's default (512 MiB).
+pub static MAX_WORLD_BYTES: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+/// The environment variable that sets the world-file cap, in MiB.
+pub const MAX_WORLD_ENV: &str = "GAMECRAFT_MAX_WORLD_MB";
+
+/// A cap in MiB as given on the command line or in the environment (`what` names it), in
+/// bytes: a whole number from 1 to 1 048 576 (1 TiB).
+pub fn parse_world_mb(given: &str, what: &str) -> Result<u64, CliError> {
+    match given.trim().parse::<u64>() {
+        Ok(mb @ 1..=1_048_576) => Ok(mb * 1024 * 1024),
+        _ => Err(CliError::Usage(format!(
+            "`{what} {given}`: the largest world file to read, in MiB, a whole number from 1 \
+             to 1048576 (the default is 512)"
+        ))),
+    }
+}
+
+/// The world-file cap for the hosts of this run; `None` is the host's default.
+fn max_world_bytes() -> Result<Option<u64>, CliError> {
+    if let Some(cap) = MAX_WORLD_BYTES.get() {
+        return Ok(Some(*cap));
+    }
+    match std::env::var(MAX_WORLD_ENV) {
+        Ok(v) => parse_world_mb(&v, MAX_WORLD_ENV).map(Some),
+        Err(_) => Ok(None),
+    }
+}
+
 /// A host with an empty world, the renderer and the project index, that may read and write
 /// only in the folders given.
 pub fn host(read_root: Option<PathBuf>, write_root: Option<PathBuf>) -> Host {
@@ -59,6 +89,8 @@ pub fn host(read_root: Option<PathBuf>, write_root: Option<PathBuf>) -> Host {
         Access {
             read_root,
             write_root,
+            max_world_bytes: max_world_bytes().ok().flatten(),
+            cache_beside_files: std::env::var_os("GAMECRAFT_NO_CACHE").is_none(),
         },
     )
     .with_pictures(Box::new(GpuPictures::default()))
@@ -584,6 +616,8 @@ pub fn serve(raw: &[String], mcp_protocol: bool) -> Res {
     let access = Access {
         read_root: root("--automation-read-root")?,
         write_root: root("--automation-write-root")?,
+        max_world_bytes: max_world_bytes()?,
+        cache_beside_files: std::env::var_os("GAMECRAFT_NO_CACHE").is_none(),
     };
     let world = match a.value("--file")? {
         Some(file) => {

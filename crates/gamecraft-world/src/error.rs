@@ -94,6 +94,11 @@ pub enum WorldError {
         /// What the serialiser reported.
         message: String,
     },
+    /// A cooked world (`cooked.rs`) could not be written or read, or is not of this source.
+    Cooked {
+        /// What went wrong.
+        message: String,
+    },
     /// Something is wrong with a prefab.
     Prefab {
         /// The prefab's id.
@@ -207,6 +212,7 @@ impl fmt::Display for WorldError {
             WorldError::Serialize { message } => {
                 write!(f, "the world could not be written as JSON: {message}")
             }
+            WorldError::Cooked { message } => write!(f, "the cooked world: {message}"),
             WorldError::Prefab { prefab, message } => write!(f, "prefab \"{prefab}\": {message}"),
             WorldError::PrefabNotFound { prefab, known } => {
                 write!(f, "no prefab has the id \"{prefab}\"")?;

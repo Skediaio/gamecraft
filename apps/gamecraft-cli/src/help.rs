@@ -21,6 +21,11 @@ Subcommands:
   mcp        Model Context Protocol server on stdin and stdout, for agents
   help       This text; `help <subcommand>` explains one
 
+Global option (any subcommand, anywhere on the line):
+  --max-world-mb N   Read world files (and project pack files) of up to N MiB; the default
+                     is 512, a safety net against a file that would exhaust memory. The
+                     environment variable GAMECRAFT_MAX_WORLD_MB sets it too; the flag wins.
+
 Results go to stdout as JSON, diagnostics to stderr.
 Exit codes: 0 success, 1 a command or file failed, 2 a mistake in the command line.";
 
@@ -150,6 +155,7 @@ Options:
 
 pub const PROJECT: &str = "\
 Usage: gamecraft-cli project new DIR --id ID [--name NAME] [--world W] [--from FILE]
+                                   [--cell-size-m M]
        gamecraft-cli project open DIR [--world W]
        gamecraft-cli project info DIR [--world W]
        gamecraft-cli project export DIR --out FILE
@@ -162,7 +168,8 @@ a .gamecraft file; the folder that holds the project is where its dependencies a
 
 Actions:
   new      Make the project DIR (new or empty) from FILE (a .gamecraft file) or an empty world:
-           the pack ID with world W (default main), one file per layer and per prefab
+           the pack ID with world W (default main), one file per layer and per prefab; with
+           --cell-size-m M each layer is a folder of cells of M metres (layers/<layer>/<cx>_<cz>.json)
   open     Open the project and its dependencies and print what was loaded (packs in load
            order, world, entities, the index)
   info     Print project.info: packs, worlds, layers with their entity counts, prefabs, warnings

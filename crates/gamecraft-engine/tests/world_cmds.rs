@@ -84,6 +84,92 @@ fn terrain_set_noise_uses_the_defaults_and_the_world_seed() {
 }
 
 #[test]
+fn terrain_set_grid_gives_the_node_heights() {
+    // A 3x3 control grid over 16 m at 2 m cells: the field's nodes at the control nodes
+    // (every second field node) carry the given heights.
+    let heights: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+    let mut s = Session::new(World::new("Grid", 1));
+    let params = json!({
+        "kind": "grid", "size_m": 16, "cell_m": 2,
+        "cols": 3, "rows": 3, "heights": heights,
+    });
+    let r = s.run("terrain.set", &params).unwrap();
+    assert_eq!(
+        r,
+        json!({"cols": 9, "rows": 9, "min_height_m": 1.0, "max_height_m": 9.0})
+    );
+    let at = |s: &mut Session, x: f64, z: f64| {
+        s.run("query.ground_height", &json!({"x": x, "z": z}))
+            .unwrap()["height_m"]
+            .as_f64()
+            .unwrap()
+    };
+    for row in 0..3 {
+        for col in 0..3 {
+            let x = -8.0 + col as f64 * 8.0;
+            let z = -8.0 + row as f64 * 8.0;
+            let want = heights[row * 3 + col];
+            assert!(
+                (at(&mut s, x, z) - want).abs() < 1e-6,
+                "node ({col}, {row})"
+            );
+        }
+    }
+    // The same call again builds the same field: the source is data, not randomness.
+    let r2 = s.run("terrain.set", &params).unwrap();
+    assert_eq!(r, r2);
+    for row in 0..3 {
+        for col in 0..3 {
+            let x = -8.0 + col as f64 * 8.0;
+            let z = -8.0 + row as f64 * 8.0;
+            let want = heights[row * 3 + col];
+            assert!(
+                (at(&mut s, x, z) - want).abs() < 1e-6,
+                "node ({col}, {row})"
+            );
+        }
+    }
+}
+
+#[test]
+fn terrain_set_grid_refuses_bad_values() {
+    let mut s = Session::new(World::new("Grid", 1));
+    let good: Vec<f64> = vec![0.0; 4];
+    // Parameters of another kind are refused.
+    refuse(
+        &mut s,
+        "terrain.set",
+        json!({"kind": "grid", "cols": 2, "rows": 2, "heights": good, "seed": 3}),
+        &["`seed`", "grid"],
+    );
+    refuse(
+        &mut s,
+        "terrain.set",
+        json!({"kind": "noise", "cols": 2, "rows": 2, "heights": good, "seed": 3}),
+        &["`cols`", "noise"],
+    );
+    // A huge side, a wrong length and missing heights are errors, not panics.
+    refuse(
+        &mut s,
+        "terrain.set",
+        json!({"kind": "grid", "cols": 1_000_000, "rows": 2, "heights": good}),
+        &["terrain.source.cols"],
+    );
+    refuse(
+        &mut s,
+        "terrain.set",
+        json!({"kind": "grid", "cols": 2, "rows": 2, "heights": vec![0.0; 5]}),
+        &["terrain.source.heights"],
+    );
+    refuse(
+        &mut s,
+        "terrain.set",
+        json!({"kind": "grid", "cols": 2, "rows": 2}),
+        &["`heights` is required"],
+    );
+}
+
+#[test]
 fn terrain_set_flat_and_entities_stay() {
     let mut s = example();
     let before: Vec<[f64; 3]> = s.document().entities().map(|e| e.position).collect();

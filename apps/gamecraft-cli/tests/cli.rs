@@ -427,3 +427,33 @@ fn mcp_initializes_and_lists_tools() {
     );
     assert!(s.finish());
 }
+
+#[test]
+fn the_world_file_cap_is_a_safety_net_the_flag_raises() {
+    let temp = Temp::new("world-cap");
+    // A valid world padded to a little over 1 MiB.
+    let text = format!(
+        "{{\"gamecraft\": 1, \"name\": \"big\"{}}}",
+        " ".repeat(1024 * 1024 + 10)
+    );
+    let file = temp.write("big.gamecraft", &text);
+    let file = file.to_str().unwrap();
+
+    let refused = run(&["info", file, "--max-world-mb", "1"]);
+    assert_eq!(refused.code, 1, "{}", refused.err);
+    assert!(refused.err.contains("at most 1 MB"), "{}", refused.err);
+    assert!(refused.err.contains("--max-world-mb"), "{}", refused.err);
+
+    // The flag may stand anywhere, also before the subcommand.
+    let read = run(&["--max-world-mb", "2", "info", file]);
+    assert_eq!(read.code, 0, "{}", read.err);
+    // The default (512 MiB) reads it as well.
+    assert_eq!(run(&["info", file]).code, 0);
+
+    for bad in ["0", "-3", "lots", "2000000"] {
+        let r = run(&["info", file, "--max-world-mb", bad]);
+        assert_eq!(r.code, 2, "{bad}: {}", r.err);
+        assert!(r.err.contains("MiB"), "{}", r.err);
+    }
+    assert_eq!(run(&["info", file, "--max-world-mb"]).code, 2);
+}

@@ -270,6 +270,11 @@ fn world_bounds(world: &World, heights: Option<&HeightField>) -> (DVec3, DVec3) 
         let (y0, y1) = match t.source {
             TerrainSource::Flat { height_m } => (height_m, height_m),
             TerrainSource::Noise { relief_m, .. } => (-relief_m / 2.0, relief_m / 2.0),
+            TerrainSource::Grid { ref heights, .. } => heights
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), h| {
+                    (lo.min(*h), hi.max(*h))
+                }),
         };
         add(DVec3::new(-half, y0, -half));
         add(DVec3::new(half, y1, half));

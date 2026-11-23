@@ -1,13 +1,17 @@
 //! Unit tests of the crate, one file per area.
 
 mod combat;
+mod cooked;
 mod document;
 mod fuzz;
+mod instance;
 mod layer;
 mod model;
 mod prefab;
+mod road;
 mod scenario;
 mod sculpt;
+mod store;
 mod sun;
 mod terrain;
 mod validation;

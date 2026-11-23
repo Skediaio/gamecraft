@@ -1,8 +1,10 @@
 //! The world document and its `.gamecraft` JSON format.
 
 use crate::error::Ctx;
+use crate::instance::{ChildEdit, Lookup, Pending, Written, mark_written, place_derived};
 use crate::limits::{MAX_ENTITIES, MAX_HIERARCHY_DEPTH, MAX_PREFABS};
 use crate::prefab::{check_components, place_child, relative};
+use crate::store::EntityMap;
 use crate::{
     Component, Entity, EntityDraft, EntityId, Environment, ModelBounds, ModelBox, Objective,
     Prefab, Spawn, Spawned, Terrain, Trigger, VarValue, WorldError,
@@ -45,8 +47,10 @@ pub struct World {
     /// with [`World::put_prefab`] and [`World::remove_prefab`], which keep the instances in
     /// step.
     pub prefabs: Vec<Prefab>,
-    entities: BTreeMap<EntityId, Entity>,
-    next_entity_id: EntityId,
+    /// Shared between copies of the world: copying a world, or changing one entity of a
+    /// copy, costs O(log n), not O(n) (`store.rs`).
+    pub(crate) entities: EntityMap,
+    pub(crate) next_entity_id: EntityId,
     /// The local bounding boxes of model assets, by asset path: derived from the assets by the
     /// host, never written to the file.
     model_bounds: BTreeMap<String, ModelBounds>,
@@ -70,6 +74,11 @@ struct WorldFile {
     /// Absent: one more than the highest entity id.
     #[serde(default)]
     next_entity_id: Option<EntityId>,
+    /// True when the children of prefab instances are derived from their prefabs and only
+    /// their differences are written (`instance.rs`); absent in files of earlier engines,
+    /// which write every child in full.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    derived_children: bool,
     #[serde(default)]
     entities: Vec<EntityFile>,
     #[serde(
@@ -112,6 +121,13 @@ struct EntityFile {
     components: Option<Vec<Component>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     overrides: Option<Vec<Component>>,
+    /// An instance's children by prefab child (`null`: removed), when they are not the ids
+    /// it was spawned with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    children: Option<Vec<Option<EntityId>>>,
+    /// What differs in an instance's children from what its prefab places.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    child_edits: Option<Vec<ChildEdit>>,
 }
 
 impl EntityFile {
@@ -135,6 +151,8 @@ impl EntityFile {
             layer: e.layer.clone(),
             components,
             overrides,
+            children: None,
+            child_edits: None,
         }
     }
 
@@ -183,6 +201,7 @@ impl EntityFile {
             prefab: self.prefab,
             parent: self.parent,
             layer: self.layer,
+            prefab_child: None,
             components,
         })
     }
@@ -244,7 +263,7 @@ impl World {
             objectives: Vec::new(),
             triggers: Vec::new(),
             prefabs: Vec::new(),
-            entities: BTreeMap::new(),
+            entities: EntityMap::default(),
             next_entity_id: EntityId(1),
             model_bounds: BTreeMap::new(),
         }
@@ -292,12 +311,12 @@ impl World {
 
     /// The entity with this id.
     pub fn entity(&self, id: EntityId) -> Option<&Entity> {
-        self.entities.get(&id)
+        self.entities.get(id)
     }
 
     /// The entity with this id, to edit. Changing its `id` makes the world invalid.
     pub fn entity_mut(&mut self, id: EntityId) -> Option<&mut Entity> {
-        self.entities.get_mut(&id)
+        self.entities.get_mut(id)
     }
 
     /// Adds an entity under the next free id and returns that id.
@@ -323,9 +342,9 @@ impl World {
     /// Removes an entity, and the entities that belong to it (its children, theirs, ...),
     /// and returns it. Its id is not handed out again.
     pub fn remove_entity(&mut self, id: EntityId) -> Option<Entity> {
-        let removed = self.entities.remove(&id)?;
+        let removed = self.entities.remove(id)?;
         for child in self.descendants(id) {
-            self.entities.remove(&child);
+            self.entities.remove(child);
         }
         Some(removed)
     }
@@ -362,31 +381,66 @@ impl World {
     }
 
     /// Moves and turns entity `id`, and carries everything below it along rigidly (children
-    /// keep their place relative to it). Nothing changes when a moved entity would be invalid
-    /// (a coordinate beyond 1e6 m, a non-finite number); the error names it.
+    /// keep their place relative to it). A prefab's child that stands where its prefab puts it
+    /// is placed where the prefab puts it again, to the bit, so it stays derived data
+    /// (`instance.rs`). Nothing changes when a moved entity would be invalid (a coordinate
+    /// beyond 1e6 m, a non-finite number); the error names it.
     pub fn place_entity(
         &mut self,
         id: EntityId,
         position: [f64; 3],
         rotation_y_deg: f64,
     ) -> Result<(), WorldError> {
-        let entity = self.entities.get(&id).ok_or_else(|| WorldError::NotFound {
+        let below = self.descendants(id);
+        self.place_tree(id, position, rotation_y_deg, &below)
+    }
+
+    /// [`World::place_entity`] with the entities below `id` given, level by level.
+    pub(crate) fn place_tree(
+        &mut self,
+        id: EntityId,
+        position: [f64; 3],
+        rotation_y_deg: f64,
+        below: &[EntityId],
+    ) -> Result<(), WorldError> {
+        let entity = self.entities.get(id).ok_or_else(|| WorldError::NotFound {
             reference: id.to_string(),
             candidates: Vec::new(),
         })?;
+        let lookup = Lookup::new(&self.prefabs)?;
         let (from, from_yaw) = (entity.position, entity.rotation_y_deg);
         let mut moved = Vec::new();
+        // Old and new placement of every moved entity, for the children below it.
+        let mut placements: BTreeMap<EntityId, ([f64; 3], f64, [f64; 3], f64)> = BTreeMap::new();
         let mut root = entity.clone();
         root.position = position;
         root.rotation_y_deg = rotation_y_deg;
         root.validate()?;
+        placements.insert(id, (from, from_yaw, position, rotation_y_deg));
         moved.push(root);
-        for child in self.descendants(id) {
-            let Some(e) = self.entities.get(&child) else {
+        for &child in below {
+            let Some(e) = self.entities.get(child) else {
                 continue;
             };
-            let (offset, turn) = relative(from, from_yaw, e.position, e.rotation_y_deg);
-            let (p, yaw) = place_child(position, rotation_y_deg, offset, turn);
+            let exact = e.prefab_child.zip(e.parent).and_then(|(slot, parent)| {
+                let (p0, y0, p1, y1) = placements.get(&parent).copied()?;
+                let def = lookup
+                    .of(self.entities.get(parent)?)?
+                    .children
+                    .get(slot as usize)?;
+                let (was, was_yaw) = place_child(p0, y0, def.offset, def.rotation_y_deg);
+                let untouched = was
+                    .iter()
+                    .zip(&e.position)
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+                    && was_yaw.to_bits() == e.rotation_y_deg.to_bits();
+                untouched.then(|| place_child(p1, y1, def.offset, def.rotation_y_deg))
+            });
+            let (p, yaw) = exact.unwrap_or_else(|| {
+                let (offset, turn) = relative(from, from_yaw, e.position, e.rotation_y_deg);
+                place_child(position, rotation_y_deg, offset, turn)
+            });
+            placements.insert(child, (e.position, e.rotation_y_deg, p, yaw));
             let mut e = e.clone();
             e.position = p;
             e.rotation_y_deg = yaw;
@@ -428,7 +482,7 @@ impl World {
     /// The overrides of entity `id`: its components that differ from its prefab's (none for
     /// an entity without a prefab, or one that does not exist).
     pub fn overrides_of(&self, id: EntityId) -> Vec<Component> {
-        let Some(e) = self.entities.get(&id) else {
+        let Some(e) = self.entities.get(id) else {
             return Vec::new();
         };
         match e.prefab.as_deref().and_then(|p| self.prefab(p)) {
@@ -438,35 +492,42 @@ impl World {
     }
 
     /// Adds `prefab`, or replaces the prefab with its id. Replacing one changes its
-    /// instances: each keeps its overrides (its components that differed from the old
-    /// prefab) and takes the rest from the new one. Children already placed stay as they are.
-    /// The prefab is validated first; an invalid one changes nothing.
+    /// instances, wherever they are (prefabs inside prefabs too): each keeps its overrides
+    /// (its components that differed from the old prefab) and takes the rest from the new
+    /// one, and its children follow the same rule, child by child in the prefab's order
+    /// (`instance.rs`, [`World::follow_prefab`]). The prefab is validated first, and the
+    /// prefabs as a whole (every prefab a child names exists, no loops, nesting and instance
+    /// size within their limits); an invalid one, or a world too full for the children it
+    /// adds, changes nothing.
     pub fn put_prefab(&mut self, prefab: Prefab) -> Result<(), WorldError> {
         prefab.validate()?;
-        match self.prefabs.iter().position(|p| p.id == prefab.id) {
+        let mut prefabs = self.prefabs.clone();
+        let old = match prefabs.iter().position(|p| p.id == prefab.id) {
             Some(index) => {
-                let Some(slot) = self.prefabs.get_mut(index) else {
+                let Some(slot) = prefabs.get_mut(index) else {
                     return Err(self.prefab_not_found(&prefab.id));
                 };
-                let old = std::mem::replace(slot, prefab.clone());
-                for e in self.entities.values_mut() {
-                    if e.prefab.as_deref() == Some(prefab.id.as_str()) {
-                        let overrides = old.overrides_of(&e.components);
-                        e.components = prefab.effective(&overrides);
-                    }
-                }
+                Some(std::mem::replace(slot, prefab.clone()))
             }
             None => {
-                if self.prefabs.len() >= MAX_PREFABS {
+                if prefabs.len() >= MAX_PREFABS {
                     return Err(Ctx::WORLD.invalid(
                         "prefabs",
-                        format!("a list of {}", self.prefabs.len()),
+                        format!("a list of {}", prefabs.len()),
                         format!("a world holds at most {MAX_PREFABS} prefabs"),
                     ));
                 }
-                self.prefabs.push(prefab);
+                prefabs.push(prefab.clone());
+                None
             }
+        };
+        Lookup::new(&prefabs)?;
+        let mut next = self.clone();
+        let before = std::mem::replace(&mut next.prefabs, prefabs);
+        if let Some(old) = old {
+            next.follow_prefab(&before, &old, &prefab)?;
         }
+        *self = next;
         Ok(())
     }
 
@@ -478,6 +539,21 @@ impl World {
             .iter()
             .position(|p| p.id == id)
             .ok_or_else(|| self.prefab_not_found(id))?;
+        if let Some((user, i)) = self.prefabs.iter().find_map(|p| {
+            p.children
+                .iter()
+                .position(|c| c.prefab.as_deref() == Some(id))
+                .map(|i| (p, i))
+        }) {
+            return Err(WorldError::Prefab {
+                prefab: id.to_string(),
+                message: format!(
+                    "prefab \"{}\" places it as its child {i}; remove that child (prefab.set) \
+                     or that prefab first",
+                    user.id
+                ),
+            });
+        }
         let placed = self.prefab_instances(id);
         if !placed.is_empty() {
             return Err(WorldError::PrefabInUse {
@@ -486,7 +562,7 @@ impl World {
                 entities: placed
                     .iter()
                     .take(MAX_CANDIDATES)
-                    .filter_map(|i| self.entities.get(i))
+                    .filter_map(|i| self.entities.get(*i))
                     .map(describe)
                     .collect(),
             });
@@ -496,15 +572,18 @@ impl World {
 
     /// Places prefab `prefab`: an entity that refers to it, with its components and the
     /// overrides of `spawn`, and one entity per child of the prefab, placed relative to it
-    /// and linked to it as their parent. All or nothing: an invalid placement, override or
-    /// child, or a world too full for them all, changes nothing.
+    /// and linked to it as their parent (a child that places a prefab places that prefab's
+    /// children in turn). The ids are consecutive: the instance's, then its children's depth
+    /// first in the prefab's order, which is what lets the file leave them out. All or
+    /// nothing: an invalid placement, override or child, or a world too full for them all,
+    /// changes nothing.
     pub fn spawn_prefab(&mut self, prefab: &str, spawn: Spawn) -> Result<Spawned, WorldError> {
-        let p = self
-            .prefab(prefab)
-            .ok_or_else(|| self.prefab_not_found(prefab))?
-            .clone();
+        let lookup = Lookup::new(&self.prefabs)?;
+        let p = lookup
+            .get(prefab)
+            .ok_or_else(|| self.prefab_not_found(prefab))?;
         check_components(&spawn.overrides, "overrides")?;
-        let total = 1usize.saturating_add(p.children.len());
+        let total = lookup.size(&p.id);
         if self.entities.len().saturating_add(total) > MAX_ENTITIES {
             return Err(WorldError::TooManyEntities {
                 count: self.entities.len().saturating_add(total),
@@ -512,7 +591,7 @@ impl World {
             });
         }
         let first = self.next_entity_id.0;
-        let next = first
+        first
             .checked_add(total as u64)
             .ok_or(WorldError::IdsExhausted)?;
         let root_id = EntityId(first);
@@ -525,34 +604,18 @@ impl World {
             prefab: Some(p.id.clone()),
             parent: None,
             layer: spawn.layer.clone(),
+            prefab_child: None,
             components: p.effective(&spawn.overrides),
         };
         root.validate()?;
-        let mut placed = vec![root];
-        let mut children = Vec::new();
-        for (i, child) in p.children.iter().enumerate() {
-            let id = EntityId(first.saturating_add(1).saturating_add(i as u64));
-            let (position, rotation_y_deg) = place_child(
-                spawn.position,
-                spawn.rotation_y_deg,
-                child.offset,
-                child.rotation_y_deg,
-            );
-            let e = Entity {
-                id,
-                name: child.name.clone(),
-                position,
-                rotation_y_deg,
-                scale: 1.0,
-                prefab: None,
-                parent: Some(root_id),
-                layer: spawn.layer.clone(),
-                components: child.components.clone(),
-            };
-            e.validate()?;
-            children.push(id);
-            placed.push(e);
-        }
+        let mut next = first.saturating_add(1);
+        let mut placed = vec![root.clone()];
+        crate::instance::spawn_children(&lookup, &root, &mut next, &mut placed, 1)?;
+        let children = placed
+            .iter()
+            .filter(|e| e.parent == Some(root_id))
+            .map(|e| e.id)
+            .collect();
         for e in placed {
             self.entities.insert(e.id, e);
         }
@@ -572,7 +635,7 @@ impl World {
     pub fn find(&self, reference: &str) -> Result<EntityId, WorldError> {
         let wanted = reference.trim();
         if let Ok(n) = wanted.parse::<u64>()
-            && self.entities.contains_key(&EntityId(n))
+            && self.entities.contains_key(EntityId(n))
         {
             return Ok(EntityId(n));
         }
@@ -622,9 +685,50 @@ impl World {
     /// terrain, the environment, the entity count, `next_entity_id`, every entity (in id
     /// order) with its components, and the scenario: variables, objectives and triggers.
     pub fn validate(&self) -> Result<(), WorldError> {
+        self.check(None).map(drop)
+    }
+
+    /// [`World::validate`] of a world changed from `before`, which must be valid: the same
+    /// result and the same first error, found with less work. The entities are checked only
+    /// where they are not the very ones of `before` (in id order), and the terrain only when
+    /// it differs. Every entity is checked as by `validate` when the change could make an
+    /// entity it did not touch invalid: a prefab changed, an entity was removed or got
+    /// another parent, `next_entity_id` went down. Returns how many entities it checked, a
+    /// measure of the work (AGENTS.md rule 18).
+    ///
+    /// When `before` is not valid, an error of `validate` may go unreported; the session
+    /// calls this only with a world that passed.
+    pub fn validate_change(&self, before: &World) -> Result<usize, WorldError> {
+        self.check(Some(before))
+    }
+
+    /// The keys of the entities that differ from `before`'s, when they are all that needs
+    /// checking (see [`World::validate_change`]); `None` when every entity must be.
+    fn changed_entities(&self, before: &World) -> Option<Vec<EntityId>> {
+        if self.prefabs != before.prefabs || self.next_entity_id < before.next_entity_id {
+            return None;
+        }
+        let changes = self.entities.changes(&before.entities)?;
+        if changes.removed {
+            return None;
+        }
+        let reparented = changes.changed.iter().any(|&key| {
+            match (self.entities.get(key), before.entities.get(key)) {
+                (Some(now), Some(then)) => now.parent != then.parent,
+                _ => false,
+            }
+        });
+        (!reparented).then_some(changes.changed)
+    }
+
+    /// Checks the document (see [`World::validate`]), or the change from a valid `before`
+    /// (see [`World::validate_change`]); the number of entities checked.
+    fn check(&self, before: Option<&World>) -> Result<usize, WorldError> {
         let ctx = Ctx::WORLD;
         ctx.name("name", &self.name)?;
-        if let Some(terrain) = &self.terrain {
+        if let Some(terrain) = &self.terrain
+            && before.is_none_or(|b| b.terrain.as_ref() != Some(terrain))
+        {
             terrain.validate()?;
         }
         self.environment.validate()?;
@@ -660,49 +764,76 @@ impl World {
                 });
             }
         }
-        for (&key, entity) in &self.entities {
-            let ectx = Ctx::entity(key);
-            if entity.id != key {
+        Lookup::new(&self.prefabs)?;
+        let checked = match before.and_then(|b| self.changed_entities(b)) {
+            Some(keys) => {
+                for &key in &keys {
+                    if let Some(entity) = self.entities.get(key) {
+                        self.check_entity(key, entity, &prefabs)?;
+                    }
+                }
+                keys.len()
+            }
+            None => {
+                for (key, entity) in self.entities.iter() {
+                    self.check_entity(key, entity, &prefabs)?;
+                }
+                self.entities.len()
+            }
+        };
+        crate::scenario::validate(&self.vars, &self.objectives, &self.triggers)?;
+        Ok(checked)
+    }
+
+    /// The checks of one entity stored under `key`: its id, its own fields and components,
+    /// its prefab and its parents.
+    fn check_entity(
+        &self,
+        key: EntityId,
+        entity: &Entity,
+        prefabs: &BTreeMap<&str, &Prefab>,
+    ) -> Result<(), WorldError> {
+        let ectx = Ctx::entity(key);
+        if entity.id != key {
+            return Err(ectx.invalid(
+                "id",
+                entity.id,
+                format!("it must stay {key}, the id the entity is stored under"),
+            ));
+        }
+        if key.0 == 0 {
+            return Err(ectx.invalid("id", 0, "entity ids start at 1"));
+        }
+        if key >= self.next_entity_id {
+            return Err(WorldError::EntityIdNotBelowNext {
+                id: key,
+                next: self.next_entity_id,
+            });
+        }
+        entity.validate()?;
+        if let Some(id) = &entity.prefab {
+            let prefab = prefabs
+                .get(id.as_str())
+                .ok_or_else(|| unknown_prefab(ectx, id, &self.prefabs))?;
+            if let Some(missing) = prefab
+                .components
+                .iter()
+                .find(|c| entity.components.iter().all(|e| e.kind() != c.kind()))
+            {
                 return Err(ectx.invalid(
-                    "id",
-                    entity.id,
-                    format!("it must stay {key}, the id the entity is stored under"),
+                    "components",
+                    format!("without `{}`", missing.kind()),
+                    format!(
+                        "an entity placed from prefab \"{id}\" keeps every component type \
+                         of its prefab; override the `{}` instead of removing it, or \
+                         remove it from the prefab",
+                        missing.kind()
+                    ),
                 ));
             }
-            if key.0 == 0 {
-                return Err(ectx.invalid("id", 0, "entity ids start at 1"));
-            }
-            if key >= self.next_entity_id {
-                return Err(WorldError::EntityIdNotBelowNext {
-                    id: key,
-                    next: self.next_entity_id,
-                });
-            }
-            entity.validate()?;
-            if let Some(id) = &entity.prefab {
-                let prefab = prefabs
-                    .get(id.as_str())
-                    .ok_or_else(|| unknown_prefab(ectx, id, &self.prefabs))?;
-                if let Some(missing) = prefab
-                    .components
-                    .iter()
-                    .find(|c| entity.components.iter().all(|e| e.kind() != c.kind()))
-                {
-                    return Err(ectx.invalid(
-                        "components",
-                        format!("without `{}`", missing.kind()),
-                        format!(
-                            "an entity placed from prefab \"{id}\" keeps every component type \
-                             of its prefab; override the `{}` instead of removing it, or \
-                             remove it from the prefab",
-                            missing.kind()
-                        ),
-                    ));
-                }
-            }
-            self.check_parent(entity)?;
         }
-        crate::scenario::validate(&self.vars, &self.objectives, &self.triggers)
+        self.check_parent(entity)?;
+        Ok(())
     }
 
     /// An entity's parent exists, is not the entity itself, and the chain above it ends
@@ -721,7 +852,7 @@ impl World {
                     "an entity cannot be its own parent, nor below itself",
                 ));
             }
-            let Some(p) = self.entities.get(&parent) else {
+            let Some(p) = self.entities.get(parent) else {
                 return Err(ctx.invalid(
                     "parent",
                     parent,
@@ -753,6 +884,20 @@ impl World {
     /// The world is validated first, so only a valid document is ever written.
     pub fn to_json(&self) -> Result<String, WorldError> {
         self.validate()?;
+        let lookup = Lookup::new(&self.prefabs)?;
+        let written = Written::plan(&lookup, &self.entities);
+        let mut entities =
+            Vec::with_capacity(self.entities.len().saturating_sub(written.absorbed.len()));
+        for e in self.entities.values() {
+            if written.absorbed.contains(&e.id) {
+                continue;
+            }
+            let mut file = EntityFile::of(e, lookup.of(e));
+            let (children, child_edits) = written.of_instance(&lookup, &self.entities, e, 1);
+            file.children = children;
+            file.child_edits = child_edits;
+            entities.push(file);
+        }
         let file = WorldFile {
             gamecraft: FORMAT_VERSION,
             name: self.name.clone(),
@@ -761,11 +906,8 @@ impl World {
             environment: self.environment.clone(),
             prefabs: self.prefabs.clone(),
             next_entity_id: Some(self.next_entity_id),
-            entities: self
-                .entities
-                .values()
-                .map(|e| EntityFile::of(e, e.prefab.as_deref().and_then(|p| self.prefab(p))))
-                .collect(),
+            derived_children: written.derived,
+            entities,
             vars: self.vars.clone(),
             objectives: self.objectives.clone(),
             triggers: self.triggers.clone(),
@@ -809,13 +951,40 @@ impl World {
                 max: MAX_ENTITIES,
             });
         }
+        let lookup = Lookup::new(&file.prefabs)?;
         let mut entities = BTreeMap::new();
-        for entity in file.entities {
+        let mut pending = Vec::new();
+        for mut entity in file.entities {
+            let (children, edits) = (entity.children.take(), entity.child_edits.take());
+            if !file.derived_children && (children.is_some() || edits.is_some()) {
+                return Err(Ctx::entity(entity.id).invalid(
+                    if children.is_some() {
+                        "children"
+                    } else {
+                        "child_edits"
+                    },
+                    "given",
+                    "an instance's `children` and `child_edits` are read only from a file \
+                     with `\"derived_children\": true`; add it, or write the children in full",
+                ));
+            }
             let entity = entity.into_entity(&file.prefabs)?;
             let id = entity.id;
+            if entity.prefab.is_some() {
+                pending.push(Pending {
+                    id,
+                    children,
+                    edits: edits.unwrap_or_default(),
+                });
+            }
             if entities.insert(id, entity).is_some() {
                 return Err(WorldError::DuplicateEntityId { id });
             }
+        }
+        if file.derived_children {
+            place_derived(&lookup, &mut entities, pending)?;
+        } else {
+            mark_written(&lookup, &mut entities);
         }
         let next_entity_id = match file.next_entity_id {
             Some(next) => next,
@@ -833,7 +1002,7 @@ impl World {
             objectives: file.objectives,
             triggers: file.triggers,
             prefabs: file.prefabs,
-            entities,
+            entities: entities.into_iter().collect(),
             next_entity_id,
             model_bounds: BTreeMap::new(),
         };

@@ -11,12 +11,13 @@ use serde_json::{Map, Value};
 pub const WORLD_FORMAT: u32 = 1;
 
 /// The keys a `world.json` may hold, in the order they are written.
-pub(crate) const WORLD_KEYS: [&str; 10] = [
+pub(crate) const WORLD_KEYS: [&str; 11] = [
     "gamecraft_world",
     "name",
     "seed",
     "default_layer",
     "layers",
+    "cell_size_m",
     "terrain",
     "environment",
     "vars",
@@ -24,9 +25,9 @@ pub(crate) const WORLD_KEYS: [&str; 10] = [
     "triggers",
 ];
 
-/// The keys that belong to the project, not to the [`World`]: the default layer and the
-/// order of the layers.
-pub(crate) const PROJECT_KEYS: [&str; 2] = ["default_layer", "layers"];
+/// The keys that belong to the project, not to the [`World`]: the default layer, the order
+/// of the layers and the size of the cells the layers are split into (`cells.rs`).
+pub(crate) const PROJECT_KEYS: [&str; 3] = ["default_layer", "layers", "cell_size_m"];
 
 /// Reads and checks a `world.json` (`file` names it in errors) and returns its fields without
 /// `gamecraft_world`.
@@ -51,6 +52,23 @@ pub(crate) fn parse_world(text: &str, file: &str) -> Result<Map<String, Value>, 
                 WORLD_KEYS.join(", ")
             ),
         ));
+    }
+    match map.get("cell_size_m") {
+        None | Some(Value::Null) => {}
+        Some(Value::Number(n)) => {
+            let size = n.as_f64().unwrap_or(f64::NAN);
+            crate::cells::check_cell_size(size, "`cell_size_m`")
+                .map_err(|e| ProjectError::in_file(file, e.to_string()))?;
+        }
+        Some(other) => {
+            return Err(ProjectError::in_file(
+                file,
+                format!(
+                    "`cell_size_m` {other} is not a number; it is the side of a cell in metres \
+                     (512 is usual), or leave it out for one file per layer"
+                ),
+            ));
+        }
     }
     match map.get("default_layer") {
         None | Some(Value::Null) => {}

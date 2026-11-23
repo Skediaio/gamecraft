@@ -14,6 +14,10 @@
 //! triangles the renderer draws, with the painted layers' weights; [`Terrain::rebuild`] redoes
 //! only the tiles a change touches and [`tiles`] keeps resolved tiles as binary files.
 //!
+//! A `road` component is a centre line with a width lying on the terrain; its surface is
+//! derived ([`Road::drape`]): the footprint clipped against the terrain's triangles and lifted
+//! a few centimetres, so it follows the ground exactly ([`road`]).
+//!
 //! A `model` component names a glTF asset of a pack; the asset's bounding box is derived data
 //! that the host computes and hands over with [`World::set_model_bounds`] ([`ModelBounds`]).
 //!
@@ -22,14 +26,19 @@
 
 mod combat;
 mod component;
+pub mod cooked;
 mod entity;
 mod environment;
 mod error;
+mod grid_heights;
+mod instance;
 pub mod limits;
 mod model;
 mod prefab;
+pub mod road;
 mod scenario;
 pub mod sculpt;
+mod store;
 mod terrain;
 pub mod tiles;
 mod world;
@@ -44,11 +53,16 @@ pub use component::{
 pub use entity::{Entity, EntityDraft, EntityId, MAX_LAYER_CHARS, is_layer_name};
 pub use environment::{Environment, STANDARD_TEMPERATURE_C, SunPosition};
 pub use error::WorldError;
+pub use grid_heights::GridHeights;
 pub use model::{
     MAX_ASSET_PATH_CHARS, MODEL_EXTENSIONS, Model, ModelBounds, ModelBox, ModelCollider,
     is_asset_path, is_model_path,
 };
 pub use prefab::{Prefab, PrefabChild, Spawn, Spawned};
+pub use road::{
+    DrapeStats, DrapedPolygon, Retiered, Road, RoadEnds, RoadMesh, free_road_tier, raycast_roads,
+    retier_roads,
+};
 pub use scenario::{
     CompareOp, Condition, EntityRef, Objective, ObjectiveStatus, Step, TAG_PREFIX, Trigger,
     VarValue, When,

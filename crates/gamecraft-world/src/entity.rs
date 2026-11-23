@@ -3,8 +3,8 @@
 use crate::error::Ctx;
 use crate::limits::{MAX_COORDINATE_M, SCALE_MAX, SCALE_MIN};
 use crate::{
-    Behaviour, Character, Component, Health, Interactable, Launcher, Light, Model, Plant, Shape,
-    WorldError, Zone,
+    Behaviour, Character, Component, Health, Interactable, Launcher, Light, Model, Plant, Road,
+    Shape, WorldError, Zone,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -87,6 +87,12 @@ pub struct Entity {
     /// `None` is the world's default layer. Default none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer: Option<String>,
+    /// Which child of its parent's prefab this entity is, by index into the prefab's
+    /// `children`: set by the world when it places an instance, `None` for anything else. The
+    /// file does not hold such a child; it is derived from the prefab and the instance's
+    /// placement, and only what differs is written (`docs/design/journal.md`, *Prefabs*). Default none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefab_child: Option<u32>,
     /// Components, at most one of each type: for a prefab's instance its effective
     /// components. Default none.
     #[serde(default)]
@@ -137,6 +143,7 @@ impl EntityDraft {
             prefab: None,
             parent: None,
             layer: self.layer,
+            prefab_child: None,
             components: self.components,
         }
     }
@@ -227,6 +234,22 @@ impl Entity {
     pub fn model(&self) -> Option<&Model> {
         self.components.iter().find_map(|c| match c {
             Component::Model(m) => Some(m),
+            _ => None,
+        })
+    }
+
+    /// The road component, if any.
+    pub fn road(&self) -> Option<&Road> {
+        self.components.iter().find_map(|c| match c {
+            Component::Road(r) => Some(r),
+            _ => None,
+        })
+    }
+
+    /// The road component, if any, to change.
+    pub fn road_mut(&mut self) -> Option<&mut Road> {
+        self.components.iter_mut().find_map(|c| match c {
+            Component::Road(r) => Some(r),
             _ => None,
         })
     }

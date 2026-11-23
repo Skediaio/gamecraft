@@ -57,6 +57,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # Image encoding only (pictures for agents).
 png = "0.17"
 serde = { version = "1", features = ["derive"] }
+# The cooked cache of a world (MIT/Apache-2.0): a compact binary serde format, no_std and
+# wasm-safe, with a stable wire format (docs/decisions.md, A cooked binary cache).
+postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 # float_roundtrip: a number read back from a file is the number that was written, bit for
 # bit, so a reopened world simulates to the same state hash.
 serde_json = { version = "1", features = ["float_roundtrip"] }

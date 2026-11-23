@@ -12,6 +12,11 @@ use gamecraft_world::{EntityId, HeightField, World};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+/// The default of [`Access::max_world_bytes`]: the largest world file `file.open` reads (and
+/// file of a project's pack), bytes. A safety net against a file that would exhaust memory,
+/// not a limit of the design: a host raises it (`gamecraft-cli --max-world-mb`).
+pub const DEFAULT_MAX_WORLD_BYTES: u64 = 512 * 1024 * 1024;
+
 /// The folders automation may read from and write to. A relative path is inside the root; an
 /// absolute one must lie inside it. `None` refuses that kind of file access, with a sentence
 /// that names the command-line flag that sets it (`--automation-read-root`,
@@ -23,6 +28,22 @@ pub struct Access {
     /// Where `file.save`, the `project.*` commands that write and `view.render` with a
     /// `path` write.
     pub write_root: Option<PathBuf>,
+    /// The largest world file `file.open` reads, and the largest file of a project's pack,
+    /// bytes; `None` is [`DEFAULT_MAX_WORLD_BYTES`] (512 MiB). A safety net, not a
+    /// limit of the design (entity counts are bounded by the world itself). Models and
+    /// textures keep their own cap of 64 MiB.
+    pub max_world_bytes: Option<u64>,
+    /// Write the cooked cache of a world file (`.gamecraft-cache/` beside it, derived data)
+    /// even where the write root does not reach: a host that owns its files (the command
+    /// line) sets it. Inside the write root the cache is written anyway.
+    pub cache_beside_files: bool,
+}
+
+impl Access {
+    /// The cap on world files and pack files in effect, bytes.
+    pub fn max_world_bytes(&self) -> u64 {
+        self.max_world_bytes.unwrap_or(DEFAULT_MAX_WORLD_BYTES)
+    }
 }
 
 /// Where a picture is taken from.

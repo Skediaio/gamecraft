@@ -3,7 +3,9 @@
 //! Modelled on VisionCraft's `crates/visioncraft-core/src/session.rs` (MIT): commands are
 //! registered with their spec and checked against it before the handler runs, a World command
 //! runs on a copy and the previous document is one undo step (snapshot undo, limit 100), and a
-//! transaction makes several commands one step or none. Adapted: handlers are `fn` pointers of
+//! transaction makes several commands one step or none. The copies share their entities
+//! (`gamecraft-world`'s entity map), so a copy, a snapshot and the check of a change cost
+//! O(log n) in the number of entities, not O(n). Adapted: handlers are `fn` pointers of
 //! three kinds (by [`Scope`]), and a session has two states, editing and playing.
 
 use crate::error::{CommandError, failed};
@@ -123,6 +125,7 @@ const MODULES: &[&[Registration]] = &[
     crate::journal_cmds::SPECS,
     crate::gm_cmds::SPECS,
     crate::terrain_cmds::SPECS,
+    crate::road_cmds::SPECS,
 ];
 
 /// The spec and scope of the built-in command `name`, without a session (for checking the
@@ -200,6 +203,12 @@ pub struct Session {
     /// How deep [`Session::run`] is nested (a trigger's commands run inside a step): only
     /// the outermost command is recorded in the journal.
     depth: u32,
+    /// The last world a World command left behind, which passed validation: a command on
+    /// this very world checks only what it changed (`World::validate_change`). Shares its
+    /// entities with the world it copies.
+    validated: Option<World>,
+    /// How many entities the last World command checked.
+    checked_entities: usize,
 }
 
 /// What a transaction remembers of the journal: its length, end and truncation.
@@ -238,7 +247,17 @@ impl Session {
             journal: None,
             journal_stash: None,
             depth: 0,
+            validated: None,
+            checked_entities: 0,
         }
+    }
+
+    /// How many entities the validation of the last World command looked at: those it
+    /// changed, or all of them when the change could affect others (a prefab changed, an
+    /// entity was removed or got another parent) or the world was not one the session had
+    /// checked before. A measure of the work a command costs (AGENTS.md rule 18).
+    pub fn checked_entities(&self) -> usize {
+        self.checked_entities
     }
 
     /// The journal of the running simulation, or of the last one until the next `sim.start`
@@ -384,7 +403,14 @@ impl Session {
         };
         let result = f(&mut edit, params)?;
         let Edit { world, built, .. } = edit;
-        world.validate().map_err(failed)?;
+        let base = self.current_world();
+        let checked = match &self.validated {
+            Some(valid) if valid == base => world.validate_change(base),
+            _ => world.validate().map(|()| world.entity_count()),
+        }
+        .map_err(failed)?;
+        self.checked_entities = checked;
+        self.validated = Some(world.clone());
         match &mut self.live {
             Some(sim) => {
                 if world != *sim.world() {

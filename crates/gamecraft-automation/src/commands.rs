@@ -445,7 +445,9 @@ impl Host {
             #[cfg(not(target_arch = "wasm32"))]
             "project.open" => self.project_open(p),
             #[cfg(not(target_arch = "wasm32"))]
-            "project.save" => self.project_save(),
+            "project.save" => self.project_save(p),
+            #[cfg(not(target_arch = "wasm32"))]
+            "project.cells" => self.project_cells(p),
             #[cfg(not(target_arch = "wasm32"))]
             "project.export" => self.project_export(p),
             #[cfg(not(target_arch = "wasm32"))]
@@ -736,15 +738,21 @@ impl Host {
     }
 
     fn file_open(&mut self, p: &Fields) -> Result<Value, String> {
-        use crate::files::{Direction, read_world, resolve};
+        use crate::files::{Direction, may_cache, read_world_cached, resolve};
         let given = p.required_str("path").map_err(strip_owner)?;
         let path = resolve(&self.access, given, Direction::Read, "gamecraft")?;
-        let world = read_world(&path, given)?;
+        let (world, cache) = read_world_cached(
+            &path,
+            given,
+            self.access.max_world_bytes(),
+            may_cache(&self.access, &path),
+        )?;
         let result = json!({
             "path": path.display().to_string(),
             "name": world.name,
             "entities": world.entity_count(),
             "terrain": world.terrain.is_some(),
+            "cache": cache,
         });
         self.session.replace_document(world);
         self.path = Some(path);
@@ -802,7 +810,18 @@ impl Host {
             .to_json()
             .map_err(|e| format!("the document cannot be written: {e}"))?;
         write_whole(&target, text.as_bytes())?;
-        let result = json!({"path": target.display().to_string(), "bytes": text.len()});
+        // The cooked cache of what was just written, so the next open is fast.
+        let cache = crate::files::write_cache(
+            &target,
+            self.session.document(),
+            gamecraft_world::cooked::source_hash(text.as_bytes()),
+        )
+        .map_or_else(|e| json!({"error": e}), |n| json!(n));
+        let result = json!({
+            "path": target.display().to_string(),
+            "bytes": text.len(),
+            "cache_bytes": cache,
+        });
         self.path = Some(target);
         self.saved_revision = self.session.revision();
         Ok(result)

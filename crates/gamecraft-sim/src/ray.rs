@@ -1,8 +1,8 @@
 //! Ray maths, one implementation for the engine's queries (`query.raycast`,
 //! `query.line_of_sight`) and the simulation (projectile hits, perception): a ray against a box
 //! turned about Y, a sphere, an upright capped cylinder and a capsule, and [`cast`] and
-//! [`line_of_sight`] against the terrain, every entity's `shape` and every model's collider
-//! box. Pure `f64` functions,
+//! [`line_of_sight`] against the terrain, every entity's `shape`, every model's collider box
+//! and the surface of every `road` ([`gamecraft_world::raycast_roads`]). Pure `f64` functions,
 //! deterministic (sines through [`gamecraft_math::Portable`]), never panicking: every division
 //! and square root is guarded and a non-finite result is a miss.
 //!
@@ -10,7 +10,9 @@
 //! normal pointing back along the ray (`-direction`): the ray is blocked where it starts.
 
 use gamecraft_math::{Portable, deg_to_rad};
-use gamecraft_world::{Entity, EntityId, HeightField, Shape, ShapeKind, World};
+use gamecraft_world::{
+    Entity, EntityId, HeightField, Road, Shape, ShapeKind, World, raycast_roads,
+};
 
 /// Where a ray meets a shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -314,9 +316,11 @@ pub struct Found {
 }
 
 /// The nearest hit within `max_m` of a ray with a unit `dir`: the terrain (the triangles of
-/// `heights`) and the `shape` and the model's collider box ([`World::model_box`]) of every
-/// entity, solid or not, except those `skip` names; on a tie the terrain, then the lowest id
-/// (an entity's shape before its model). A hit whose point is not finite is no hit.
+/// `heights`), the surface of every `road` on it (the ground lifted by the road's offset over
+/// its footprint, exactly as drawn), and the `shape` and the model's collider box
+/// ([`World::model_box`]) of every entity, solid or not, except those `skip` names; on a tie
+/// the terrain, then the lowest id (an entity's shape before its model). A hit whose point is
+/// not finite is no hit.
 pub fn cast(
     world: &World,
     heights: Option<&HeightField>,
@@ -339,8 +343,16 @@ pub fn cast(
             entity: None,
         });
     }
+    // Roads are gathered in the one pass over the entities and cast against together after.
+    let mut roads: Vec<(&Entity, &Road)> = Vec::new();
     for e in world.entities() {
-        if (e.shape().is_none() && e.model().is_none()) || skip(e.id) {
+        if skip(e.id) {
+            continue;
+        }
+        if let Some(road) = e.road() {
+            roads.push((e, road));
+        }
+        if e.shape().is_none() && e.model().is_none() {
             continue;
         }
         let shape_hit = e.shape().and_then(|shape| ray_shape(origin, dir, e, shape));
@@ -358,6 +370,23 @@ pub fn cast(
                 });
             }
         }
+    }
+    if let Some(field) = heights
+        && !roads.is_empty()
+        && let Some((t, id)) = raycast_roads(field, &roads, origin, dir, max_m)
+        && best.is_none_or(|b| {
+            t < b.hit.distance_m
+                || (t == b.hit.distance_m && b.entity.is_some_and(|other| id < other))
+        })
+    {
+        let [x, _, z] = along(origin, dir, t);
+        best = Some(Found {
+            hit: RayHit {
+                distance_m: t,
+                normal: field.normal_at(x, z).unwrap_or([0.0, 1.0, 0.0]),
+            },
+            entity: Some(id),
+        });
     }
     best.filter(|f| {
         along(origin, dir, f.hit.distance_m)

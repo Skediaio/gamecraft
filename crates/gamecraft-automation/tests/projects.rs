@@ -373,3 +373,68 @@ fn project_open_cannot_be_part_of_an_atomic_batch() {
     let text = reply.to_string();
     assert!(text.contains("cannot be part of an atomic batch"), "{text}");
 }
+
+#[test]
+fn a_project_in_cells_on_disk_opens_in_part_and_switches_layout() {
+    let dir = TempDir::new("cells");
+    let mut h = host_in(&dir);
+    ok(&mut h, "file.new", json!({}));
+    for (name, x, z) in [("A", 10.0, 10.0), ("B", 100.0, 10.0), ("C", -10.0, 200.0)] {
+        ok(
+            &mut h,
+            "entity.add",
+            json!({"name": name, "position": [x, 0.0, z]}),
+        );
+    }
+    let err_size = err(
+        &mut h,
+        "project.new",
+        json!({"path": "p", "id": "p", "name": "P", "cell_size_m": 3}),
+    );
+    assert!(err_size.contains("cell_size_m"), "{err_size}");
+    ok(
+        &mut h,
+        "project.new",
+        json!({"path": "p", "id": "p", "name": "P", "cell_size_m": 64}),
+    );
+    let layer = dir.join("p/worlds/main/layers/main");
+    let mut cells: Vec<String> = std::fs::read_dir(&layer)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    cells.sort();
+    assert_eq!(cells, ["-1_3.json", "0_0.json", "1_0.json"]);
+
+    let area = ok(
+        &mut h,
+        "project.cells",
+        json!({"center": [0, 0], "radius_m": 70}),
+    );
+    assert_eq!(area["cell_size_m"], 64.0);
+    assert_eq!(area["count"], 16);
+    let e = err(&mut h, "project.cells", json!({"min": [0, 0]}));
+    assert!(e.contains("center"), "{e}");
+
+    let part = ok(
+        &mut h,
+        "project.open",
+        json!({"path": "p", "cells": [[0, 0], [1, 0]]}),
+    );
+    assert_eq!(part["entities"], 2);
+    assert_eq!(part["cells"], json!([[0, 0], [1, 0]]));
+    let e = err(&mut h, "project.save", json!({}));
+    assert!(e.contains("open it whole"), "{e}");
+    let e = err(&mut h, "project.open", json!({"path": "p", "cells": [[0]]}));
+    assert!(e.contains("cells[0]"), "{e}");
+
+    let whole = ok(&mut h, "project.open", json!({"path": "p"}));
+    assert_eq!(whole["entities"], 3);
+    assert_eq!(whole["cell_size_m"], 64.0);
+    let saved = ok(&mut h, "project.save", json!({"cell_size_m": 0}));
+    assert_eq!(saved["removed"].as_array().unwrap().len(), 3, "{saved}");
+    assert!(dir.join("p/worlds/main/layers/main.json").exists());
+    assert_eq!(std::fs::read_dir(&layer).map_or(0, |d| d.count()), 0);
+    let again = ok(&mut h, "project.open", json!({"path": "p"}));
+    assert_eq!(again["entities"], 3);
+    assert_eq!(again["cell_size_m"], Value::Null);
+}

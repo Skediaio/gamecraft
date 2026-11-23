@@ -1,17 +1,18 @@
 //! Terrain recipes and the height field derived from them.
 
-use crate::WorldError;
 use crate::error::Ctx;
 use crate::limits::{
-    MAX_COORDINATE_M, NOISE_FEATURE_MAX_M, NOISE_FEATURE_MIN_M, NOISE_OCTAVES_MAX,
-    NOISE_OCTAVES_MIN, NOISE_RELIEF_MAX_M, NOISE_RELIEF_MIN_M, NOISE_ROUGHNESS_MAX,
-    NOISE_ROUGHNESS_MIN, TERRAIN_CELL_MAX_M, TERRAIN_CELL_MIN_M, TERRAIN_MAX_SAMPLES_PER_SIDE,
-    TERRAIN_MULTIPLE_TOLERANCE, TERRAIN_SIZE_MAX_M, TERRAIN_SIZE_MIN_M,
+    GRID_SAMPLES_MAX, GRID_SIDE_MAX, GRID_SIDE_MIN, MAX_COORDINATE_M, NOISE_FEATURE_MAX_M,
+    NOISE_FEATURE_MIN_M, NOISE_OCTAVES_MAX, NOISE_OCTAVES_MIN, NOISE_RELIEF_MAX_M,
+    NOISE_RELIEF_MIN_M, NOISE_ROUGHNESS_MAX, NOISE_ROUGHNESS_MIN, TERRAIN_CELL_MAX_M,
+    TERRAIN_CELL_MIN_M, TERRAIN_MAX_SAMPLES_PER_SIDE, TERRAIN_MULTIPLE_TOLERANCE,
+    TERRAIN_SIZE_MAX_M, TERRAIN_SIZE_MIN_M,
 };
 use crate::sculpt::{
     self, Grid, PaintRule, Rect, TerrainEdit, TerrainLayer, WEIGHT_SLOTS, eval_heights,
     eval_weights,
 };
+use crate::{GridHeights, WorldError};
 use gamecraft_math::noise::fbm2;
 use serde::{Deserialize, Serialize};
 
@@ -87,6 +88,22 @@ pub enum TerrainSource {
         /// Amplitude ratio between successive layers, 0 (smooth) to 1 (rough). Default 0.5.
         #[serde(default = "default_roughness")]
         roughness: f64,
+    },
+    /// Real ground as a control grid: a square of `rows` by `cols` height nodes spanning the
+    /// whole terrain, reduced from elevation data. Node (col, row) lies at world
+    /// `x = -size_m / 2 + col * size_m / (cols - 1)`,
+    /// `z = -size_m / 2 + row * size_m / (rows - 1)`; `cell_m` only sets the sampling of the
+    /// built field. Heights are interpolated bilinearly; outside the square the edge nodes
+    /// hold.
+    Grid {
+        /// Nodes along x, 2 to 513.
+        cols: u32,
+        /// Nodes along z, 2 to 513.
+        rows: u32,
+        /// The height of every node, metres, row-major: index `row * cols + col`. Exactly
+        /// `cols * rows` numbers, each finite and within ±1000000. Shared between copies of
+        /// the terrain.
+        heights: GridHeights,
     },
 }
 
@@ -224,6 +241,49 @@ impl Terrain {
                     "",
                 )?;
             }
+            TerrainSource::Grid {
+                ref cols,
+                ref rows,
+                ref heights,
+            } => {
+                if !(GRID_SIDE_MIN..=GRID_SIDE_MAX).contains(cols) {
+                    return Err(ctx.invalid(
+                        "terrain.source.cols",
+                        cols,
+                        format!("it must be from {GRID_SIDE_MIN} to {GRID_SIDE_MAX}"),
+                    ));
+                }
+                if !(GRID_SIDE_MIN..=GRID_SIDE_MAX).contains(rows) {
+                    return Err(ctx.invalid(
+                        "terrain.source.rows",
+                        rows,
+                        format!("it must be from {GRID_SIDE_MIN} to {GRID_SIDE_MAX}"),
+                    ));
+                }
+                // Both sides are in range, so the product cannot overflow and stays within
+                // GRID_SAMPLES_MAX; check the length before looking at any height.
+                let count = *cols as usize * *rows as usize;
+                if heights.len() != count {
+                    return Err(ctx.invalid(
+                        "terrain.source.heights",
+                        heights.len(),
+                        format!("it must hold exactly {count} heights ({cols} x {rows})"),
+                    ));
+                }
+                debug_assert!(count <= GRID_SAMPLES_MAX);
+                for (i, h) in heights.iter().enumerate() {
+                    if !h.is_finite() || h.abs() > MAX_COORDINATE_M {
+                        return Err(ctx.invalid(
+                            "terrain.source.heights",
+                            h,
+                            format!(
+                                "heights[{i}] must be a finite number from {} to {} metres",
+                                -MAX_COORDINATE_M, MAX_COORDINATE_M
+                            ),
+                        ));
+                    }
+                }
+            }
         }
         Ok(cells as usize)
     }
@@ -249,6 +309,11 @@ impl Terrain {
                         roughness,
                     )
             }
+            TerrainSource::Grid {
+                cols,
+                rows,
+                ref heights,
+            } => grid_height(self.size_m, cols, rows, heights, x, z),
         }
     }
 
@@ -457,6 +522,39 @@ impl HeightField {
         }
         let index = row.checked_mul(self.cols)?.checked_add(col)?;
         self.heights.get(index).copied()
+    }
+
+    /// The unit upward vertex normal at sample (`col`, `row`), from central differences of the
+    /// neighbouring samples (one-sided at the border); +Y where it cannot be computed. The
+    /// renderer shades the terrain with these, and a road lying on it with the same.
+    pub fn sample_normal(&self, col: usize, row: usize) -> [f64; 3] {
+        let h = |c: usize, r: usize| self.sample(c, r).map_or(0.0, f64::from);
+        let cell = self.cell_m;
+        let (c0, c1) = (
+            col.saturating_sub(1),
+            (col + 1).min(self.cols.saturating_sub(1)),
+        );
+        let (r0, r1) = (
+            row.saturating_sub(1),
+            (row + 1).min(self.rows.saturating_sub(1)),
+        );
+        let dx = if c1 > c0 {
+            (h(c1, row) - h(c0, row)) / ((c1 - c0) as f64 * cell)
+        } else {
+            0.0
+        };
+        let dz = if r1 > r0 {
+            (h(col, r1) - h(col, r0)) / ((r1 - r0) as f64 * cell)
+        } else {
+            0.0
+        };
+        let v = [-dx, 1.0, -dz];
+        let len = (dx * dx + 1.0 + dz * dz).sqrt();
+        if len.is_finite() && len > 0.0 {
+            v.map(|c| c / len)
+        } else {
+            [0.0, 1.0, 0.0]
+        }
     }
 
     /// How many painted layers the terrain has (0: none, the weights are empty).
@@ -694,6 +792,39 @@ impl HeightField {
 /// The samples of `rect`, row by row.
 pub(crate) fn rect_samples(rect: Rect) -> impl Iterator<Item = (usize, usize)> {
     (rect.r0..=rect.r1).flat_map(move |r| (rect.c0..=rect.c1).map(move |c| (c, r)))
+}
+
+/// The bilinear height at world `x`, `z` of a control grid of `cols` x `rows` `heights`
+/// (row-major) spanning the square of side `size_m` centred on the origin. Outside the square
+/// the nearest edge node's bilinear value holds; non-finite coordinates give the first height
+/// of a guard path rather than NaN (a validated document never meets this).
+fn grid_height(size_m: f64, cols: u32, rows: u32, heights: &[f64], x: f64, z: f64) -> f64 {
+    debug_assert!(size_m.is_finite() && size_m > 0.0);
+    debug_assert!(cols >= GRID_SIDE_MIN && rows >= GRID_SIDE_MIN);
+    debug_assert_eq!(heights.len(), cols as usize * rows as usize);
+    let (cols, rows) = (cols as usize, rows as usize);
+    let half = size_m / 2.0;
+    // Fractional node coordinates, clamped to the square.
+    let u = if x.is_finite() {
+        ((x + half) / size_m * (cols - 1) as f64).clamp(0.0, (cols - 1) as f64)
+    } else {
+        0.0
+    };
+    let v = if z.is_finite() {
+        ((z + half) / size_m * (rows - 1) as f64).clamp(0.0, (rows - 1) as f64)
+    } else {
+        0.0
+    };
+    let c0 = (u.floor() as usize).min(cols.saturating_sub(2));
+    let r0 = (v.floor() as usize).min(rows.saturating_sub(2));
+    let fu = u - c0 as f64;
+    let fv = v - r0 as f64;
+    let at = |c: usize, r: usize| -> f64 { heights.get(r * cols + c).copied().unwrap_or(0.0) };
+    let h00 = at(c0, r0);
+    let h10 = at(c0 + 1, r0);
+    let h01 = at(c0, r0 + 1);
+    let h11 = at(c0 + 1, r0 + 1);
+    h00 * (1.0 - fu) * (1.0 - fv) + h10 * fu * (1.0 - fv) + h01 * (1.0 - fu) * fv + h11 * fu * fv
 }
 
 /// Appends the parameters `t` in `[t0, t1]` where `w0 + dw * t` is a whole number.

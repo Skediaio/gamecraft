@@ -9,16 +9,17 @@
 
 use crate::commands::{host_spec, strip_owner};
 use crate::fields::Fields;
-use crate::files::{Direction, MAX_OPEN_BYTES, resolve, write_whole};
+use crate::files::{Direction, RAISE_CAP, mb, resolve, write_whole};
 use crate::host::{Access, Host, ProjectIndex};
 use gamecraft_engine::{CommandSpec, ParamType as T, param};
-use gamecraft_project::{MAX_PACKS, Manifest, PackSource, Project, Saving};
+use gamecraft_project::{Cell, MAX_PACKS, Manifest, PackSource, Project, Saving};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-/// Most bytes all the files of one project may hold together.
+/// Most bytes all the files of one project may hold together, unless the host's world-file
+/// cap ([`Access::max_world_bytes`]) is higher.
 const MAX_PROJECT_BYTES: u64 = 512 * 1024 * 1024;
 /// Most files read from one pack.
 const MAX_PACK_FILES: usize = 100_000;
@@ -39,6 +40,77 @@ pub(crate) struct OpenProject {
     pub assets: crate::assets::Catalog,
     /// The model assets whose files the renderer was given.
     pub provided: std::collections::BTreeSet<String>,
+}
+
+/// The text of a `cell_size_m` parameter.
+const CELL_SIZE_DOC: &str = "Save the world's layers in cells of this side (16 to 16384 m; 512 \
+    is usual for a map of several km), one file per cell (layers/<layer>/<cx>_<cz>.json), or 0 \
+    for one file per layer. Left out: as the project's world.json says.";
+
+/// `cell_size_m` of `p`: `None` left out, `Some(None)` for 0 (one file per layer).
+fn cell_size_param(p: &Fields) -> Result<Option<Option<f64>>, String> {
+    match p.get("cell_size_m") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => {
+            let n = v.as_f64().ok_or(
+                "`cell_size_m` must be a number: the side of a cell in metres (512 is usual), \
+                 or 0 for one file per layer",
+            )?;
+            if n == 0.0 {
+                return Ok(Some(None));
+            }
+            gamecraft_project::cells::check_cell_size(n, "`cell_size_m`")
+                .map_err(|e| e.to_string())?;
+            Ok(Some(Some(n)))
+        }
+    }
+}
+
+/// `cells` of `p`: a list of `[cx, cz]` whole numbers.
+fn cells_param(p: &Fields) -> Result<Option<BTreeSet<Cell>>, String> {
+    let Some(value) = p.get("cells").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let list = value
+        .as_array()
+        .ok_or("`cells` must be a list of cells, [[cx, cz], ...]")?;
+    if list.len() > gamecraft_project::cells::MAX_AREA_CELLS {
+        return Err(format!(
+            "`cells` lists {} cells; give at most {}",
+            list.len(),
+            gamecraft_project::cells::MAX_AREA_CELLS
+        ));
+    }
+    let mut out = BTreeSet::new();
+    for (i, item) in list.iter().enumerate() {
+        let pair = item.as_array().filter(|a| a.len() == 2);
+        let index = |k: usize| {
+            pair.and_then(|a| a.get(k))
+                .and_then(Value::as_i64)
+                .and_then(|n| i32::try_from(n).ok())
+        };
+        let (Some(x), Some(z)) = (index(0), index(1)) else {
+            return Err(format!(
+                "`cells[{i}]` must be [cx, cz], two whole numbers (project.cells lists them)"
+            ));
+        };
+        out.insert(Cell { x, z });
+    }
+    Ok(Some(out))
+}
+
+/// A point `[x, z]` of `p`, `None` when left out.
+fn point2(p: &Fields, name: &str) -> Result<Option<[f64; 2]>, String> {
+    let Some(value) = p.get(name).filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    match value.as_array().map(Vec::as_slice) {
+        Some([x, z]) => match (x.as_f64(), z.as_f64()) {
+            (Some(x), Some(z)) if x.is_finite() && z.is_finite() => Ok(Some([x, z])),
+            _ => Err(format!("`{name}` must be [x, z], two numbers in metres")),
+        },
+        _ => Err(format!("`{name}` must be [x, z], two numbers in metres")),
+    }
 }
 
 /// The specs of this module.
@@ -71,6 +143,7 @@ pub(crate) fn project_specs() -> Vec<CommandSpec> {
                     "The world's folder name (a plain name).",
                 )
                 .default(json!("main")),
+                param("cell_size_m", T::Number, CELL_SIZE_DOC).unit("m"),
             ],
             "{path, id, world, files: [paths written], index, terrain}",
             json!({"path": "valley", "id": "valley", "name": "Green valley"}),
@@ -99,9 +172,17 @@ pub(crate) fn project_specs() -> Vec<CommandSpec> {
                     T::String,
                     "The world to open; the root pack's first world when left out.",
                 ),
+                param(
+                    "cells",
+                    T::Array,
+                    "Load only these cells of layers split into cells, [[cx, cz], ...] \
+                     (project.cells finds the cells of an area); layers that are one file load \
+                     whole. Such a project cannot be saved. Left out: everything.",
+                ),
             ],
-            "{path, root, world, worlds, packs: [ids in load order], entities, warnings, index, \
-             terrain: null | {tiles, from_cache, built, written, cache, problem, ms}}",
+            "{path, root, world, worlds, packs: [ids in load order], entities, cell_size_m, \
+             cells: null | [[cx, cz]], warnings, index, terrain: null | {tiles, from_cache, \
+             built, written, cache, problem, ms}}",
             json!({"path": "skirmish-night-mod"}),
         ),
         host_spec(
@@ -114,10 +195,45 @@ pub(crate) fn project_specs() -> Vec<CommandSpec> {
              something a dependency brought is written to the root pack as an override or a \
              removal, never to the dependency. Nothing changed: nothing is written. The terrain \
              tiles whose recipe changed are written to the tile cache. Needs the project folder \
-             inside the write root.",
-            vec![],
+             inside the write root. With `cell_size_m` the layers are from now on saved in \
+             cells of that size (layers/<layer>/<cx>_<cz>.json, each entity in the cell of the \
+             entity at the top of its parents), or with 0 in one file per layer; the old files \
+             are removed. Refused for a project opened with only some `cells`.",
+            vec![param("cell_size_m", T::Number, CELL_SIZE_DOC).unit("m")],
             "{path, written: [paths], removed: [paths], unchanged, terrain_tiles_written}",
             json!({}),
+        ),
+        host_spec(
+            "project.cells",
+            "Cells of an Area",
+            "The cells that intersect an area, for loading a large world near a place \
+             (project.open with `cells`): the area from `min` to `max`, or the square around \
+             `center` reaching `radius_m`. Cell (cx, cz) covers cx * size <= x < (cx + 1) * size \
+             and the same for z. The cell size is the open project's, or `cell_size_m`.",
+            vec![
+                param("min", T::Point2, "One corner of the area, [x, z] metres.").unit("m"),
+                param("max", T::Point2, "The other corner, [x, z] metres.").unit("m"),
+                param(
+                    "center",
+                    T::Point2,
+                    "The middle of the area, [x, z] metres.",
+                )
+                .unit("m"),
+                param(
+                    "radius_m",
+                    T::Number,
+                    "How far the area reaches from `center`.",
+                )
+                .unit("m"),
+                param(
+                    "cell_size_m",
+                    T::Number,
+                    "The cell size, 16 to 16384; the open project's when left out.",
+                )
+                .unit("m"),
+            ],
+            "{cell_size_m, count, cells: [[cx, cz]]}",
+            json!({"center": [0, 0], "radius_m": 600, "cell_size_m": 512}),
         ),
         host_spec(
             "project.export",
@@ -261,7 +377,7 @@ pub(crate) fn writable(access: &Access, dir: &Path) -> bool {
 /// `prefabs/*.json`, `worlds/*/world.json`, `worlds/*/layers/*.json` and
 /// `worlds/*/terrain/edits.json` are read (the terrain's tile cache is read when the world is
 /// built); a file or folder that is a link leading out of the pack is refused.
-fn read_pack(dir: &Path, budget: &mut u64) -> Result<PackSource, String> {
+fn read_pack(dir: &Path, budget: &mut u64, cap: u64) -> Result<PackSource, String> {
     let mut source = PackSource {
         location: dir.display().to_string(),
         files: BTreeMap::new(),
@@ -282,12 +398,12 @@ fn read_pack(dir: &Path, budget: &mut u64) -> Result<PackSource, String> {
         if !meta.is_file() {
             return Err(format!("`{shown}` is not a file"));
         }
-        if meta.len() > MAX_OPEN_BYTES || meta.len() > *budget {
+        if meta.len() > cap || meta.len() > *budget {
             return Err(format!(
-                "`{shown}` is too large: a file of a pack may be at most {} MB, and a project \
-                 at most {} MB together",
-                MAX_OPEN_BYTES / (1024 * 1024),
-                MAX_PROJECT_BYTES / (1024 * 1024)
+                "`{shown}` is too large: this host reads pack files of at most {} MB, and a \
+                 project of at most {} MB together ({RAISE_CAP})",
+                mb(cap),
+                mb(cap.max(MAX_PROJECT_BYTES))
             ));
         }
         *budget -= meta.len();
@@ -321,6 +437,12 @@ fn read_pack(dir: &Path, budget: &mut u64) -> Result<PackSource, String> {
         }
         for name in json_files(&dir.join(&base).join("layers"))? {
             read(&format!("{base}/layers/{name}"), &mut source)?;
+        }
+        // A layer split into cells: layers/<layer>/<cx>_<cz>.json.
+        for layer in sub_folders(&dir.join(&base).join("layers"))? {
+            for name in json_files(&dir.join(&base).join("layers").join(&layer))? {
+                read(&format!("{base}/layers/{layer}/{name}"), &mut source)?;
+            }
         }
         if dir.join(&base).join("terrain").join("edits.json").exists() {
             read(&format!("{base}/terrain/edits.json"), &mut source)?;
@@ -441,8 +563,9 @@ fn read_packs(
         .as_ref()
         .and_then(|r| fs::canonicalize(r).ok())
         .ok_or("this server may not read files: no read root is set")?;
-    let mut budget = MAX_PROJECT_BYTES;
-    let root_source = read_pack(dir, &mut budget)?;
+    let cap = access.max_world_bytes();
+    let mut budget = cap.max(MAX_PROJECT_BYTES);
+    let root_source = read_pack(dir, &mut budget, cap)?;
     let root_text = root_source
         .files
         .get("pack.json")
@@ -489,7 +612,7 @@ fn read_packs(
             if !real.join("pack.json").is_file() {
                 continue;
             }
-            packs.insert(dep.id.clone(), read_pack(&real, &mut budget)?);
+            packs.insert(dep.id.clone(), read_pack(&real, &mut budget, cap)?);
             queue.push_back(dep.id);
         }
     }
@@ -684,8 +807,10 @@ impl Host {
                 "`{given}` exists and is not empty; a new project needs a new or empty folder"
             ));
         }
-        let (mut project, saving) = Project::create(id, name, world_name, self.session.document())
-            .map_err(|e| e.to_string())?;
+        let cell_size = cell_size_param(p)?.flatten();
+        let (mut project, saving) =
+            Project::create_cells(id, name, world_name, self.session.document(), cell_size)
+                .map_err(|e| e.to_string())?;
         fs::create_dir_all(&dir)
             .map_err(|e| format!("cannot create the folder `{}`: {e}", dir.display()))?;
         let dir = fs::canonicalize(&dir)
@@ -697,6 +822,8 @@ impl Host {
             &Access {
                 read_root: Some(dir.clone()),
                 write_root: None,
+                max_world_bytes: self.access.max_world_bytes,
+                cache_beside_files: self.access.cache_beside_files,
             },
             &dir,
         )?;
@@ -717,9 +844,13 @@ impl Host {
         let given = p.required_str("path").map_err(strip_owner)?;
         let world = p.str("world").map_err(strip_owner)?;
         let dir = resolve_dir(&self.access, given, Direction::Read, true)?;
+        let cells = cells_param(p)?;
         let (root, packs) = read_packs(&self.access, &dir)?;
-        let (project, loaded) = Project::load(&root, &packs, world).map_err(|e| e.to_string())?;
+        let (project, loaded) =
+            Project::load_cells(&root, &packs, world, cells.as_ref()).map_err(|e| e.to_string())?;
         let result = json!({
+            "cell_size_m": project.cell_size(),
+            "cells": cells.map(|c| c.iter().map(|c| [c.x, c.z]).collect::<Vec<_>>()),
             "path": dir.display().to_string(),
             "root": root,
             "world": project.world(),
@@ -744,7 +875,8 @@ impl Host {
         })
     }
 
-    pub(crate) fn project_save(&mut self) -> Result<Value, String> {
+    pub(crate) fn project_save(&mut self, p: &Fields) -> Result<Value, String> {
+        let cell_size = cell_size_param(p)?;
         let open = self.open_project()?;
         if !writable(&self.access, &open.dir) {
             return Err(format!(
@@ -753,13 +885,26 @@ impl Host {
                 open.dir.display()
             ));
         }
-        let saving = open
-            .project
+        // A new cell size is tried on a copy, so a save that fails changes nothing.
+        let resized = match cell_size {
+            Some(size) => {
+                let mut copy = open.project.clone();
+                copy.set_cell_size(size).map_err(|e| e.to_string())?;
+                Some(copy)
+            }
+            None => None,
+        };
+        let saving = resized
+            .as_ref()
+            .unwrap_or(&open.project)
             .plan_save(self.session.document())
             .map_err(|e| format!("the document cannot be saved: {e}"))?;
         let dir = open.dir.clone();
         let (written, removed) = write_plan(&dir, &saving)?;
         if let Some(open) = self.project.as_mut() {
+            if let Some(copy) = resized {
+                open.project = copy;
+            }
             open.project.finish_save(saving);
             open.indexed = None;
         }
@@ -868,6 +1013,46 @@ impl Host {
         let entities = loaded.entity_count();
         let _ = self.take_project(project, dir, loaded);
         Ok(json!({"id": id, "path": path, "packs": packs, "entities": entities}))
+    }
+
+    pub(crate) fn project_cells(&mut self, p: &Fields) -> Result<Value, String> {
+        let size = match p.get("cell_size_m").filter(|v| !v.is_null()) {
+            Some(v) => v.as_f64().ok_or(
+                "`cell_size_m` must be a number: the side of a cell in metres, 16 to 16384",
+            )?,
+            None => self
+                .project
+                .as_ref()
+                .and_then(|o| o.project.cell_size())
+                .ok_or(
+                    "no cell size: the open project's world is not saved in cells (or no \
+                     project is open); give `cell_size_m`",
+                )?,
+        };
+        let (min, max) = match (point2(p, "min")?, point2(p, "max")?, point2(p, "center")?) {
+            (Some(a), Some(b), None) => (a, b),
+            (None, None, Some(c)) => {
+                let r = p
+                    .get("radius_m")
+                    .and_then(Value::as_f64)
+                    .filter(|r| r.is_finite() && *r >= 0.0)
+                    .ok_or("`radius_m` must be a number of metres, at least 0, with `center`")?;
+                ([c[0] - r, c[1] - r], [c[0] + r, c[1] + r])
+            }
+            _ => {
+                return Err(
+                    "give the area as `min` and `max` ([x, z] corners), or as `center` and \
+                     `radius_m`"
+                        .into(),
+                );
+            }
+        };
+        let cells = gamecraft_project::cells_in_area(min, max, size).map_err(|e| e.to_string())?;
+        Ok(json!({
+            "cell_size_m": size,
+            "count": cells.len(),
+            "cells": cells.iter().map(|c| [c.x, c.z]).collect::<Vec<_>>(),
+        }))
     }
 
     pub(crate) fn project_query(&mut self, p: &Fields) -> Result<Value, String> {

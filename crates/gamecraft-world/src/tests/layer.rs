@@ -81,6 +81,7 @@ fn a_spawned_prefab_and_its_children_take_the_spawn_layer() {
             tags: vec!["hut".into()],
         })],
         children: vec![PrefabChild {
+            prefab: None,
             name: "Door".into(),
             offset: [0.0, 0.0, -1.0],
             rotation_y_deg: 0.0,

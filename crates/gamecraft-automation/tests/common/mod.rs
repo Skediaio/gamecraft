@@ -113,6 +113,8 @@ pub fn host_in(dir: &TempDir) -> Host {
         Access {
             read_root: Some(dir.path().to_path_buf()),
             write_root: Some(dir.path().to_path_buf()),
+            max_world_bytes: None,
+            cache_beside_files: false,
         },
     )
 }

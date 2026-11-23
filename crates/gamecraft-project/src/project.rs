@@ -3,6 +3,7 @@
 
 use crate::ProjectError;
 use crate::assets::PackAsset;
+use crate::cells::{Cell, cell_path, check_cell_size};
 use crate::fields::{PROJECT_KEYS, WORLD_FORMAT, WORLD_KEYS, diff, world_fields};
 use crate::layer::{Entry, Layer, LayerEntity};
 use crate::manifest::{Manifest, dependency_order};
@@ -96,6 +97,9 @@ struct Next {
     saved_fields: Map<String, Value>,
 }
 
+/// Most levels of parents followed to find the entity whose position places a line in a cell.
+const MAX_ROOT_STEPS: usize = gamecraft_world::limits::MAX_HIERARCHY_DEPTH + 1;
+
 /// What the dependencies alone resolve to: what the root pack's files are a difference from.
 #[derive(Clone, Debug, Default)]
 struct Base {
@@ -113,6 +117,9 @@ struct Own {
     /// `world.json` without its version; `None` when the root pack has none.
     fields: Option<Map<String, Value>>,
     layers: BTreeMap<String, Layer>,
+    /// The layers that are split into cells, each cell's file (normalised); the other layers
+    /// of `layers` are one file each.
+    cells: BTreeMap<String, BTreeMap<Cell, Layer>>,
     prefab_files: BTreeSet<String>,
     /// `terrain/edits.json`; `None` when the root pack has none.
     edits: Option<Vec<TerrainEdit>>,
@@ -135,6 +142,10 @@ pub struct Project {
     saved_fields: Map<String, Value>,
     warnings: Vec<String>,
     assets: BTreeMap<String, ProjectAsset>,
+    /// The side of the cells the root pack's layers are saved in; `None`: one file per layer.
+    cell_size: Option<f64>,
+    /// The cells it was loaded with, when only some were: such a project is not saved.
+    partial: Option<BTreeSet<Cell>>,
 }
 
 /// The manifests of `packs`, by id; each key must be its pack's id.
@@ -168,6 +179,18 @@ impl Project {
         packs: &BTreeMap<String, PackSource>,
         world: Option<&str>,
     ) -> Result<(Project, World), ProjectError> {
+        Project::load_cells(root, packs, world, None)
+    }
+
+    /// [`Project::load`] of only the entities in `cells` of layers split into cells (every
+    /// entity of a layer that is one file is loaded): what a streamer loads near a player.
+    /// Such a project refuses to save, since the other cells are not in its world.
+    pub fn load_cells(
+        root: &str,
+        packs: &BTreeMap<String, PackSource>,
+        world: Option<&str>,
+        cells: Option<&BTreeSet<Cell>>,
+    ) -> Result<(Project, World), ProjectError> {
         let manifests = manifests(packs)?;
         let order = dependency_order(root, &manifests)?;
         let mut parsed = Vec::with_capacity(order.len());
@@ -175,7 +198,7 @@ impl Project {
             let source = packs
                 .get(id)
                 .ok_or_else(|| ProjectError::new(format!("the pack `{id}` is missing")))?;
-            parsed.push(parse_pack(source)?);
+            parsed.push(parse_pack(source, cells)?);
         }
         let mut worlds: Vec<String> = Vec::new();
         for pack in &parsed {
@@ -237,6 +260,8 @@ impl Project {
             worlds,
             default_layer: resolved.default_layer(),
             layer_order: resolved.layer_order(),
+            cell_size: resolved.cell_size(),
+            partial: cells.cloned(),
             provenance: provenance_of(&resolved, &world),
             base,
             own: Own::default(),
@@ -273,6 +298,18 @@ impl Project {
         world_name: &str,
         world: &World,
     ) -> Result<(Project, Saving), ProjectError> {
+        Project::create_cells(id, name, world_name, world, None)
+    }
+
+    /// [`Project::create`] with the layers split into cells of `cell_size_m` metres
+    /// (`cells.rs`); `None` is one file per layer.
+    pub fn create_cells(
+        id: &str,
+        name: &str,
+        world_name: &str,
+        world: &World,
+        cell_size_m: Option<f64>,
+    ) -> Result<(Project, Saving), ProjectError> {
         let manifest = Manifest::new(id, name, vec![world_name.to_string()]);
         manifest.validate("pack.json")?;
         if !is_plain_name(world_name) {
@@ -284,6 +321,9 @@ impl Project {
         world
             .validate()
             .map_err(|e| ProjectError::new(format!("the world is not valid: {e}")))?;
+        if let Some(size) = cell_size_m {
+            check_cell_size(size, "`cell_size_m`")?;
+        }
         let project = Project {
             root: id.to_string(),
             world: world_name.to_string(),
@@ -301,6 +341,8 @@ impl Project {
             saved_fields: Map::new(),
             warnings: Vec::new(),
             assets: BTreeMap::new(),
+            cell_size: cell_size_m,
+            partial: None,
         };
         let mut saving = project.plan_save(world)?;
         saving
@@ -371,6 +413,7 @@ impl Project {
         let mut own = Own {
             fields: None,
             layers: BTreeMap::new(),
+            cells: BTreeMap::new(),
             prefab_files: root.prefabs.keys().cloned().collect(),
             edits: None,
         };
@@ -386,8 +429,9 @@ impl Project {
         };
         own.fields.clone_from(&dir.fields);
         own.edits.clone_from(&dir.edits);
-        for (name, layer) in &dir.layers {
-            let entries = layer
+        let normalised = |layer: &Layer| Layer {
+            replace: layer.replace,
+            entries: layer
                 .entries
                 .iter()
                 .map(|entry| match entry {
@@ -400,13 +444,15 @@ impl Project {
                         ),
                     Entry::Removed(_) => entry.clone(),
                 })
-                .collect();
-            own.layers.insert(
+                .collect(),
+        };
+        for (name, layer) in &dir.layers {
+            own.layers.insert(name.clone(), normalised(layer));
+        }
+        for (name, cells) in &dir.cells {
+            own.cells.insert(
                 name.clone(),
-                Layer {
-                    replace: layer.replace,
-                    entries,
-                },
+                cells.iter().map(|(c, l)| (*c, normalised(l))).collect(),
             );
         }
         own
@@ -417,6 +463,13 @@ impl Project {
     /// the root pack as an override (or a removal), never to the dependency. A world that did
     /// not change writes nothing. Nothing is changed until [`Project::finish_save`].
     pub fn plan_save(&self, world: &World) -> Result<Saving, ProjectError> {
+        if let Some(cells) = &self.partial {
+            return Err(ProjectError::new(format!(
+                "the project was opened with {} of its cells only, so its world lacks the \
+                 others; open it whole (project.open without `cells`) to save",
+                cells.len()
+            )));
+        }
         world
             .validate()
             .map_err(|e| ProjectError::new(format!("the world is not valid: {e}")))?;
@@ -431,12 +484,13 @@ impl Project {
         for layer in own.layers.values() {
             used.extend(layer.entries.iter().map(|e| e.key().to_string()));
         }
+        let mut numbered: BTreeMap<String, u64> = BTreeMap::new();
         for e in world.entities() {
             if let std::collections::btree_map::Entry::Vacant(slot) =
                 provenance.entities.entry(e.id)
             {
                 slot.insert(EntitySource {
-                    key: new_key(&e.name, &mut used),
+                    key: new_key(&e.name, &mut used, &mut numbered),
                     pack: self.root.clone(),
                     layer: self.layer_of(e).to_string(),
                 });
@@ -533,20 +587,58 @@ impl Project {
                 .entries
                 .push(Entry::Removed(key.clone()));
         }
+        let mut cells_now: BTreeMap<String, BTreeMap<Cell, Layer>> = BTreeMap::new();
+        let places = match self.cell_size {
+            Some(_) => self.places(&layers),
+            None => BTreeMap::new(),
+        };
         for (name, layer) in &layers {
-            if own.layers.get(name) != Some(layer) {
-                plan.writes
-                    .insert(layer_path(&self.world, name), layer.to_text()?);
+            let on_disk = own.cells.get(name);
+            let Some(size) = self.cell_size else {
+                if own.layers.get(name) != Some(layer) || on_disk.is_some() {
+                    plan.writes
+                        .insert(layer_path(&self.world, name), layer.to_text()?);
+                }
+                for cell in on_disk.into_iter().flat_map(BTreeMap::keys) {
+                    plan.removes.push(cell_path(&self.world, name, *cell));
+                }
+                continue;
+            };
+            let split = split_cells(layer, size, &places);
+            for (cell, part) in &split {
+                if on_disk.and_then(|d| d.get(cell)) != Some(part) {
+                    plan.writes
+                        .insert(cell_path(&self.world, name, *cell), part.to_text()?);
+                }
             }
+            for cell in on_disk.into_iter().flat_map(BTreeMap::keys) {
+                if !split.contains_key(cell) {
+                    plan.removes.push(cell_path(&self.world, name, *cell));
+                }
+            }
+            if self.own.layers.contains_key(name) && on_disk.is_none() {
+                plan.removes.push(layer_path(&self.world, name));
+            }
+            cells_now.insert(name.clone(), split);
         }
         own.layers = layers;
+        own.cells = cells_now;
 
         // world.json: a merge patch over what the dependencies give.
         let owns_world = !self.base.has_world;
-        if saved_fields != self.saved_fields || (own.fields.is_none() && owns_world) {
+        let cell_key = self.cell_key();
+        let cells_changed =
+            own.fields.as_ref().and_then(|f| f.get("cell_size_m")) != cell_key.as_ref();
+        if saved_fields != self.saved_fields
+            || (own.fields.is_none() && owns_world)
+            || cells_changed
+        {
             let mut patch = diff(&self.base.fields, &saved_fields);
             let mut keep = own.fields.clone().unwrap_or_default();
-            keep.retain(|k, _| PROJECT_KEYS.contains(&k.as_str()));
+            keep.retain(|k, _| PROJECT_KEYS.contains(&k.as_str()) && k != "cell_size_m");
+            if let Some(v) = cell_key {
+                keep.insert("cell_size_m".into(), v);
+            }
             if own.fields.is_none() && owns_world {
                 keep.insert(
                     "default_layer".into(),
@@ -629,6 +721,82 @@ impl Project {
         })
     }
 
+    /// The side of the cells the world's layers are saved in, metres; `None`: one file per
+    /// layer.
+    pub fn cell_size(&self) -> Option<f64> {
+        self.cell_size
+    }
+
+    /// The cells the project was loaded with, when only some were ([`Project::load_cells`]).
+    pub fn partial(&self) -> Option<&BTreeSet<Cell>> {
+        self.partial.as_ref()
+    }
+
+    /// Saves the world's layers in cells of `size_m` metres from the next save on (the root
+    /// pack's `world.json` gets `cell_size_m`), or in one file per layer with `None`. The old
+    /// files are removed by that save.
+    pub fn set_cell_size(&mut self, size_m: Option<f64>) -> Result<(), ProjectError> {
+        if let Some(size) = size_m {
+            check_cell_size(size, "`cell_size_m`")?;
+        }
+        self.cell_size = size_m;
+        Ok(())
+    }
+
+    /// What the root pack's `world.json` holds as `cell_size_m`: nothing when the dependencies
+    /// give the same, `null` to drop a dependency's.
+    fn cell_key(&self) -> Option<Value> {
+        let inherited = self.base.fields.get("cell_size_m").and_then(Value::as_f64);
+        match self.cell_size {
+            Some(v) if inherited == Some(v) => None,
+            Some(v) => Some(json!(v)),
+            None if inherited.is_some() => Some(Value::Null),
+            None => None,
+        }
+    }
+
+    /// Where each line of the root pack's `layers` stands for its cell: the position of the
+    /// entity at the top of its chain of parents, by string id (the dependencies' entities
+    /// too, for a removal or a parent they bring).
+    fn places(&self, layers: &BTreeMap<String, Layer>) -> BTreeMap<String, [f64; 3]> {
+        let mut known: BTreeMap<&str, ([f64; 3], Option<&str>)> = self
+            .base
+            .entities
+            .iter()
+            .map(|(k, (_, e))| (k.as_str(), (e.position, e.parent.as_deref())))
+            .collect();
+        for layer in layers.values() {
+            for entry in &layer.entries {
+                if let Entry::Entity(e) = entry {
+                    known.insert(e.id.as_str(), (e.position, e.parent.as_deref()));
+                }
+            }
+        }
+        let root_of = |key: &str| -> Option<[f64; 3]> {
+            let mut at = key;
+            let mut position = known.get(at)?.0;
+            for _ in 0..MAX_ROOT_STEPS {
+                let Some((p, parent)) = known.get(at) else {
+                    break;
+                };
+                position = *p;
+                match parent {
+                    Some(up) if known.contains_key(up) => at = up,
+                    _ => break,
+                }
+            }
+            Some(position)
+        };
+        layers
+            .values()
+            .flat_map(|l| l.entries.iter())
+            .filter_map(|entry| {
+                let key = entry.key();
+                root_of(key).map(|p| (key.to_string(), p))
+            })
+            .collect()
+    }
+
     /// Takes the state of a save whose files were written.
     pub fn finish_save(&mut self, saving: Saving) {
         self.provenance = saving.next.provenance;
@@ -688,7 +856,11 @@ impl Project {
                 })
             })
             .collect();
-        let saving = self.plan_save(world)?;
+        // A project loaded in part is not saved, so it has no files to write.
+        let plan = match &self.partial {
+            Some(_) => SavePlan::default(),
+            None => self.plan_save(world)?.plan,
+        };
         let (mut added, mut changed, mut removed) = (0u64, 0u64, 0u64);
         for e in world.entities() {
             match self.saved.entity(e.id) {
@@ -732,9 +904,11 @@ impl Project {
                 "world_fields_changed": world_fields(world)? != self.saved_fields,
                 "terrain_edits_changed": world.terrain.as_ref().map(|t| &t.edits)
                     != self.saved.terrain.as_ref().map(|t| &t.edits),
-                "files": saving.plan.writes.keys().collect::<Vec<_>>(),
-                "removes": saving.plan.removes,
+                "files": plan.writes.keys().collect::<Vec<_>>(),
+                "removes": plan.removes,
             },
+            "cell_size_m": self.cell_size,
+            "cells": self.partial.as_ref().map(|c| c.iter().map(|c| [c.x, c.z]).collect::<Vec<_>>()),
             "warnings": self.warnings,
         }))
     }
@@ -780,6 +954,39 @@ fn base_of(deps: &[&Pack], world: &str) -> Result<Base, ProjectError> {
     Ok(base)
 }
 
+/// `layer` split into cells of `size_m` by `places` (a line without a place goes to cell
+/// `0_0`), each cell's lines in the layer's order. A layer with no lines that replaces the
+/// one of earlier packs keeps that as an empty cell `0_0`.
+fn split_cells(
+    layer: &Layer,
+    size_m: f64,
+    places: &BTreeMap<String, [f64; 3]>,
+) -> BTreeMap<Cell, Layer> {
+    let mut out: BTreeMap<Cell, Layer> = BTreeMap::new();
+    for entry in &layer.entries {
+        let cell = places
+            .get(entry.key())
+            .map_or_else(Cell::default, |p| Cell::of(p[0], p[2], size_m));
+        out.entry(cell)
+            .or_insert_with(|| Layer {
+                replace: layer.replace,
+                entries: Vec::new(),
+            })
+            .entries
+            .push(entry.clone());
+    }
+    if out.is_empty() && layer.replace {
+        out.insert(
+            Cell::default(),
+            Layer {
+                replace: true,
+                entries: Vec::new(),
+            },
+        );
+    }
+    out
+}
+
 /// The file form of `e` under `key`, its parent by the parent's string id in `provenance`.
 fn form(provenance: &Provenance, world: &World, e: &Entity, key: &str) -> LayerEntity {
     let parent = e.parent.map(|p| {
@@ -819,8 +1026,14 @@ fn provenance_of(r: &Resolved, world: &World) -> Provenance {
 }
 
 /// A new string id from an entity's name (`Oak 3` -> `oak-3`), not yet in `used`, which it
-/// joins.
-fn new_key(name: &str, used: &mut BTreeSet<String>) -> String {
+/// joins. `numbered` remembers per stem the next number to try, so naming many entities alike
+/// costs one try each, not one per entity named so before (44 000 walls of one name took
+/// hours).
+fn new_key(
+    name: &str,
+    used: &mut BTreeSet<String>,
+    numbered: &mut BTreeMap<String, u64>,
+) -> String {
     let mut stem = String::new();
     for c in name.chars().flat_map(char::to_lowercase) {
         if c.is_ascii_alphanumeric() {
@@ -835,10 +1048,10 @@ fn new_key(name: &str, used: &mut BTreeSet<String>) -> String {
     let stem = stem.trim_end_matches('-');
     let stem = if stem.is_empty() { "entity" } else { stem };
     let mut key = stem.to_string();
-    let mut n: u64 = 2;
+    let next = numbered.entry(stem.to_string()).or_insert(2);
     while used.contains(&key) {
-        key = format!("{stem}-{n}");
-        n = n.saturating_add(1);
+        key = format!("{stem}-{next}");
+        *next = next.saturating_add(1);
     }
     used.insert(key.clone());
     key

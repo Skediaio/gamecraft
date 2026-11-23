@@ -12,8 +12,8 @@ use crate::{Camera, Quality, RenderError};
 use crate::{Picture, PictureRequest, PictureStats};
 use gamecraft_math::{DQuat, DVec3, deg_to_rad};
 use gamecraft_world::{
-    Character, Entity, EntityId, Environment, HeightField, Model, Plant, Shape, ShapeKind, Terrain,
-    TerrainLayer, World,
+    Character, Entity, EntityId, Environment, HeightField, Model, Plant, Road, Shape, ShapeKind,
+    Terrain, TerrainLayer, World,
 };
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
@@ -29,6 +29,8 @@ const LIVE_SIZE: (u32, u32) = (64, 36);
 const LIVE_MAX_SIDE: u32 = 8192;
 /// Roughness of shapes and character bodies.
 const SHAPE_ROUGHNESS: f32 = 0.6;
+/// Roughness of road surfaces (worn asphalt and packed earth).
+const ROAD_ROUGHNESS: f32 = 0.85;
 /// A character's body: safety orange, linear RGB, clear against grass, rock and sky.
 const CHARACTER_COLOR: [f32; 3] = [0.85, 0.30, 0.03];
 /// A character's visor: near black.
@@ -151,11 +153,16 @@ struct DrawnEntity {
     plant: Option<Plant>,
     character: Option<Character>,
     model: Option<Model>,
+    road: Option<Road>,
 }
 
 /// Whether an entity draws anything (a zone, a light or tags alone draw nothing).
 fn draws(e: &Entity) -> bool {
-    e.shape().is_some() || e.plant().is_some() || e.character().is_some() || e.model().is_some()
+    e.shape().is_some()
+        || e.plant().is_some()
+        || e.character().is_some()
+        || e.model().is_some()
+        || e.road().is_some()
 }
 
 impl DrawnEntity {
@@ -174,6 +181,7 @@ impl DrawnEntity {
             plant: plant.cloned(),
             character: character.cloned(),
             model: e.model().cloned(),
+            road: e.road().cloned(),
         })
     }
 
@@ -186,6 +194,7 @@ impl DrawnEntity {
             && self.plant.as_ref() == e.plant()
             && self.character.as_ref() == e.character()
             && self.model.as_ref() == e.model()
+            && self.road.as_ref() == e.road()
             && (walks || self.pose == Some((e.position, e.rotation_y_deg)))
     }
 }
@@ -774,6 +783,7 @@ impl WorldRenderer {
             problems: &mut problems,
             colors: BTreeMap::new(),
         };
+        scene.roads(world, field.as_deref());
         match field.as_deref() {
             Some(h) => {
                 let plane = border_mean(h);
@@ -1204,6 +1214,35 @@ impl Scene<'_> {
                     chunk.first_col, chunk.first_row
                 )),
             }
+        }
+    }
+
+    /// Roads: one item per terrain chunk and colour ([`crate::roads::road_meshes`]).
+    fn roads(&mut self, world: &World, field: Option<&HeightField>) {
+        let built = crate::roads::road_meshes(world, field);
+        self.problems.extend(built.problems);
+        let mut materials: BTreeMap<[u32; 3], vc::MaterialId> = BTreeMap::new();
+        for chunk in built.chunks {
+            let what = format!("the roads of chunk {:?}", chunk.chunk);
+            let Some(mesh) = self.add_mesh(&chunk.mesh, &what) else {
+                continue;
+            };
+            let key = chunk.color.map(f32::to_bits);
+            let material = match materials.get(&key) {
+                Some(&m) => m,
+                None => {
+                    let [r, g, b] = chunk.color;
+                    let m = self.add_material(&vc::Material {
+                        base_color: [r, g, b, 1.0],
+                        roughness: ROAD_ROUGHNESS,
+                        puddles: true,
+                        ..Default::default()
+                    });
+                    materials.insert(key, m);
+                    m
+                }
+            };
+            self.add_item(&[(mesh, material)], &[Mat4::IDENTITY]);
         }
     }
 

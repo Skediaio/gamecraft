@@ -71,6 +71,8 @@ impl Game {
             Access {
                 read_root: Some(read_root),
                 write_root: None,
+                max_world_bytes: None,
+                cache_beside_files: false,
             },
         );
         host.execute("project.open", &json!({"path": dir.display().to_string()}))?;
