@@ -177,6 +177,30 @@ Worlds of real size, made of reusable parts, by anyone.
 - The renderer adapter updates only what changed; plants as instanced items with levels of
   detail and impostors.
 
+### Open: found by building one showcase block (2026-11-24)
+
+One 100 × 100 m courtyard-house block was built with the current engine and no engine work.
+What it still lacks, in the order it hurts the picture (details, commands and proposals:
+the project's `ENGINE-WISHLIST.md`):
+
+- **Decals** for dirt, stains, bullet pocks, posters: walls read freshly built without them.
+- **Road and terrain surface detail:** roads are one flat colour (no grain, patches, markings);
+  terrain layers are colour plus roughness, with no detail texture or ruts in lanes.
+- **Ambient occlusion** (SSAO or baked per-vertex): facade recesses, lane corners and the ground
+  under cars and gates read flat.
+- **Shared textures between model assets:** each glTF embeds its own copy; 18 of 20.6 MiB were
+  repeats. A pack texture registry fixes it.
+- **Distance LOD and culling for models** (plants have it): about 400 k triangles per view of
+  one block, so draw time scales with town size.
+- **Model collision finer than the bounding box:** recessed doorways and balconies are cosmetic.
+- **Wires and cables as splines** instead of fixed-length models.
+- **Emissive windows** and a cheap interior suggestion for dusk.
+- **Export that carries assets:** `project.export` yields a file whose models draw as magenta
+  boxes.
+- **Cameras as world data**, **prefab children that can be overridden per instance**,
+  `entity.scatter` with a layer parameter and a rotation bias, and plants for dry regions
+  (a true date palm, dry scrub).
+
 ## M4: Physics
 
 Rigid bodies, colliders from shapes and models, ray and shape casts, joints, then vehicles. All
