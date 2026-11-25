@@ -230,6 +230,15 @@ from the engine, as mechanisms with no game in them, in the order they are sched
 5. **A generic geodata importer** (optional): a DEM and an OpenStreetMap extract to a pack
    (frame, terrain, roads, building footprints, water, licence records); rules of a place stay in
    the game.
+6. **A ground-height query while building**, and spans (decks) whose ends snap to the ground,
+   so a generator does not copy the engine's sculpt maths to place bridge ends and pier feet.
+7. **Non-uniform scale for prefab instances** (one deck prefab for every span length).
+8. **Raycasts and simulation at scale:** a spatial index for rays, lines of sight and solids, so a
+   world of about 300 000 entities (prefab children included) raycasts in well under a
+   millisecond and simulates faster than real time.
+9. **Filtered shadows** (PCF, soft edges) instead of stair-stepped shadow edges at eye level.
+10. **Water as a surface kind in the simulation:** a character in water wades (slower, not
+    standing on the ground); part of the water item above.
 
 ## M4: Physics
 
