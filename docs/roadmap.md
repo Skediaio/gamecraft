@@ -266,7 +266,12 @@ from the engine, as mechanisms with no game in them, in the order they are sched
     as glTF nodes, for example `socket_rail_top`, `socket_rail_left` and `socket_muzzle`.
     An attachment (a sight, a light, a grip, a suppressor) is a model of its own with its own
     bounds and LOD levels, placed on a socket and drawn as its own item.
-    It can be added, swapped or removed at run time without touching the weapon's model.
+    Attachments carry `socket_*` nodes of their own, so a mount is a tree: weapon -> socket ->
+    attachment -> socket -> attachment (a riser mount holding an optic, a muzzle adapter holding
+    a suppressor). Each model's origin is where it meets its parent's socket.
+    An attachment can be added, swapped or removed at run time at any depth (removing one takes
+    its own attachments with it, or refuses while it holds any, by choice) without touching the
+    weapon's model.
     The simulation can read what an attachment changes (weight, a suppressor's sound range).
 
 ## M4: Physics
