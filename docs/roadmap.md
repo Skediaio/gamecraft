@@ -262,6 +262,12 @@ from the engine, as mechanisms with no game in them, in the order they are sched
     All of it is render-side: the simulation only gives the moment of the event, so the pinned
     hashes stay. The keyframe playback in the renderer may need VisionCraft, as the shadow
     filter did. Skinned characters stay in M6.
+14. **Attachments as separate models on sockets:** a weapon (or any model) names its mount points
+    as glTF nodes, for example `socket_rail_top`, `socket_rail_left` and `socket_muzzle`.
+    An attachment (a sight, a light, a grip, a suppressor) is a model of its own with its own
+    bounds and LOD levels, placed on a socket and drawn as its own item.
+    It can be added, swapped or removed at run time without touching the weapon's model.
+    The simulation can read what an attachment changes (weight, a suppressor's sound range).
 
 ## M4: Physics
 
