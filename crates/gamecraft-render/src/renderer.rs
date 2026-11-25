@@ -11,6 +11,7 @@ use crate::{Camera, Quality, RenderError};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{Picture, PictureRequest, PictureStats};
 use gamecraft_math::{DQuat, DVec3, deg_to_rad};
+use gamecraft_project::model::resolve_uri;
 use gamecraft_world::{
     Character, Entity, EntityId, Environment, HeightField, Model, Plant, Road, Shape, ShapeKind,
     Terrain, TerrainLayer, World,
@@ -313,9 +314,16 @@ pub struct WorldRenderer {
     assets_revision: u64,
     /// The models uploaded, by asset path, kept from one rebuild to the next; or why one
     /// cannot be drawn.
-    models: BTreeMap<String, Result<ResidentModel, String>>,
+    models: BTreeMap<String, Result<ResidentModel, FailedModel>>,
     /// Model uploads so far: one per asset (and again after its files change).
     model_uploads: u64,
+}
+
+/// A model that could not be read or uploaded: why, and the asset files it was being read
+/// from (a new version of one of them tries again, as for a model that was drawn).
+struct FailedModel {
+    why: String,
+    files: Vec<String>,
 }
 
 /// A model on the GPU: its parts (one per material) and everything to free with it.
@@ -528,11 +536,15 @@ impl WorldRenderer {
     }
 
     /// Hands over the bytes of an asset file, by its path inside a pack's `assets/` folder
-    /// (`models/crate.glb`; a `.gltf`'s buffers and images under their own paths, beside it).
-    /// A model whose file this replaces is read and uploaded again at the next
-    /// [`WorldRenderer::sync`]. The host reads the files (the CLI and the window from the open
-    /// project, the browser by fetching them).
+    /// (`models/crate.glb`; a `.gltf`'s buffers under their own paths beside it; the textures
+    /// of the pack's store as `textures/<content-hash>.<ext>`, whatever model refers to them).
+    /// A path with `..` in it is resolved first (`models/../textures/x.png` is
+    /// `textures/x.png`). A model whose file this replaces, or that refers to it, is read and
+    /// uploaded again at the next [`WorldRenderer::sync`]. The host reads the files (the CLI
+    /// and the window from the open project, the browser by fetching them).
     pub fn provide_asset(&mut self, path: &str, bytes: Vec<u8>) {
+        let plain = resolve_uri("", path).unwrap_or_else(|_| path.to_string());
+        let path = plain.as_str();
         if self.asset_files.get(path) == Some(&bytes) {
             return;
         }
@@ -542,7 +554,9 @@ impl WorldRenderer {
             .models
             .iter()
             .filter(|(asset, m)| {
-                *asset == path || m.as_ref().is_ok_and(|m| m.files.iter().any(|f| f == path))
+                *asset == path
+                    || m.as_ref().is_ok_and(|m| m.files.iter().any(|f| f == path))
+                    || m.as_ref().is_err_and(|f| f.files.iter().any(|f| f == path))
             })
             .map(|(asset, _)| asset.clone())
             .collect();
@@ -898,18 +912,49 @@ fn upload_model(
     r: &mut vc::Renderer,
     path: &str,
     files: &BTreeMap<String, Vec<u8>>,
-) -> Result<ResidentModel, String> {
-    let bytes = files.get(path).ok_or(
-        "its file was not handed to the renderer (the host reads it from the open project's \
-         packs; asset.list shows what they hold)",
-    )?;
+) -> Result<ResidentModel, FailedModel> {
+    let not_handed = |why: String, files: Vec<String>| Err(FailedModel { why, files });
+    let bytes = match files.get(path) {
+        Some(bytes) => bytes,
+        None => {
+            return not_handed(
+                "its file was not handed to the renderer (the host reads it from the open \
+                 project's packs; asset.list shows what they hold)"
+                    .to_string(),
+                vec![path.to_string()],
+            );
+        }
+    };
     let folder = gamecraft_project::model::folder_of(path);
     let used = std::cell::RefCell::new(vec![path.to_string()]);
+    // Why a file the model refers to could not be had, for the error (the first reason wins).
+    let missing = std::cell::RefCell::new(None::<String>);
     let data = model::parse(bytes, &|f: &str| {
-        let key = format!("{folder}{f}");
+        // A URI is against the model's folder; a texture of the store is `../textures/...`.
+        let key = match resolve_uri(folder, f) {
+            Ok(inside) => inside,
+            Err(why) => {
+                *missing.borrow_mut() = Some(why);
+                format!("{folder}{f}")
+            }
+        };
         used.borrow_mut().push(key.clone());
-        files.get(&key).cloned()
-    })?;
+        let found = files.get(&key).cloned();
+        if found.is_none() && missing.borrow().is_none() {
+            *missing.borrow_mut() = Some(format!(
+                "its file `{key}` was not handed to the renderer (the host reads the files a \
+                 model refers to from the open project's packs; asset.list shows what they \
+                 hold)"
+            ));
+        }
+        found
+    });
+    let data = match data {
+        Ok(data) => data,
+        Err(e) => {
+            return not_handed(missing.into_inner().unwrap_or(e), used.into_inner());
+        }
+    };
     let mut out = ResidentModel {
         parts: Vec::new(),
         meshes: Vec::new(),
@@ -1009,8 +1054,9 @@ fn upload_model(
         }
     }
     if let Some(why) = fail {
+        let files = out.files.clone();
         out.free(r);
-        return Err(why);
+        return Err(FailedModel { why, files });
     }
     if !notes.is_empty() {
         out.note = Some(format!(
@@ -1280,7 +1326,7 @@ impl Scene<'_> {
     fn models(
         &mut self,
         world: &World,
-        resident: &mut BTreeMap<String, Result<ResidentModel, String>>,
+        resident: &mut BTreeMap<String, Result<ResidentModel, FailedModel>>,
         files: &BTreeMap<String, Vec<u8>>,
         uploads: &mut u64,
         units: Option<UnitMeshes>,
@@ -1341,7 +1387,8 @@ impl Scene<'_> {
                         });
                     }
                 }
-                Some(Err(why)) => {
+                Some(Err(failed)) => {
+                    let why = &failed.why;
                     let named: Vec<String> = entities
                         .iter()
                         .take(MAX_NAMED_ENTITIES)

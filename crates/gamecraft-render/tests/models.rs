@@ -407,3 +407,150 @@ fn a_character_with_a_missing_model_is_a_magenta_box_that_follows_it() {
         "magenta where the character went: {red} {green} {blue}"
     );
 }
+
+// ------------------------------------------------------------------------ the texture store
+
+/// The bytes of the first image embedded in the demo GLB `glb`.
+fn embedded_image(glb: &[u8]) -> Vec<u8> {
+    let word = |at: usize| -> usize {
+        u32::from_le_bytes([glb[at], glb[at + 1], glb[at + 2], glb[at + 3]]) as usize
+    };
+    let json_len = word(12);
+    let doc: serde_json::Value = serde_json::from_slice(&glb[20..20 + json_len]).unwrap();
+    let view = &doc["bufferViews"][doc["images"][0]["bufferView"].as_u64().unwrap() as usize];
+    let at = view["byteOffset"].as_u64().unwrap() as usize;
+    let len = view["byteLength"].as_u64().unwrap() as usize;
+    let bin = 20 + json_len + 8;
+    glb[bin + at..bin + at + len].to_vec()
+}
+
+/// The crate made ready for the texture store as the model `path` of a pack: its file and its
+/// texture, as a host hands them to the renderer (paths inside `assets/`).
+fn stored_as(path: &str) -> (Vec<u8>, (String, Vec<u8>)) {
+    let imported = gamecraft_project::textures::import(CRATE, &|_: &str| None, path).unwrap();
+    assert_eq!(imported.textures.len(), 1);
+    let texture = imported.textures[0].clone();
+    (imported.model, (texture.path, texture.bytes))
+}
+
+/// The crate read by the renderer's rule: a URI against the model's folder, then a lookup
+/// among the handed files.
+fn read(
+    path: &str,
+    files: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> Result<model::ModelData, String> {
+    let folder = gamecraft_project::model::folder_of(path);
+    let bytes = files.get(path).cloned().ok_or("the model was not handed")?;
+    model::parse(&bytes, &|f: &str| {
+        gamecraft_project::model::resolve_uri(folder, f)
+            .ok()
+            .and_then(|inside| files.get(&inside).cloned())
+    })
+}
+
+#[test]
+fn a_model_that_refers_to_a_texture_of_the_store_reads_exactly_as_before() {
+    let (model, (texture_path, texture_bytes)) = stored_as("models/crate.glb");
+    assert!(texture_path.starts_with("textures/") && texture_path.ends_with(".png"));
+    // The stored model refers to the texture by a relative URI, and its binary chunk has no image.
+    let image = embedded_image(CRATE);
+    let (json, bin) = gamecraft_project::model::split_glb(&model).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(json).unwrap();
+    assert_eq!(
+        doc["images"],
+        serde_json::json!([{"uri": format!("../{texture_path}")}])
+    );
+    assert!(!bin.unwrap().windows(8).any(|w| w == &image[..8]));
+    // With the texture handed over, the model is the one it was.
+    let files: std::collections::BTreeMap<String, Vec<u8>> = [
+        ("models/crate.glb".to_string(), model.clone()),
+        (texture_path.clone(), texture_bytes.clone()),
+    ]
+    .into_iter()
+    .collect();
+    let m = read("models/crate.glb", &files).unwrap();
+    assert_eq!(m, model::parse(CRATE, &|_: &str| None).unwrap());
+    // A model deeper in the pack refers to it by a longer path; a host that hands the path
+    // as written (`models/../textures/...`) is understood too.
+    let (deep, _) = stored_as("models/houses/deep.glb");
+    let files: std::collections::BTreeMap<String, Vec<u8>> = [
+        ("models/houses/deep.glb".to_string(), deep),
+        (texture_path.clone(), texture_bytes.clone()),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        read("models/houses/deep.glb", &files).unwrap().triangles(),
+        12
+    );
+    // Without the texture: an error that names it.
+    let files: std::collections::BTreeMap<String, Vec<u8>> =
+        [("models/crate.glb".to_string(), model)]
+            .into_iter()
+            .collect();
+    let e = read("models/crate.glb", &files).unwrap_err();
+    assert!(e.contains("../textures/") && e.contains("missing"), "{e}");
+    // A reference that climbs out of assets/ is refused, never followed.
+    let bad = {
+        let (json, _) = gamecraft_project::model::split_glb(CRATE).unwrap();
+        let mut doc: serde_json::Value = serde_json::from_slice(json).unwrap();
+        doc["images"] = serde_json::json!([{"uri": "../../outside.png"}]);
+        gamecraft_project::textures::pack_glb(&serde_json::to_vec(&doc).unwrap(), None).unwrap()
+    };
+    let files: std::collections::BTreeMap<String, Vec<u8>> =
+        [("models/crate.glb".to_string(), bad)]
+            .into_iter()
+            .collect();
+    let e = read("models/crate.glb", &files).unwrap_err();
+    assert!(e.contains("../../outside.png"), "{e}");
+}
+
+#[test]
+fn models_that_share_a_texture_draw_with_it_uploaded_once() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let (mut world, hf) = flat();
+    add_model(&mut world, "A", "models/a.glb", [-3.0, 0.0, 0.0], 20.0, 2.0);
+    add_model(
+        &mut world,
+        "B",
+        "models/houses/b.glb",
+        [3.0, 0.0, 0.0],
+        -20.0,
+        2.0,
+    );
+    let (a, (texture_path, texture_bytes)) = stored_as("models/a.glb");
+    let (b, (again, _)) = stored_as("models/houses/b.glb");
+    assert_eq!(again, texture_path);
+    r.provide_asset("models/a.glb", a);
+    r.provide_asset("models/houses/b.glb", b);
+    // The texture is missing: both are magenta boxes, and the problem names the texture.
+    let problems = r.sync(&world, Some(&hf));
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    for p in &problems {
+        assert!(p.contains(&texture_path) && p.contains("not handed"), "{p}");
+    }
+    // Handed once (by its path, as a host that writes `..` would too): drawn in wood.
+    r.provide_asset(
+        &format!("models/houses/../../{texture_path}"),
+        texture_bytes.clone(),
+    );
+    assert_eq!(r.sync(&world, Some(&hf)), Vec::<String>::new());
+    assert_eq!(r.model_uploads(), 2);
+    for x in [-3.0, 3.0] {
+        let [red, green, blue] = centre(&picture(&mut r, looking_at(x)), 6);
+        assert!(
+            red > 1.3 * blue && green > 0.6 * blue,
+            "wood at {x}: {red} {green} {blue}"
+        );
+    }
+    // The same bytes again change nothing.
+    r.provide_asset(&texture_path, texture_bytes.clone());
+    r.sync(&world, Some(&hf));
+    assert_eq!(r.model_uploads(), 2);
+    // Another texture: both models are read and uploaded again.
+    r.provide_asset(&texture_path, embedded_image(FENCE));
+    assert_eq!(r.sync(&world, Some(&hf)), Vec::<String>::new());
+    assert_eq!(r.model_uploads(), 4);
+}

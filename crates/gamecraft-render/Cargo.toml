@@ -26,3 +26,7 @@ png = { workspace = true }
 # Blocks on wgpu's futures in the native entry points (`headless_gpu`, `WorldRenderer::render`).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = { workspace = true }
+
+[dev-dependencies]
+# The GLB documents a test reads and builds for the texture store (tests/models.rs).
+serde_json = { workspace = true }
