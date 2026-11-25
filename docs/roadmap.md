@@ -254,6 +254,14 @@ from the engine, as mechanisms with no game in them, in the order they are sched
 12. **A world finds its pack's assets:** `view.render` and `project.open` of a world file take the
     pack (`--pack DIR`) or the world records which pack it belongs to, so models do not fall back
     to placeholder cubes.
+13. **Weapon animation without a skeleton:** a model's parts move on keyframes, with no skinning.
+    The glTF node animations (translation, rotation, scale) are read and played. Clips are
+    started by events: `fire` on a launcher's shot, `reload` on a reload, `dry` on an empty
+    magazine. Recoil is a short kick on the weapon and the first-person camera that springs back.
+    Muzzle flash is a light and an emissive quad for one or two frames.
+    All of it is render-side: the simulation only gives the moment of the event, so the pinned
+    hashes stay. The keyframe playback in the renderer may need VisionCraft, as the shadow
+    filter did. Skinned characters stay in M6.
 
 ## M4: Physics
 
