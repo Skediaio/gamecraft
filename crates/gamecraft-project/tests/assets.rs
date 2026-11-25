@@ -314,7 +314,9 @@ fn a_model_refers_to_a_texture_of_the_store_which_has_a_record_of_its_own() {
             "assets/textures/0123456789abcdef.png"
         ]
     );
-    assert_eq!(model.bytes, model_size + 100);
+    // A texture is counted once, as its own asset's bytes.
+    assert_eq!(model.bytes, model_size);
+    assert_eq!(texture.bytes, 100);
     assert_eq!(texture.kind(), "texture");
     assert_eq!(texture.record.license, License::CcBy);
     assert_eq!(texture.files, ["assets/textures/0123456789abcdef.png"]);
@@ -417,4 +419,67 @@ fn a_model_may_not_refer_out_of_the_pack_s_assets() {
         .insert("assets/models/bad.glb".into(), "not json".into());
     let e = check_assets(&source).unwrap_err().to_string();
     assert!(e.contains("bad.glb") && e.contains("glTF"), "{e}");
+}
+
+#[test]
+fn a_model_covers_only_the_files_in_its_own_folder() {
+    // `models/a.gltf` refers to files beside it and above it.
+    let gltf = r#"{"asset": {"version": "2.0"}, "buffers": [{"uri": "../shared/a.bin", "byteLength": 4}], "images": [{"uri": "tex/wood.png"}, {"uri": "../sounds/x.ogg"}]}"#;
+    let files = [
+        ("assets/models/a.gltf", 10),
+        ("assets/models/tex/wood.png", 100),
+        ("assets/shared/a.bin", 4),
+        ("assets/sounds/x.ogg", 8),
+    ];
+    // Neither file outside the model's folder is covered by its record.
+    let e = check_assets(&with_assets(
+        &files,
+        &[
+            ("assets/models/a.gltf", gltf),
+            ("assets/models/a.gltf.license.json", CCBY),
+        ],
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("has no licence record"), "{e}");
+    assert!(
+        e.contains("shared/a.bin") || e.contains("sounds/x.ogg"),
+        "{e}"
+    );
+    // With records of their own they are assets; the one in the model's folder stays covered.
+    let assets = check_assets(&with_assets(
+        &files,
+        &[
+            ("assets/models/a.gltf", gltf),
+            ("assets/models/a.gltf.license.json", CCBY),
+            ("assets/shared/a.bin.license.json", CC0),
+            ("assets/sounds/x.ogg.license.json", CC0),
+        ],
+    ))
+    .unwrap();
+    assert_eq!(assets.len(), 3, "{assets:?}");
+    assert_eq!(assets[0].path, "models/a.gltf");
+    assert_eq!(
+        assets[0].files,
+        [
+            "assets/models/a.gltf",
+            "assets/shared/a.bin",
+            "assets/models/tex/wood.png",
+            "assets/sounds/x.ogg"
+        ]
+    );
+    assert_eq!(assets[1].path, "shared/a.bin");
+    assert_eq!(assets[2].path, "sounds/x.ogg");
+    // A model at the top of assets/ has every other folder as its folder.
+    let top = with_assets(
+        &[("assets/a.gltf", 10), ("assets/sounds/x.ogg", 8)],
+        &[
+            (
+                "assets/a.gltf",
+                r#"{"asset": {"version": "2.0"}, "images": [{"uri": "sounds/x.ogg"}]}"#,
+            ),
+            ("assets/a.gltf.license.json", CC0),
+        ],
+    );
+    assert_eq!(check_assets(&top).unwrap().len(), 1);
 }

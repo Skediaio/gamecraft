@@ -186,10 +186,11 @@ pub struct PackAsset {
     pub path: String,
     /// Its licence record.
     pub record: AssetRecord,
-    /// The pack-relative files it is made of: itself, then (for a `.gltf`) the files it
-    /// refers to, in order.
+    /// The pack-relative files it reads: itself, then the files it refers to, in order (a
+    /// `.gltf`'s buffers and images; the textures of the store included).
     pub files: Vec<String>,
-    /// The bytes of all its files together.
+    /// The bytes of its own files: itself and the files beside it it refers to. A texture of
+    /// the store it refers to is not counted here: it is an asset of its own, counted once.
     pub bytes: u64,
 }
 
@@ -242,7 +243,8 @@ pub fn check_assets(source: &PackSource) -> Result<Vec<PackAsset>, ProjectError>
         }
     }
     // The files the model documents refer to belong to the models (their paths inside assets/,
-    // `..` resolved), unless they are textures of the store: those have records of their own.
+    // `..` resolved) when they lie in the model's own folder; the textures of the store and
+    // files anywhere else have records of their own.
     let mut parts: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut referred = BTreeSet::new();
     for asset in plain.keys().filter(|p| is_model_path(p)) {
@@ -267,7 +269,9 @@ pub fn check_assets(source: &PackSource) -> Result<Vec<PackAsset>, ProjectError>
                     format!("refers to `{prefix}{inside}`, which does not exist in the pack"),
                 ));
             }
-            referred.insert(inside.clone());
+            if !is_texture(&inside) && inside.starts_with(folder) {
+                referred.insert(inside.clone());
+            }
             list.push(inside);
         }
         parts.insert(asset.clone(), list);
@@ -287,7 +291,7 @@ pub fn check_assets(source: &PackSource) -> Result<Vec<PackAsset>, ProjectError>
     for (asset, size) in &plain {
         let record_file = record_path(asset);
         let Some(text) = source.files.get(&record_file) else {
-            if referred.contains(asset) && !is_model_path(asset) && !is_texture(asset) {
+            if referred.contains(asset) && !is_model_path(asset) {
                 continue;
             }
             let what = if is_texture(asset) {
@@ -309,7 +313,9 @@ pub fn check_assets(source: &PackSource) -> Result<Vec<PackAsset>, ProjectError>
         let mut bytes = *size;
         for part in parts.get(asset).into_iter().flatten() {
             files.push(format!("{prefix}{part}"));
-            bytes = bytes.saturating_add(plain.get(part).copied().unwrap_or(0));
+            if !is_texture(part) {
+                bytes = bytes.saturating_add(plain.get(part).copied().unwrap_or(0));
+            }
         }
         out.push(PackAsset {
             path: asset.clone(),
