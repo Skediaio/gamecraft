@@ -163,10 +163,10 @@ pub fn import(
         bytes.to_vec()
     } else {
         object_mut(&mut doc)?.insert("images".into(), Value::Array(new_images));
+        refuse_unknown_references(&doc)?;
         let dropped: BTreeSet<usize> = image_views.difference(&accessor_views).copied().collect();
         let mut chunk_bytes: Option<Vec<u8>> = chunk.map(<[u8]>::to_vec);
         if !dropped.is_empty() {
-            refuse_foreign_view_refs(&doc)?;
             let buffers = buffer_bytes(&doc, chunk, resource);
             let rewritten = strip_views(&mut doc, &buffers, &dropped)?;
             // The binary chunk goes with its buffer, when that keeps no view.
@@ -217,6 +217,7 @@ pub fn import(
         };
         let decoded = decode_uri(uri)?;
         let inside = resolve_uri(folder, &decoded)?;
+        // The most specific reason first.
         if is_texture(&inside) {
             return Err(format!(
                 "the model keeps a buffer at `{inside}`, inside the pack's texture store \
@@ -233,6 +234,13 @@ pub fn import(
             return Err(format!(
                 "the model keeps a buffer at `{inside}`, which is the name of a licence record \
                  (`*{RECORD_SUFFIX}`); rename the buffer file"
+            ));
+        }
+        if !inside.starts_with(folder) {
+            return Err(format!(
+                "the model keeps a buffer at `{inside}`, outside its own folder `{folder}`; move \
+                 the file beside the model: a file there is covered by the model's record, \
+                 anywhere else it needs one of its own"
             ));
         }
         if files.iter().any(|f| f.uri == decoded) {
@@ -523,39 +531,45 @@ fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// Refuses a document where anything but the accessors (and the images, gone by now) names a
-/// buffer view: an extension object (`EXT_meshopt_compression`, `KHR_draco_mesh_compression`,
-/// a buffer's fallback view) would keep the index of a view the import drops.
-fn refuse_foreign_view_refs(doc: &Value) -> Result<(), String> {
+/// Refuses a document the import cannot rewrite with what it knows: one that names
+/// `EXT_meshopt_compression` (its geometry is compressed; the engine cannot read it), one with
+/// an extension object that names a buffer, or one with a key that names a buffer view outside
+/// the places the import renumbers itself (the view list, an accessor's own view, a sparse
+/// accessor's two).
+fn refuse_unknown_references(doc: &Value) -> Result<(), String> {
     let mut found = Vec::new();
-    walk_view_refs(doc, String::new(), &mut found);
+    let named = |k: &str| {
+        doc.get(k)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+    };
+    if named("extensionsUsed")
+        .chain(named("extensionsRequired"))
+        .any(|n| n == "EXT_meshopt_compression")
+    {
+        found.push(
+            "`EXT_meshopt_compression` (in `extensionsUsed` or `extensionsRequired`: compressed \
+             geometry)"
+                .to_string(),
+        );
+    }
+    walk_buffer_refs(doc, String::new(), &mut found);
     if found.is_empty() {
         return Ok(());
     }
-    let used: Vec<&str> = doc
-        .get("extensionsUsed")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
-    let used = if used.is_empty() {
-        String::new()
-    } else {
-        format!(" (`extensionsUsed`: {})", used.join(", "))
-    };
     Err(format!(
-        "its images lie in buffer views the import would drop, but {} name{} a buffer view \
-         besides the accessors{used}; the import cannot renumber those: export the model with \
-         its images as files beside it, or without that extension",
-        found.join(", "),
-        if found.len() == 1 { "s" } else { "" }
+        "the import would rewrite it, but the engine cannot read or renumber what it names: \
+         {}; export the model uncompressed, with its images as files beside it",
+        found.join("; ")
     ))
 }
 
-/// Collects the JSON paths of the keys that name a buffer view outside the places the import
-/// renumbers: the view list itself, an accessor's own view and a sparse accessor's two.
-fn walk_view_refs(value: &Value, path: String, out: &mut Vec<String>) {
+/// Collects what in `value` names a buffer or a buffer view outside the places the import
+/// handles: a key that names a buffer view elsewhere, and an extension object with a `buffer`
+/// key (wherever it sits: a view's, a buffer's, a primitive's).
+fn walk_buffer_refs(value: &Value, path: String, out: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
             for (key, v) in map {
@@ -567,14 +581,23 @@ fn walk_view_refs(value: &Value, path: String, out: &mut Vec<String>) {
                 if key.to_ascii_lowercase().contains("bufferview")
                     && !renumbered_view_ref(&path, key)
                 {
-                    out.push(name.clone());
+                    out.push(format!("{name} names a buffer view"));
                 }
-                walk_view_refs(v, name, out);
+                if key == "extensions"
+                    && let Some(extensions) = v.as_object()
+                {
+                    for (extension, object) in extensions {
+                        if object.as_object().is_some_and(|o| o.contains_key("buffer")) {
+                            out.push(format!("{name}.{extension} names a buffer"));
+                        }
+                    }
+                }
+                walk_buffer_refs(v, name, out);
             }
         }
         Value::Array(items) => {
             for (i, v) in items.iter().enumerate() {
-                walk_view_refs(v, format!("{path}[{i}]"), out);
+                walk_buffer_refs(v, format!("{path}[{i}]"), out);
             }
         }
         _ => {}

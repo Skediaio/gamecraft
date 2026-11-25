@@ -477,22 +477,62 @@ fn a_gltf_s_files_are_named_and_placed_inside_assets() {
         let e = import(text.as_bytes(), &found, to).unwrap_err();
         assert!(e.contains(wants), "{uri} -> {to}: {e}");
     }
-    // One that climbs but stays inside assets/: a model in models/ with its buffer at the top.
+    // A buffer outside the model's own folder: the gate would want a record for it, so the
+    // import refuses it and says to move the file beside the model.
     let (text, bin) = gltf(
         json!({"uri": "tex/wood.png"}),
-        |len| json!({"uri": "../house.bin", "byteLength": len}),
+        |len| json!({"uri": "../shared/house.bin", "byteLength": len}),
     );
     let found = |r: &str| {
         (r == "tex/wood.png")
             .then(|| wood.clone())
-            .or((r == "../house.bin").then(|| bin.clone()))
+            .or((r == "../shared/house.bin").then(|| bin.clone()))
+    };
+    let e = import(text.as_bytes(), &found, "models/house.gltf").unwrap_err();
+    assert!(
+        e.contains("shared/house.bin") && e.contains("beside the model"),
+        "{e}"
+    );
+    // In a folder of the model's own folder it is fine, and at the top of assets/ every
+    // folder is the model's.
+    let (text, bin) = gltf(
+        json!({"uri": "tex/wood.png"}),
+        |len| json!({"uri": "sub/house.bin", "byteLength": len}),
+    );
+    let found = |r: &str| {
+        (r == "tex/wood.png")
+            .then(|| wood.clone())
+            .or((r == "sub/house.bin").then(|| bin.clone()))
     };
     let i = import(text.as_bytes(), &found, "models/house.gltf").unwrap();
     assert_eq!(
         files_of(&i),
-        [("../house.bin".to_string(), "house.bin".to_string(), None)]
+        [(
+            "sub/house.bin".to_string(),
+            "models/sub/house.bin".to_string(),
+            None
+        )]
     );
     assert_eq!(read_back(&i, "models/", &found).unwrap(), i.summary);
+    let (text, bin) = gltf(
+        json!({"uri": "tex/wood.png"}),
+        |len| json!({"uri": "shared/house.bin", "byteLength": len}),
+    );
+    let found = |r: &str| {
+        (r == "tex/wood.png")
+            .then(|| wood.clone())
+            .or((r == "shared/house.bin").then(|| bin.clone()))
+    };
+    let i = import(text.as_bytes(), &found, "house.gltf").unwrap();
+    assert_eq!(
+        files_of(&i),
+        [(
+            "shared/house.bin".to_string(),
+            "shared/house.bin".to_string(),
+            None
+        )]
+    );
+    assert_eq!(read_back(&i, "", &found).unwrap(), i.summary);
     // A model that cannot be read is refused first, with why.
     let e = import(&CRATE[..CRATE.len() / 2], &none, "models/x.glb").unwrap_err();
     assert!(e.contains("cut short"), "{e}");
@@ -738,48 +778,69 @@ fn a_buffer_that_keeps_no_view_is_dropped_and_the_buffers_renumbered() {
 }
 
 #[test]
-fn an_extension_that_names_buffer_views_stops_the_import() {
+fn a_document_the_engine_cannot_track_is_refused() {
     let wood = embedded_image(CRATE);
+    // The real layout of EXT_meshopt_compression: the view carries the extension with
+    // `buffer`, `byteOffset` and `byteLength` (no `bufferView`), a buffer carries the
+    // fallback. The engine cannot read the geometry; the import says so.
     let (mut doc, bin) = model(&wood, "x", false, false);
     doc["extensionsUsed"] = json!(["EXT_meshopt_compression"]);
-    doc["meshes"][0]["primitives"][0]["extensions"] =
-        json!({"EXT_meshopt_compression": {"bufferView": 2, "count": 3}});
+    doc["bufferViews"][0]["extensions"] = json!({"EXT_meshopt_compression": {
+        "buffer": 0, "byteOffset": 0, "byteLength": 36, "count": 3, "byteStride": 12}});
+    doc["buffers"][0]["extensions"] = json!({"EXT_meshopt_compression": {"fallback": 0}});
     let source = pack_glb(&serde_json::to_vec(&doc).unwrap(), Some(&bin)).unwrap();
     let e = import(&source, &none, "models/x.glb").unwrap_err();
-    assert!(
-        e.contains("EXT_meshopt_compression")
-            && e.contains("bufferView")
-            && e.contains("meshes[0]"),
-        "{e}"
-    );
-    // The same model with its image as a file drops no view and needs no renumbering.
+    assert!(e.contains("EXT_meshopt_compression"), "{e}");
+    // With its image as a file nothing would be renumbered, and still the geometry cannot
+    // be read: refused too.
     let (text, bin) = gltf(
         json!({"uri": "tex/wood.png"}),
         |len| json!({"uri": "house.bin", "byteLength": len}),
     );
     let mut doc: Value = serde_json::from_str(&text).unwrap();
-    doc["extensionsUsed"] = json!(["EXT_meshopt_compression"]);
-    doc["meshes"][0]["primitives"][0]["extensions"] =
-        json!({"EXT_meshopt_compression": {"bufferView": 1, "count": 3}});
+    doc["extensionsRequired"] = json!(["EXT_meshopt_compression"]);
     let found = |r: &str| {
         (r == "tex/wood.png")
             .then(|| wood.clone())
             .or((r == "house.bin").then(|| bin.clone()))
     };
-    let i = import(&serde_json::to_vec(&doc).unwrap(), &found, "models/x.gltf").unwrap();
-    assert_eq!(
-        json_of_text(&i.model)["meshes"][0]["primitives"][0]["extensions"]["EXT_meshopt_compression"]
-            ["bufferView"],
-        1
-    );
-    // A buffer extension's fallback buffer view counts too.
+    let e = import(&serde_json::to_vec(&doc).unwrap(), &found, "models/x.gltf").unwrap_err();
+    assert!(e.contains("EXT_meshopt_compression"), "{e}");
+    // Any other extension object that names a buffer is refused, naming where.
     let (mut doc, bin) = model(&wood, "x", false, false);
-    doc["buffers"][0]["extensions"] = json!({"EXT_meshopt_compression": {"fallbackBufferView": 2}});
+    doc["extensionsUsed"] = json!(["X_buffer_user"]);
+    doc["meshes"][0]["primitives"][0]["extensions"] = json!({"X_buffer_user": {"buffer": 0}});
+    let source = pack_glb(&serde_json::to_vec(&doc).unwrap(), Some(&bin)).unwrap();
+    let e = import(&source, &none, "models/x.glb").unwrap_err();
+    assert!(
+        e.contains("X_buffer_user") && e.contains("meshes[0].primitives[0].extensions"),
+        "{e}"
+    );
+    // So is a key that names a buffer view outside the accessors and the images.
+    let (mut doc, bin) = model(&wood, "x", false, false);
+    doc["meshes"][0]["primitives"][0]["extensions"] =
+        json!({"X_view_user": {"bufferView": 2, "count": 3}});
+    let source = pack_glb(&serde_json::to_vec(&doc).unwrap(), Some(&bin)).unwrap();
+    let e = import(&source, &none, "models/x.glb").unwrap_err();
+    assert!(e.contains("bufferView") && e.contains("meshes[0]"), "{e}");
+    let (mut doc, bin) = model(&wood, "x", false, false);
+    doc["buffers"][0]["extensions"] = json!({"X_fallback": {"fallbackBufferView": 2}});
     let source = pack_glb(&serde_json::to_vec(&doc).unwrap(), Some(&bin)).unwrap();
     let e = import(&source, &none, "models/x.glb").unwrap_err();
     assert!(
         e.contains("fallbackBufferView") && e.contains("buffers[0]"),
         "{e}"
+    );
+    // An extension that names neither (a material's emissive strength) is no problem.
+    let (mut doc, bin) = model(&wood, "x", false, false);
+    doc["extensionsUsed"] = json!(["KHR_materials_emissive_strength"]);
+    doc["materials"][0]["extensions"] =
+        json!({"KHR_materials_emissive_strength": {"emissiveStrength": 3.0}});
+    let source = pack_glb(&serde_json::to_vec(&doc).unwrap(), Some(&bin)).unwrap();
+    let i = import(&source, &none, "models/x.glb").unwrap();
+    assert_eq!(
+        json_of(&i.model)["materials"][0]["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"],
+        3.0
     );
 }
 

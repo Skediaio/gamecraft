@@ -789,3 +789,38 @@ fn a_store_file_replaced_by_hand_is_refused() {
         "nothing is written"
     );
 }
+
+#[test]
+fn a_buffer_outside_the_model_s_folder_is_refused_and_nothing_is_written() {
+    let (dir, mut h) = project("assets-buffer-outside");
+    let (wood, _) = demo_images();
+    // The source model in its own folder, its buffer one folder up.
+    fs::create_dir_all(dir.path().join("downloads/src/tex")).unwrap();
+    fs::create_dir_all(dir.path().join("downloads/shared")).unwrap();
+    let (text, bin) = gltf_with_files("tex/wood.png", "../shared/house.bin", "house");
+    fs::write(dir.path().join("downloads/src/house.gltf"), &text).unwrap();
+    fs::write(dir.path().join("downloads/shared/house.bin"), &bin).unwrap();
+    fs::write(dir.path().join("downloads/src/tex/wood.png"), &wood).unwrap();
+    let e = err(
+        &mut h,
+        "asset.import",
+        json!({"file": "downloads/src/house.gltf", "to": "models/house.gltf",
+               "license": "CC0-1.0", "author": "Ada", "source_url": "https://example.org/house"}),
+    );
+    assert!(
+        e.contains("shared/house.bin") && e.contains("beside the model"),
+        "{e}"
+    );
+    // Nothing was written: not the buffer, not the model, not the texture.
+    assert!(!dir.path().join("game/assets/shared").exists());
+    assert!(!dir.path().join("game/assets/models").exists());
+    assert!(!dir.path().join("game/assets/textures").exists());
+    let list = ok(&mut h, "asset.list", json!({}));
+    assert_eq!(
+        (
+            list["assets"].as_array().unwrap().len(),
+            list["textures"].as_array().unwrap().len()
+        ),
+        (0, 0)
+    );
+}

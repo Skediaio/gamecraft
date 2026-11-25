@@ -41,9 +41,12 @@ waited for, so a texture that arrives later (the browser fetches one by one) wak
 The views that held only images leave the model, and only those: a buffer that loses a view is
 rebuilt from the views it keeps (a `.glb`'s chunk, a `.gltf`'s buffer file alike), one that keeps
 none goes, one that loses nothing is copied as it came. Renumbering buffer views is safe only
-where the engine knows every reference: a document where anything but the accessors and the images
-names one (an extension such as `EXT_meshopt_compression`, a buffer's fallback view) is refused
-with a sentence, not guessed at. A buffer file's `byteLength` is touched only when the import
+where the engine knows every reference: a rewritten model is refused when its document names
+`EXT_meshopt_compression` (compressed geometry the engine cannot read), when an extension object
+anywhere names a buffer, or when anything but the accessors and the images names a buffer view,
+with a sentence, not guessed at. A model's buffers must live in its own folder, where the gate
+lets its record cover them: an import refuses one anywhere else instead of writing a file the
+next open would refuse the pack for. A buffer file's `byteLength` is touched only when the import
 rewrites that file. The licence gate lets a model's record cover the files it names inside its
 own folder only: a `..` reference reaches the texture store (records of their own) or a file
 that must bring its record, so a model cannot cover a folder it does not live in. A model's
