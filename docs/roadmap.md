@@ -248,6 +248,12 @@ from the engine, as mechanisms with no game in them, in the order they are sched
 9. **Filtered shadows** (PCF, soft edges) instead of stair-stepped shadow edges at eye level.
 10. **Water as a surface kind in the simulation:** a character in water wades (slower, not
     standing on the ground); part of the water item above.
+11. **Collision from a model's own geometry:** per-mesh or convex-part colliders, or a collision
+    mesh shipped in the glTF (nodes named `*-collider`), so a building can be walked under and
+    onto (see also *Model collision finer than the bounding box* above).
+12. **A world finds its pack's assets:** `view.render` and `project.open` of a world file take the
+    pack (`--pack DIR`) or the world records which pack it belongs to, so models do not fall back
+    to placeholder cubes.
 
 ## M4: Physics
 
