@@ -8,6 +8,36 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-24: Shared textures are files of the pack, named by their content hash
+
+Every imported glTF model embedded its own copy of every image: a pack of 29 models sharing four
+texture sets was 20.6 MiB, 18 of them the same 12 JPEGs, and a district of house variants would
+have grown with its variants for no visual gain. `asset.import` now takes a model's images into
+a pack-level texture store, `assets/textures/<content-hash>.<ext>`, one file per distinct
+image, and rewrites the model so that each image refers to it by a relative URI
+(`../textures/<name>`), as glTF files refer to files beside them and as engines share images
+between materials (Unity's and Godot's textures are assets of their own that materials
+reference; glTF tooling deduplicates textures by content into a folder). A model without images
+is stored as it came; models with embedded images, from before, load as before.
+
+Chosen over a registry file that maps hashes to files (the file name is the registry, and the
+licence gate already checks files); over converting every model to `.gltf` with a `.bin` (two
+files per model and new paths for existing packs, where the format lets a `.glb` refer to
+images outside it); over keying the store by image name (names collide and change, bytes do
+not). The hash is FNV-1a, 64 bits, the workspace's own `gamecraft_math::StateHasher`: a pack
+holds a few hundred textures at most, where a collision's odds are negligible, and an import
+checks an existing file of the store against its name, so one is refused rather than reused.
+A cryptographic hash (`blake3`) is the upgrade should packs ever be merged from untrusted
+sources; the names would change with it.
+
+A texture is an asset with a licence record of its own, so `asset.credits` names it once
+however many models use it, and its record may differ from a model's (a CC-BY texture set on
+CC0 models): the first import of an image writes it, a later one keeps it. The URIs climb with
+`..`, so the gate and the renderer resolve a URI against the model's folder inside `assets/`
+(`gamecraft_project::model::resolve_uri`) instead of refusing `..` outright; the rule that a
+model refers to nothing outside `assets/` stands. A failed model keeps the list of files it
+waited for, so a texture that arrives later (the browser fetches one by one) wakes it.
+
 ### 2026-11-23: Roads are a component draped on the terrain, overlaps ordered by a tier
 
 A real-city pack laid its streets as about 55 000 yaw-only boxes; on slopes every box was a step,

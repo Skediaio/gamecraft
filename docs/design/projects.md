@@ -277,7 +277,9 @@ Built 2026-11-19 (M3): the `model` component, licence records with the gate when
 `asset.import`, `asset.list` and `asset.credits` (`gamecraft-automation/src/assets.rs`), models
 drawn with their PBR materials and textures (`gamecraft-render/src/model.rs`), solid models in
 the simulation, `examples/assets-demo` (a pack with a generated crate and fence) and three crates
-as cover in the Skirmish's village.
+as cover in the Skirmish's village. Added 2026-11-24: the **texture store**, the images the
+models of a pack share stored once (`gamecraft-project/src/textures.rs`;
+`decisions.md`, *Shared textures are files of the pack*).
 
 - **The component.** `{"type": "model", "asset": "models/crate.glb", "scale"?: 1, "solid"?:
   false, "collider"?: "box" | "none"}`: `asset` is a path inside a pack's `assets/` folder (1 to
@@ -304,23 +306,53 @@ as cover in the Skirmish's village.
   "author", "source_url", "title"?, "changes"?}` (author and source not empty, texts at most
   2000 characters). Loading a pack refuses, naming the file: an asset without a record, a record
   with another licence (or not a record), a record whose asset does not exist, a file name that
-  is not a plain asset path, a `.gltf` that refers to a file that is missing or outside its
-  folder. The files a `.gltf` refers to (buffers, images) belong to it and need no record of
-  their own; any other file needs one. A later pack's asset replaces an earlier one's of the
-  same path (`Project::assets`). The host lists `assets/` recursively (16 folders deep at most,
-  links out of the pack refused) and reads the records and `.gltf` documents as text; the
-  binary files are read when measured and when a renderer needs them.
-- **Commands.** `asset.import {file, to, license, author, source_url, title?, changes?}` reads
-  and measures the model before it writes anything (a broken one is refused), refuses a `to`
-  that exists, copies the file (and a `.gltf`'s files beside it, from inside the read root) and
-  writes the record. `changes` is an addition to the brief's parameters: CC BY asks for it.
-  `asset.list` and `asset.credits` as in `control-protocol.md`. The three are native only.
+  is not a plain asset path, a model that refers to a file that is missing, is not a plain path,
+  or climbs out of `assets/`. A URI of a glTF document is against the document's folder
+  (`models/`), with `..` resolved (`gamecraft_project::model::resolve_uri`): a model in
+  `models/` names a texture of the store as `../textures/<name>`, and one at the top of
+  `assets/` as `textures/<name>`. The files a `.gltf` refers to (its buffers, images beside it)
+  belong to it and need no record of their own; the textures of the store and any other file
+  need one. A later pack's asset replaces an earlier one's of the same path (`Project::assets`).
+  The host lists `assets/` recursively (16 folders deep at most, links out of the pack refused)
+  and reads for the gate the records, the `.gltf` documents and the JSON chunks of the `.glb`
+  files (only the chunk, `glb_json_len`) as text; the binary files are read when measured and
+  when a renderer needs them.
+- **The texture store.** `assets/textures/<content-hash>.<png | jpg>`, one file per distinct
+  image. Every glTF model used to embed its own copy of every image: a pack of 29 models was
+  20.6 MiB, 18 of them the same 12 JPEGs. `textures::import` now takes a model's images, however
+  they come (a buffer view of a `.glb`, a file beside a `.gltf`, a buffer file, a base64 `data:`
+  URI), stores each once keyed by the hash of its bytes, and rewrites the document so each image
+  is a URI to the store; a `.glb`'s binary chunk loses the image views (the other views are
+  copied into a new chunk and the accessors renumbered), a `.gltf` keeps its buffers as files
+  beside it. The file that comes back reads exactly as the one that went in (checked by the
+  import: same triangles, bounds and counts), so a model draws as before, and a model without
+  images is stored as it came. The hash is FNV-1a, 64 bits, the workspace's own
+  `gamecraft_math::StateHasher`: enough to tell a pack's few hundred textures apart, and an
+  import checks an existing file of the store against its name (a file replaced or renamed by
+  hand is refused). A texture is an asset with a record of its own: `asset.import` writes it
+  from its `textures` parameter (the model's licence, author and source for one left out), the
+  first import of an image sets it and a later one reuses it. Models with embedded images, imported before the
+  store existed or written by hand, load as before. Limits: the gate checks references pack by
+  pack, so a mod's model that shares a base pack's texture gets its own copy in the mod; an
+  image inside a `.gltf`'s buffer file is copied to the store but also stays in that file.
+- **Commands.** `asset.import {file, to, license, author, source_url, title?, changes?,
+  textures?}` reads and measures the model before it writes anything (a broken one is refused),
+  refuses a `to` that exists or lies under `textures/`, takes the images into the store (a new
+  one with its record, one the pack has reused once its bytes match its name and it has its
+  record), copies the file and a `.gltf`'s buffers beside it (from inside the read root, under
+  their path inside `assets/`) and writes the record. The answer lists each texture with
+  `stored` (new or reused). `changes` is an addition to the brief's parameters: CC BY asks for
+  it. `asset.list` lists the store apart (`textures`, each once with the models that refer to
+  it) and `asset.credits` names a texture once however many models use it, as in
+  `control-protocol.md`. The three are native only.
 - **Rendering.** The renderer is handed the bytes (`WorldRenderer::provide_asset(path, bytes)`,
-  paths inside `assets/`): `view.render` makes the host hand the files of the models shown to
-  its `Pictures` first (each once per opened project; `Pictures::provide_asset`), the window's
+  paths inside `assets/`: a model, a `.gltf`'s buffers beside it, the textures of the store;
+  `..` in a path is resolved): `view.render` makes the host hand the files of the models shown
+  to its `Pictures` first (each once per opened project; `Pictures::provide_asset`), the window's
   game does the same before every frame (`gamecraft PROJECT` opens a project folder), and the
-  browser fetches them from `?assets=<url>` or the `assets/` folder beside `?world=<url>`. A
-  model is read once per asset (`gltf`, opened through `gamecraft_project::model::open`, which
+  browser fetches them from `?assets=<url>` or the `assets/` folder beside `?world=<url>`
+  (the files a `.glb` refers to too). A model's URIs are resolved against its folder and looked
+  up among the handed files (`resolve_uri`). A model is read once per asset (`gltf`, opened through `gamecraft_project::model::open`, which
   splits the GLB itself and checks the indices and accessors the `gltf` crate's reader would
   otherwise panic on), its PNG and JPEG textures decoded with `image` (at most 8192 pixels a
   side), one mesh and one material per glTF material, and drawn as one item per asset with an
@@ -332,9 +364,10 @@ as cover in the Skirmish's village.
   double-sided, as VisionCraft does; blend blended), double-sided; a material named like glass
   is the renderer's thin glass. Not read: emissive textures (the renderer's material has no
   emissive map), texture transforms, skins and animation, `KHR_materials_transmission` (the
-  workspace builds `gltf` without it), data: URIs. A missing or broken model is a small magenta
-  box (0.5 m times the scales) at each entity and one problem line naming the asset, why and
-  the entities.
+  workspace builds `gltf` without it), data: URIs (an import turns data: images into files of
+  the store). A missing or broken model, or one whose buffer or texture was not handed, is a
+  small magenta box (0.5 m times the scales) at each entity and one problem line naming the
+  asset, the file and the entities; it is read again when a file it waited for arrives.
 
 ## Open
 
