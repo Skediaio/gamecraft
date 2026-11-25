@@ -186,3 +186,30 @@ fn the_bounds_of_solid_models_are_part_of_the_state_hash() {
     plain.set_model_bounds(bounds());
     assert_eq!(Sim::new(plain).unwrap().state_hash(), before);
 }
+
+#[test]
+fn the_distances_of_a_model_s_levels_are_no_part_of_the_state_hash() {
+    // What only changes a picture (where a model changes level, where it stops being drawn)
+    // does not decide what moves next.
+    let make = |lod: bool| {
+        let mut world = flat_world(0.0);
+        let id = with_model(&mut world, [0.0, 0.0, -4.0], 0.0, true, ModelCollider::Box);
+        if lod {
+            let mut m = world.entity(id).unwrap().model().unwrap().clone();
+            m.lod_distances_m = Some(vec![40.0, 150.0]);
+            m.draw_distance_m = Some(800.0);
+            world
+                .entity_mut(id)
+                .unwrap()
+                .set_component(Component::Model(m));
+        }
+        world.set_model_bounds(bounds());
+        let text = world.to_json().unwrap();
+        let hash = Sim::new(world).unwrap().state_hash();
+        (hash, text)
+    };
+    let (plain, plain_text) = make(false);
+    let (lod, lod_text) = make(true);
+    assert_ne!(plain_text, lod_text, "the two worlds differ in their files");
+    assert_eq!(plain, lod, "but not in what the simulation hashes");
+}

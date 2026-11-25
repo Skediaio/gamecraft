@@ -1130,7 +1130,8 @@ impl Sim {
 
 /// The hash of a world's static content: its JSON text with every character's position and
 /// rotation set to zero, since those move and are hashed per tick by [`Sim::state_hash`], and
-/// the derived bounds of the model assets that collide.
+/// the derived bounds of the model assets that collide. What only changes a picture is left
+/// out: the distances at which a model changes level of detail and stops being drawn.
 fn static_hash(world: &World) -> Result<u64, SimError> {
     let mut still = world.clone();
     let characters: Vec<EntityId> = world
@@ -1142,6 +1143,25 @@ fn static_hash(world: &World) -> Result<u64, SimError> {
         if let Some(entity) = still.entity_mut(id) {
             entity.position = [0.0; 3];
             entity.rotation_y_deg = 0.0;
+        }
+    }
+    let drawn_far: Vec<EntityId> = world
+        .entities()
+        .filter(|e| {
+            e.model()
+                .is_some_and(|m| m.lod_distances_m.is_some() || m.draw_distance_m.is_some())
+        })
+        .map(|e| e.id)
+        .collect();
+    for id in drawn_far {
+        if let Some(entity) = still.entity_mut(id)
+            && let Some(model) = entity.model().cloned()
+        {
+            entity.set_component(gamecraft_world::Component::Model(gamecraft_world::Model {
+                lod_distances_m: None,
+                draw_distance_m: None,
+                ..model
+            }));
         }
     }
     let text = still
