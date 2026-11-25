@@ -149,7 +149,10 @@ generator and its sources and the cells are committed (`guide/generated-worlds.m
 - **`entity.remove_many {ids}`** (one pass, checked once) because `entity.remove` per entity
   walks the world once (a removal makes the session validate every entity, and
   `World::remove_entity` scans for children): removing a layer of a hundred thousand one by one
-  took over an hour; in one command it takes seconds.
+  took over an hour; in one command it takes seconds. An id or a name that no entity has is an
+  error naming it: an id used to be skipped in silence, so a typo in a generated list removed
+  nothing and said nothing (a review fix of the same day). The bake passes ids it has just
+  read from the document, so a re-run never meets one that is gone.
 
 ### 2026-11-25: Models change level per ground cell, at distances from the file, the component or their size
 

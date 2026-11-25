@@ -8,7 +8,7 @@ use crate::error::{CommandError, bad, failed};
 use crate::params::{Params, component};
 use crate::session::{Edit, Handler, Registration};
 use crate::span::{Measured, Span};
-use crate::spec::{CommandSpec, ParamType as T, param, spec};
+use crate::spec::{CommandSpec, ParamType as T, kind_of, param, spec};
 use gamecraft_world::limits::{MAX_COORDINATE_M, SCALE_MAX, SCALE_MIN};
 use gamecraft_world::{Component, Entity, EntityDraft, EntityId};
 use serde_json::{Map, Value, json};
@@ -388,20 +388,23 @@ fn remove(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
     Ok(Value::Null)
 }
 
+/// Most absent ids `entity.remove_many` names in its error; the rest are counted.
+const MAX_NAMED_ABSENT: usize = 10;
+
 fn remove_many_spec() -> CommandSpec {
     spec(
         "entity.remove_many",
         "Remove Entities",
         "Removes every entity of `ids`, and the entities that belong to them (a prefab's \
-         children); an id that does not exist is skipped, a name that does not exist is an \
-         error. One undo step, checked once, whatever the number: for a layer, a selection, a \
+         children); an id or a name that no entity has is an error naming it, and nothing \
+         goes. One undo step, checked once, whatever the number: for a layer, a selection, a \
          generated set, where entity.remove one by one walks the world once per entity.",
         vec![
             param(
                 "ids",
                 T::Array,
-                "[entity, ...]: each an entity's id as a number, or its name as a string; 1 to \
-             1000000 of them.",
+                "[entity, ...]: each an entity's id as a number (a whole number from 1), or its \
+                 name as a string; 1 to 1000000 of them.",
             )
             .required(),
         ],
@@ -422,15 +425,26 @@ fn remove_many(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError
         )));
     }
     let mut ids = Vec::with_capacity(items.len());
+    let mut absent: Vec<String> = Vec::new();
     for item in items {
         match item {
-            Value::Number(n) => {
-                if let Some(id) = n.as_u64()
-                    && edit.world.entity(EntityId(id)).is_some()
-                {
-                    ids.push(EntityId(id));
+            // An id, like a name: it must be an entity's.
+            Value::Number(n) => match n.as_u64().filter(|id| *id >= 1) {
+                Some(id) => {
+                    if edit.world.entity(EntityId(id)).is_some() {
+                        ids.push(EntityId(id));
+                    } else {
+                        absent.push(id.to_string());
+                    }
                 }
-            }
+                None => {
+                    return Err(bad(format!(
+                        "`ids` must be a list of entities: each an id (a whole number from 1) or \
+                         a name (a string), got {}",
+                        kind_of(item)
+                    )));
+                }
+            },
             Value::String(name) => {
                 ids.push(
                     edit.world
@@ -452,6 +466,17 @@ fn remove_many(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError
                 )));
             }
         }
+    }
+    if !absent.is_empty() {
+        let (named, more) = absent.split_at(absent.len().min(MAX_NAMED_ABSENT));
+        let list = named.join(", ");
+        let more = (!more.is_empty()).then(|| format!(" and {} more", more.len()));
+        return Err(bad(format!(
+            "`ids`: no entity has the {}{list}{}; every id must be one of the world's (entity.get, \
+             world.inspect list them)",
+            if absent.len() == 1 { "id " } else { "ids " },
+            more.unwrap_or_default()
+        )));
     }
     let removed = edit.world.remove_entities(&ids);
     Ok(json!({"removed": removed}))

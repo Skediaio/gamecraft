@@ -12,7 +12,7 @@
 
 mod common;
 
-use common::{example, refuse};
+use common::{example, refuse, snapshot};
 use gamecraft_engine::Session;
 use gamecraft_world::{Character, Component, EntityId, Plant, Shape, ShapeKind, World};
 use serde_json::json;
@@ -427,6 +427,55 @@ fn snap_to_ground_moves_one_or_all_and_counts_the_skipped() {
 }
 
 #[test]
+fn remove_many_refuses_an_id_that_is_not_there_like_a_name_that_is_not() {
+    let mut s = example();
+    let before = snapshot(&s);
+    // An id no entity has is an error naming it, as a name no entity has is; nothing goes.
+    refuse(
+        &mut s,
+        "entity.remove_many",
+        json!({"ids": [1, 999_999]}),
+        &["`ids`", "no entity has the id 999999"],
+    );
+    refuse(
+        &mut s,
+        "entity.remove_many",
+        json!({"ids": [999_998, 999_999]}),
+        &["`ids`: no entity has the ids 999998, 999999"],
+    );
+    // At most ten are named, and the rest counted.
+    let absent: Vec<u64> = (2_000_000..2_000_013).collect();
+    refuse(
+        &mut s,
+        "entity.remove_many",
+        json!({"ids": absent}),
+        &[
+            "no entity has the ids 2000000, 2000001",
+            "2000009 and 3 more",
+        ],
+    );
+    assert_eq!(snapshot(&s), before);
+    // A negative, a fractional number and 0 are not ids.
+    for (item, got) in [
+        (json!(-3), "the number -3"),
+        (json!(1.5), "the number 1.5"),
+        (json!(0), "the number 0"),
+    ] {
+        refuse(
+            &mut s,
+            "entity.remove_many",
+            json!({"ids": [1, item]}),
+            &[
+                "`ids` must be a list of entities",
+                "a whole number from 1",
+                got,
+            ],
+        );
+    }
+    assert_eq!(snapshot(&s), before);
+}
+
+#[test]
 fn remove_many_removes_a_set_with_its_children_once_checked() {
     let mut s = example();
     let before = s.document().entity_count();
@@ -450,12 +499,12 @@ fn remove_many_removes_a_set_with_its_children_once_checked() {
         .as_u64()
         .unwrap();
     assert_eq!(s.document().entity_count(), before + 6);
-    // The example world's Oak and Crate by name, the first camp by id, an id that is not
-    // there, and the second camp by id: eight go (each camp takes its two children along).
+    // The example world's Oak and Crate by name, both camps by id: eight go (each camp takes
+    // its two children along).
     assert_eq!(
         s.run(
             "entity.remove_many",
-            &json!({"ids": ["Oak", "Crate", a, 999_999, b]})
+            &json!({"ids": ["Oak", "Crate", a, b]})
         )
         .unwrap(),
         json!({"removed": 8})
