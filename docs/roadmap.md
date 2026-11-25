@@ -188,8 +188,9 @@ the project's `ENGINE-WISHLIST.md`):
   terrain layers are colour plus roughness, with no detail texture or ruts in lanes.
 - **Ambient occlusion** (SSAO or baked per-vertex): facade recesses, lane corners and the ground
   under cars and gates read flat.
-- **Shared textures between model assets:** each glTF embeds its own copy; 18 of 20.6 MiB were
-  repeats. A pack texture registry fixes it.
+- ~~**Shared textures between model assets**~~: done 2026-11-25. `asset.import` moves a model's
+  images into the pack's texture store (`assets/textures/<content hash>`), each with its own
+  licence record, listed once by `asset.list` and `asset.credits` (`docs/design/projects.md`).
 - **Distance LOD and culling for models** (plants have it): about 400 k triangles per view of
   one block, so draw time scales with town size.
 - **Model collision finer than the bounding box:** recessed doorways and balconies are cosmetic.
