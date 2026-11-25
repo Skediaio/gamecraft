@@ -310,9 +310,9 @@ models of a pack share stored once (`gamecraft-project/src/textures.rs`;
   or climbs out of `assets/`. A URI of a glTF document is against the document's folder
   (`models/`), with `..` resolved (`gamecraft_project::model::resolve_uri`): a model in
   `models/` names a texture of the store as `../textures/<name>`, and one at the top of
-  `assets/` as `textures/<name>`. The files a `.gltf` refers to (its buffers, images beside it)
-  belong to it and need no record of their own; the textures of the store and any other file
-  need one. A later pack's asset replaces an earlier one's of the same path (`Project::assets`).
+  `assets/` as `textures/<name>`. The files a model refers to inside its own folder (a `.gltf`'s
+  buffers and images beside it) belong to it and need no record of their own; the textures of
+  the store and any file elsewhere (`../sounds/x.ogg`) need one, how a model came to name it. A later pack's asset replaces an earlier one's of the same path (`Project::assets`).
   The host lists `assets/` recursively (16 folders deep at most, links out of the pack refused)
   and reads for the gate the records, the `.gltf` documents and the JSON chunks of the `.glb`
   files (only the chunk, `glb_json_len`) as text; the binary files are read when measured and
@@ -322,25 +322,35 @@ models of a pack share stored once (`gamecraft-project/src/textures.rs`;
   20.6 MiB, 18 of them the same 12 JPEGs. `textures::import` now takes a model's images, however
   they come (a buffer view of a `.glb`, a file beside a `.gltf`, a buffer file, a base64 `data:`
   URI), stores each once keyed by the hash of its bytes, and rewrites the document so each image
-  is a URI to the store; a `.glb`'s binary chunk loses the image views (the other views are
-  copied into a new chunk and the accessors renumbered), a `.gltf` keeps its buffers as files
-  beside it. The file that comes back reads exactly as the one that went in (checked by the
-  import: same triangles, bounds and counts), so a model draws as before, and a model without
-  images is stored as it came. The hash is FNV-1a, 64 bits, the workspace's own
-  `gamecraft_math::StateHasher`: enough to tell a pack's few hundred textures apart, and an
-  import checks an existing file of the store against its name (a file replaced or renamed by
-  hand is refused). A texture is an asset with a record of its own: `asset.import` writes it
-  from its `textures` parameter (the model's licence, author and source for one left out), the
-  first import of an image sets it and a later one reuses it. Models with embedded images, imported before the
-  store existed or written by hand, load as before. Limits: the gate checks references pack by
-  pack, so a mod's model that shares a base pack's texture gets its own copy in the mod; an
-  image inside a `.gltf`'s buffer file is copied to the store but also stays in that file.
+  is a URI to the store. The views that held only images leave the model: a buffer that loses a
+  view and whose bytes the import has (a `.glb`'s binary chunk, a buffer file) is rebuilt from the
+  views it keeps and its accessors point at their new indices; a buffer that keeps no view at all
+  goes (a `.gltf`'s buffer file that held only images is not written, a `.glb` that held only
+  images in its chunk loses the chunk); a buffer that lost nothing is copied as it came. A
+  document where anything else names a buffer view (an extension such as `EXT_meshopt_compression`
+  or `KHR_draco_mesh_compression`, a buffer's fallback view) is refused with a sentence that names
+  it, since the engine cannot renumber what it does not know: export the model with its images as
+  files. A `.glb` stays a `.glb` (a JSON chunk only, when nothing is left for a binary chunk). The
+  file that comes back reads exactly as the one that went in (checked by the import: same
+  triangles, bounds and counts), so a model draws as before, and a model without images is stored
+  as it came. The hash is FNV-1a, 64 bits, the workspace's own `gamecraft_math::StateHasher`:
+  enough to tell a pack's few hundred textures apart, and an import compares an existing file of
+  the store byte for byte with the image (a file replaced or renamed by hand, or another image
+  whose hash collides, is an error, never a reuse). A texture is an asset with a record of its
+  own: `asset.import` writes it from its `textures` parameter (the model's licence, author and
+  source for one left out), the first import of an image sets it and a later one reuses it. A
+  model's `bytes` are its own files (itself and the files beside it); the textures it refers to
+  are counted once, as the textures' own. Models with embedded images, imported before the store
+  existed or written by hand, load as before. Limits: the gate checks references pack by pack, so
+  a mod's model that shares a base pack's texture gets its own copy in the mod (cross-pack
+  sharing is not wanted now).
 - **Commands.** `asset.import {file, to, license, author, source_url, title?, changes?,
   textures?}` reads and measures the model before it writes anything (a broken one is refused),
   refuses a `to` that exists or lies under `textures/`, takes the images into the store (a new
-  one with its record, one the pack has reused once its bytes match its name and it has its
+  one with its record, one the pack has reused once its bytes are the image's and it has its
   record), copies the file and a `.gltf`'s buffers beside it (from inside the read root, under
-  their path inside `assets/`) and writes the record. The answer lists each texture with
+  their path inside `assets/`, which may not be a model's path or a record's name; a buffer the
+  import rebuilt is written as rebuilt) and writes the record. The answer lists each texture with
   `stored` (new or reused). `changes` is an addition to the brief's parameters: CC BY asks for
   it. `asset.list` lists the store apart (`textures`, each once with the models that refer to
   it) and `asset.credits` names a texture once however many models use it, as in

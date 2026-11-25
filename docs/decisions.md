@@ -38,6 +38,17 @@ CC0 models): the first import of an image writes it, a later one keeps it. The U
 model refers to nothing outside `assets/` stands. A failed model keeps the list of files it
 waited for, so a texture that arrives later (the browser fetches one by one) wakes it.
 
+The views that held only images leave the model, and only those: a buffer that loses a view is
+rebuilt from the views it keeps (a `.glb`'s chunk, a `.gltf`'s buffer file alike), one that keeps
+none goes, one that loses nothing is copied as it came. Renumbering buffer views is safe only
+where the engine knows every reference: a document where anything but the accessors and the images
+names one (an extension such as `EXT_meshopt_compression`, a buffer's fallback view) is refused
+with a sentence, not guessed at. A buffer file's `byteLength` is touched only when the import
+rewrites that file. The licence gate lets a model's record cover the files it names inside its
+own folder only: a `..` reference reaches the texture store (records of their own) or a file
+that must bring its record, so a model cannot cover a folder it does not live in. A model's
+`bytes` are its own files: a texture shared by many is counted once, as its own asset.
+
 ### 2026-11-23: Roads are a component draped on the terrain, overlaps ordered by a tier
 
 A real-city pack laid its streets as about 55 000 yaw-only boxes; on slopes every box was a step,
