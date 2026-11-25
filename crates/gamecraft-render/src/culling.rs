@@ -10,7 +10,9 @@
 //! distance; a cell whose box lies outside the view, beyond one of the six clip planes, is
 //! not drawn. A picture starts settled (no hysteresis, no dissolve between two levels), so
 //! the count of a picture is exact; a live frame differs for the few frames a hand-over
-//! dissolves over, and where a camera lingers on a threshold.
+//! dissolves over, and where a camera lingers on a threshold. A live frame at a lower quality
+//! divides every distance by the quality's share (40 % low, 50 % medium; a picture is drawn at
+//! the highest, 100 %): the count of a live view does the same.
 
 use glam::{Mat4, Vec3, Vec4};
 use std::collections::BTreeMap;
@@ -70,7 +72,9 @@ pub(crate) struct Count {
 /// Counts what the renderer draws of one model item in the view from `eye` through
 /// `view_proj` (`projection * view`): `instances` are its instance matrices, `triangles`
 /// the triangles each level submits per instance, `bounds` the box of the item's meshes in
-/// their own axes and `until_m` where each level ends (the last: the draw distance).
+/// their own axes, `until_m` where each level ends (the last: the draw distance) and
+/// `lod_scale` what the renderer divides the distances by (1 for a picture; the live
+/// quality's share for a live frame).
 pub(crate) fn count(
     instances: &[Mat4],
     triangles: &[u64],
@@ -78,7 +82,14 @@ pub(crate) fn count(
     until_m: &[f64],
     view_proj: Mat4,
     eye: Vec3,
+    lod_scale: f32,
 ) -> Count {
+    // The renderer scales the distance, not the ends: the same choice.
+    let lod_scale = if lod_scale.is_finite() && lod_scale > 0.0 {
+        lod_scale
+    } else {
+        1.0
+    };
     let until: Vec<f32> = until_m.iter().map(|&end| end as f32).collect();
     let mut cells: BTreeMap<(i32, i32), ((Vec3, Vec3), usize)> = BTreeMap::new();
     for &m in instances {
@@ -106,7 +117,7 @@ pub(crate) fn count(
         }
         // The nearest point of the box to the eye (never a panic on a box that is not one).
         let nearest = eye.max(*lo).min(*hi);
-        match select(nearest.distance(eye), &until) {
+        match select(nearest.distance(eye) / lod_scale, &until) {
             Some(k) => {
                 out.drawn += n;
                 if let Some(slot) = out.levels.get_mut(k) {
@@ -162,6 +173,7 @@ mod tests {
             &[20.0, 60.0, 150.0],
             view_proj,
             eye,
+            1.0,
         );
         assert_eq!(c.drawn, 3);
         assert_eq!(c.culled, 1);
@@ -179,11 +191,11 @@ mod tests {
             &[100.0],
             view_proj,
             Vec3::new(0.0, 0.0, 5.0),
+            1.0,
         );
         assert_eq!((c.drawn, c.culled, c.levels.clone()), (2, 0, vec![(2, 24)]));
-        // No instances: nothing.
         // No instances: nothing drawn, and still a row per level.
-        let c = count(&[], &[12], bounds, &[100.0], view_proj, Vec3::ZERO);
+        let c = count(&[], &[12], bounds, &[100.0], view_proj, Vec3::ZERO, 1.0);
         assert_eq!((c.drawn, c.culled, c.levels.clone()), (0, 0, vec![(0, 0)]));
     }
 
@@ -216,8 +228,31 @@ mod tests {
             &[100.0],
             view_proj,
             Vec3::ZERO,
+            1.0,
         );
         assert_eq!((c.drawn, c.culled), (0, 1));
+        // A live frame at a lower quality divides the distance: at half, a crate 100 m away
+        // is beyond a draw distance of 150 m.
+        let c = count(
+            &[Mat4::from_translation(Vec3::new(0.0, 0.0, -100.0))],
+            &[12],
+            (Vec3::splat(-0.5), Vec3::splat(0.5)),
+            &[150.0],
+            view_proj,
+            Vec3::ZERO,
+            0.5,
+        );
+        assert_eq!((c.drawn, c.culled), (0, 1), "half the distances");
+        let c = count(
+            &[Mat4::from_translation(Vec3::new(0.0, 0.0, -100.0))],
+            &[12],
+            (Vec3::splat(-0.5), Vec3::splat(0.5)),
+            &[150.0],
+            view_proj,
+            Vec3::ZERO,
+            f32::NAN,
+        );
+        assert_eq!(c.drawn, 1, "a scale that is not a number counts as 1");
     }
 
     #[test]

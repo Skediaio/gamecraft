@@ -16,7 +16,9 @@
 //!   share of the view's height).
 //!
 //! Every level of a group is drawn where the group's finest node in the scene stands, with
-//! that node's transform (a level's own transform is not applied). The other geometry of the
+//! that node's transform; a level keeps its own rotation and scale, not its translation (a
+//! modelling tool lays the levels out side by side). A level without geometry is left out; as
+//! the last level of a file that means "draw nothing beyond here". The other geometry of the
 //! scene is drawn at every level. A node of one group may hold groups of its own (a building with a roof that has levels of its own). Whatever is broken
 //! (a level that has more triangles than the one before, a missing level, an id that points
 //! nowhere) is a warning in [`Plan::warnings`]; the model is drawn all the same.
@@ -28,7 +30,7 @@
 //! [`rule`]: a screen-size rule from the model's size.
 
 use crate::model::{IDENTITY, MAX_NODE_DEPTH, MAX_NODE_VISITS, apply, mul, to_f64};
-use gamecraft_math::{Portable, deg_to_rad};
+use gamecraft_math::{DMat4, DQuat, DVec3, Portable, deg_to_rad};
 use gamecraft_world::MAX_MODEL_LOD_LEVELS;
 use gltf::Document;
 use serde_json::Value;
@@ -95,15 +97,19 @@ pub struct LodDistances {
     pub draw_m: f64,
 }
 
-/// What one source says of the distances of a model: what it leaves out is `None` and follows
-/// the next source.
+/// What one source says of the distances of a model, each end by the level of the file it
+/// ends: what it leaves out is `None` and follows the next source.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LodOverride {
-    /// Where each level gives way to the next, as [`LodDistances::switch_m`]; a shorter list
-    /// ends where it stops.
+    /// Where each level gives way to the next, in metres, as [`LodDistances::switch_m`]; a
+    /// shorter list ends where it stops.
     pub switch_m: Option<Vec<f64>>,
-    /// How far away the model is drawn.
+    /// How far away the model is drawn, in metres.
     pub draw_m: Option<f64>,
+    /// `MSFT_screencoverage`: one share of the reference view's height per level of the
+    /// file, the greatest first; level `k` ends where the model's size spans share `k`.
+    /// Turned into metres where it is used, for the size the model has in the world.
+    pub coverage: Option<Vec<f64>>,
 }
 
 /// The distance, metres, at which something `size_m` metres across spans `coverage` of the
@@ -210,8 +216,9 @@ impl LodDistances {
         }
     }
 
-    /// The distances a model of `levels` levels and `size_m` metres across draws with. The
-    /// end of each level is what the component says, else what the file says, else the
+    /// The distances of the `levels` levels of the file for a model `size_m` metres across
+    /// (its extent times the scales it is drawn with: the rule and the coverage follow it).
+    /// The end of each level is what the component says, else what the file says, else the
     /// rule's ([`rule`]). A distance that is not a number above 0 is replaced by the rule's.
     /// The ends must increase: one that would not is moved just past the one before. The
     /// sentences say what was replaced, moved or left unused.
@@ -243,8 +250,8 @@ impl LodDistances {
             .map(|k| {
                 let fallback = rule.end(k, levels).unwrap_or(rule.draw_m);
                 let given = component
-                    .and_then(|c| c.end(k, levels))
-                    .or_else(|| file.and_then(|f| f.end(k, levels)));
+                    .and_then(|c| c.end(k, levels, size_m))
+                    .or_else(|| file.and_then(|f| f.end(k, levels, size_m)));
                 match given {
                     Some(d) if d.is_finite() && d > 0.0 => d,
                     Some(d) => {
@@ -283,22 +290,48 @@ impl LodDistances {
 }
 
 impl LodOverride {
-    /// What this source says of where level `k` of `levels` ends.
-    fn end(&self, k: usize, levels: usize) -> Option<f64> {
+    /// Whether this source says nothing.
+    pub fn is_empty(&self) -> bool {
+        self.switch_m.as_ref().is_none_or(Vec::is_empty)
+            && self.draw_m.is_none()
+            && self.coverage.as_ref().is_none_or(Vec::is_empty)
+    }
+
+    /// What this source says of where level `k` of `levels` ends, in metres as written.
+    fn metres(&self, k: usize, levels: usize) -> Option<f64> {
         if k + 1 == levels {
             self.draw_m
         } else {
             self.switch_m.as_ref().and_then(|s| s.get(k).copied())
         }
     }
+
+    /// What this source says of where level `k` of `levels` ends, for a model `size_m`
+    /// metres across: its metres, else its coverage turned into metres.
+    fn end(&self, k: usize, levels: usize, size_m: f64) -> Option<f64> {
+        self.metres(k, levels).or_else(|| {
+            self.coverage
+                .as_ref()
+                .and_then(|c| c.get(k))
+                .map(|&share| distance_for(rule_size(size_m), share))
+        })
+    }
+}
+
+/// What `MSFT_screencoverage` means: one share of the reference view's height per level of
+/// the file, the greatest first; level `k` ends where the model's size spans share `k`,
+/// and the last share is where nothing is drawn (as the extension's example reads:
+/// `0.5, 0.2, 0.01` draws the first level down to half the view's height, the second to a
+/// fifth, the third to a hundredth).
+///
+/// [`check_coverage`] says why such a list cannot be used; [`from_coverage`] turns a usable
+/// one into metres for a model `size_m` metres across.
+pub fn check_coverage(levels: usize, coverage: &[f64]) -> Result<(), String> {
+    from_coverage(1.0, levels, coverage).map(|_| ())
 }
 
 /// The distances `MSFT_screencoverage` means for a model `size_m` metres across with
-/// `levels` levels: one share per level, the greatest first; level `k` ends where the
-/// model's size spans that share of the reference view's height, and the last share is
-/// where nothing is drawn (as the extension's example reads: `0.5, 0.2, 0.01` draws the
-/// first level down to half the view's height, the second to a fifth, the third to a
-/// hundredth). `Err` says why the values cannot be used.
+/// `levels` levels ([`check_coverage`]); `Err` says why the values cannot be used.
 pub fn from_coverage(size_m: f64, levels: usize, coverage: &[f64]) -> Result<LodOverride, String> {
     let bad = |why: String| Err(format!("{COVERAGE_KEY} {why}"));
     if coverage.len() != levels {
@@ -331,6 +364,7 @@ pub fn from_coverage(size_m: f64, levels: usize, coverage: &[f64]) -> Result<Lod
                 .collect(),
         ),
         draw_m: coverage.last().map(|&c| distance_for(size, c)),
+        coverage: None,
     })
 }
 
@@ -771,41 +805,118 @@ impl Plan {
         }
     }
 
-    /// What the file itself says of the distances of a model `size_m` metres across:
-    /// `asset.extras.gamecraft`, and for what it leaves out `MSFT_screencoverage`; `None`
-    /// when the file says nothing. With every warning about the file: those of the levels,
-    /// those of the coverage, and those of the triangles of `level_triangles` (finest first).
-    pub fn finish(
-        &self,
-        size_m: f64,
-        level_triangles: &[u64],
-    ) -> (Option<LodOverride>, Vec<String>) {
+    /// What the levels of the file are once its triangles are counted (`level_triangles`, by
+    /// level of the file): the levels that draw, what the file says of the distances, and
+    /// every warning about the file.
+    pub fn finish(&self, level_triangles: &[u64]) -> Levels {
         let mut warnings = self.warnings.clone();
-        let coverage =
-            self.coverage
-                .as_deref()
-                .and_then(|c| match from_coverage(size_m, self.levels, c) {
-                    Ok(distances) => Some(distances),
-                    Err(why) => {
-                        warnings.push(format!("{why}; the rule from the model's size is used"));
-                        None
-                    }
-                });
-        warnings.extend(coarser_check(level_triangles));
+        let coverage = self
+            .coverage
+            .as_deref()
+            .filter(|c| match check_coverage(self.levels, c) {
+                Ok(()) => true,
+                Err(why) => {
+                    warnings.push(format!("{why}; the rule from the model's size is used"));
+                    false
+                }
+            });
+        // A level without geometry is left out; as the last one it ends the model there.
+        let drawn: Vec<usize> = (0..self.levels)
+            .filter(|&k| level_triangles.get(k).copied().unwrap_or(0) > 0)
+            .collect();
+        for k in 0..self.levels {
+            if drawn.contains(&k) {
+                continue;
+            }
+            if k + 1 == self.levels && !drawn.is_empty() {
+                warnings.push(format!(
+                    "level {k} has no geometry and is left out: nothing of the model is drawn \
+                     beyond where that level would have started"
+                ));
+            } else {
+                warnings.push(format!(
+                    "level {k} has no geometry and is left out; the level after it starts where \
+                     it would have"
+                ));
+            }
+        }
+        let triangles: Vec<u64> = drawn
+            .iter()
+            .map(|&k| level_triangles.get(k).copied().unwrap_or(0))
+            .collect();
+        warnings.extend(coarser_check(&triangles));
         let file = LodOverride {
-            switch_m: self
-                .settings
-                .switch_m
-                .clone()
-                .or_else(|| coverage.as_ref().and_then(|c| c.switch_m.clone())),
-            draw_m: self
-                .settings
-                .draw_m
-                .or_else(|| coverage.as_ref().and_then(|c| c.draw_m)),
+            switch_m: self.settings.switch_m.clone(),
+            draw_m: self.settings.draw_m,
+            coverage: coverage.map(<[f64]>::to_vec),
         };
-        let any = file.switch_m.is_some() || file.draw_m.is_some();
-        (any.then_some(file), warnings)
+        Levels {
+            levels: self.levels,
+            drawn,
+            triangles,
+            file: (!file.is_empty()).then_some(file),
+            warnings,
+        }
     }
+}
+
+/// The levels of a model as both of its readers hold them: the ones that draw, what the file
+/// says of the distances and what is broken in it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Levels {
+    /// The levels the file has, finest first; 1 without any. The distances of the file are
+    /// by this level ([`LodDistances::resolve`], [`LodOverride`]).
+    pub levels: usize,
+    /// The levels of the file that draw (that have geometry), finest first: a level without
+    /// geometry is left out.
+    pub drawn: Vec<usize>,
+    /// Triangles of each drawn level, in the order of [`Levels::drawn`].
+    pub triangles: Vec<u64>,
+    /// What the file itself says of the distances of its levels; `None` when it says
+    /// nothing.
+    pub file: Option<LodOverride>,
+    /// What is broken in the file, as sentences; the model is drawn all the same.
+    pub warnings: Vec<String>,
+}
+
+impl Default for Levels {
+    /// Nothing read yet: one level, without geometry.
+    fn default() -> Levels {
+        Levels {
+            levels: 1,
+            drawn: Vec::new(),
+            triangles: Vec::new(),
+            file: None,
+            warnings: Vec::new(),
+        }
+    }
+}
+
+impl Levels {
+    /// Where each drawn level ends, from the ends `ends` of every level of the file, finest
+    /// first ([`LodDistances::ends_m`]): the last is the draw distance.
+    pub fn drawn_ends(&self, ends: &[f64]) -> Vec<f64> {
+        self.drawn
+            .iter()
+            .map(|&k| ends.get(k).copied().unwrap_or(f64::INFINITY))
+            .collect()
+    }
+}
+
+/// Whether a distance of the levels of a model follows its size (the rule's, or the file's
+/// coverage), so that entities of different scales cannot share one item: false when every
+/// level's end is given in metres by the component or by the file.
+pub fn follows_scale(
+    levels: usize,
+    file: Option<&LodOverride>,
+    component: Option<&LodOverride>,
+) -> bool {
+    (0..levels).any(|k| {
+        component
+            .and_then(|c| c.metres(k, levels))
+            .or_else(|| file.and_then(|f| f.metres(k, levels)))
+            .is_none()
+    })
 }
 
 /// Which nodes of `document` (whose JSON chunk is `json`) are levels of detail of one
@@ -861,6 +972,26 @@ pub fn levels_of(mask: u8) -> impl Iterator<Item = usize> {
     (0..8).filter(move |k| mask >> k & 1 == 1)
 }
 
+/// A node's transform without its translation, column-major: its rotation and scale as
+/// glTF gives them (a node given as a matrix is taken apart).
+fn unshifted(t: &gltf::scene::Transform) -> [f64; 16] {
+    let (scale, rotation) = match *t {
+        gltf::scene::Transform::Decomposed {
+            rotation, scale, ..
+        } => (DVec3::from_array(scale.map(f64::from)), {
+            let [x, y, z, w] = rotation.map(f64::from);
+            DQuat::from_xyzw(x, y, z, w)
+        }),
+        gltf::scene::Transform::Matrix { matrix } => {
+            let f64_matrix = matrix.map(|column| column.map(f64::from));
+            let (scale, rotation, _) =
+                DMat4::from_cols_array_2d(&f64_matrix).to_scale_rotation_translation();
+            (scale, rotation)
+        }
+    };
+    DMat4::from_scale_rotation_translation(scale, rotation, DVec3::ZERO).to_cols_array()
+}
+
 /// The mask of levels `lo..hi`: bits `lo` to `hi - 1` set (none for an empty range).
 fn mask(lo: u8, hi: u8) -> u8 {
     if lo >= hi || hi > 8 {
@@ -872,9 +1003,9 @@ fn mask(lo: u8, hi: u8) -> u8 {
 /// Walks the default scene of `document` by [`Plan`] and gives every primitive to draw with
 /// its model-to-world matrix and its levels. The levels of a group are drawn in the place
 /// and the transform of its anchor (the finest node of the group that is in the scene), each
-/// over its own range of the levels; a coarser level met where it stands in the file stands
-/// in there instead, and a node the plan leaves out is not drawn. Geometry of no group is
-/// drawn at every level. An error, never a panic, for a file without a scene
+/// over its own range of the levels, keeping its own rotation and scale; a coarser level met
+/// where it stands in the file stands in there instead, and a node the plan leaves out is
+/// not drawn. Geometry of no group is drawn at every level. An error, never a panic, for a file without a scene
 /// or a node tree that is too deep or loops.
 pub fn walk<'a>(document: &'a Document, plan: &Plan) -> Result<Vec<Visit<'a>>, String> {
     let scene = document
@@ -917,13 +1048,14 @@ pub fn walk<'a>(document: &'a Document, plan: &Plan) -> Result<Vec<Visit<'a>>, S
             continue;
         };
         if stands_in {
-            // A coarser level in the place of the finest node in the scene: `parent` is
-            // already where that node stands, so its own transform is not applied.
+            // A coarser level in the place of the finest node in the scene: it keeps its own
+            // rotation and scale, not its translation.
+            let world = mul(&parent, &unshifted(&node.transform()));
             stack.extend(
                 node.children()
-                    .map(|c| (c.index(), parent, depth + 1, lo, hi, false)),
+                    .map(|c| (c.index(), world, depth + 1, lo, hi, false)),
             );
-            draw(node, parent, lo, hi, &mut out);
+            draw(node, world, lo, hi, &mut out);
             continue;
         }
         if plan.left_out.contains(&index) {
@@ -1024,10 +1156,12 @@ mod tests {
         let file = LodOverride {
             switch_m: Some(vec![50.0]),
             draw_m: Some(900.0),
+            coverage: None,
         };
         let component = LodOverride {
             switch_m: Some(vec![80.0, 300.0, 400.0]),
             draw_m: None,
+            coverage: None,
         };
         let (d, notes) = LodDistances::resolve(3, 10.0, Some(&file), Some(&component));
         assert_eq!(d.switch_m, vec![80.0, 300.0]);
@@ -1053,6 +1187,7 @@ mod tests {
         let bad = LodOverride {
             switch_m: Some(vec![0.0, 20.0]),
             draw_m: Some(f64::NAN),
+            coverage: None,
         };
         let (d, notes) = LodDistances::resolve(3, 10.0, Some(&bad), None);
         assert_eq!(d.switch_m[0], rule.switch_m[0]);
@@ -1067,6 +1202,50 @@ mod tests {
             "{notes:?}"
         );
         assert_eq!(d.ends_m().len(), 3);
+    }
+
+    #[test]
+    fn coverage_follows_the_size_and_metres_do_not() {
+        let file = LodOverride {
+            switch_m: None,
+            draw_m: None,
+            coverage: Some(vec![1.0, 0.25, 0.02]),
+        };
+        assert!(
+            follows_scale(3, Some(&file), None),
+            "the coverage follows the size"
+        );
+        let half_tan = 0.5773502691896257;
+        let (small, notes) = LodDistances::resolve(3, 2.0, Some(&file), None);
+        assert!(notes.is_empty(), "{notes:?}");
+        let (big, _) = LodDistances::resolve(3, 20.0, Some(&file), None);
+        for k in 0..3 {
+            assert!(close(big.ends_m()[k], 10.0 * small.ends_m()[k]), "{k}");
+        }
+        assert!(close(small.ends_m()[0], 2.0 / (2.0 * half_tan)));
+        // Metres as written do not follow the size, wherever they come from.
+        let metres = LodOverride {
+            switch_m: Some(vec![40.0, 150.0]),
+            draw_m: Some(800.0),
+            coverage: None,
+        };
+        assert!(!follows_scale(3, Some(&metres), None));
+        let file = LodOverride {
+            switch_m: Some(vec![40.0]),
+            draw_m: None,
+            coverage: Some(vec![1.0, 0.25, 0.02]),
+        };
+        assert!(
+            follows_scale(3, Some(&file), None),
+            "the second end follows the coverage"
+        );
+        let (d, _) = LodDistances::resolve(3, 2.0, Some(&file), Some(&metres));
+        assert_eq!(
+            (d.switch_m, Some(d.draw_m)),
+            (vec![40.0, 150.0], Some(800.0))
+        );
+        assert!(!follows_scale(3, Some(&file), Some(&metres)));
+        assert!(LodOverride::default().is_empty());
     }
 
     #[test]

@@ -179,13 +179,15 @@ pub struct PictureStats {
     /// post-processing).
     pub forward_triangles: u64,
     /// What each model drew in the view: one row per model item (an asset as entities with
-    /// the same distances and scale show it), in order of asset path. Empty without models.
+    /// the same distances and scale show it), in order of asset path, then of the first
+    /// entity that shows it. Empty without models.
     pub models: Vec<ModelStats>,
 }
 
 /// What one model (an asset as entities with the same distances and scale show it) drew in
-/// the view of a picture, counted by the renderer's own rule on the CPU (`culling`): exact
-/// for a picture, which starts settled.
+/// the view of a frame, counted by the renderer's own rule on the CPU (`culling`): exact for
+/// a picture, which starts settled. For a live view the levels are chosen as the live quality
+/// asks (a lower quality switches sooner).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ModelStats {
     /// The asset, by its path inside a pack's `assets/` folder.
@@ -196,17 +198,30 @@ pub struct ModelStats {
     pub drawn: usize,
     /// Instances not drawn: outside the view or beyond the draw distance.
     pub culled: usize,
-    /// Per level, finest first: the instances drawn at it and the triangles they submit in
-    /// the view pass.
+    /// Per level that draws, finest first: the instances drawn at it and the triangles they
+    /// submit in the view pass.
     pub levels: Vec<LevelCount>,
     /// Where each level ends, metres from the camera; the last is the draw distance, infinite
     /// for a model that is never culled (a character the camera follows).
     pub until_m: Vec<f64>,
 }
 
+/// Counts of the last live frame ([`WorldRenderer::draw`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameStats {
+    /// Instances drawn in the camera's view: after the levels and the culling.
+    pub instances: u64,
+    /// Triangles the view pass submitted (not the shadows, the reflection or the
+    /// post-processing).
+    pub forward_triangles: u64,
+}
+
 /// What one level of detail of a model drew.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LevelCount {
+    /// The level of the model's file (its number in `asset.list`'s `lods`); a level without
+    /// geometry is left out, so the numbers may skip one.
+    pub level: usize,
     /// Instances drawn at this level.
     pub instances: usize,
     /// Triangles they submit in the view pass.

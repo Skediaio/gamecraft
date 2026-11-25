@@ -11,10 +11,17 @@ use serde_json::{Value, json};
 pub struct Mesh(pub usize);
 
 /// A node of the scene.
+#[derive(Clone)]
 pub struct Node {
     pub name: String,
     pub mesh: Option<usize>,
     pub translation: [f64; 3],
+    /// A turn about an axis: `[x, y, z, w]`.
+    pub rotation: [f64; 4],
+    pub scale: [f64; 3],
+    /// A node given as a matrix (column-major) instead of a translation, a rotation and a
+    /// scale.
+    pub matrix: Option<[f64; 16]>,
     pub children: Vec<usize>,
     pub extensions: Value,
     pub extras: Value,
@@ -26,10 +33,27 @@ impl Node {
             name: name.to_string(),
             mesh,
             translation: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0; 3],
+            matrix: None,
             children: Vec::new(),
             extensions: json!({}),
             extras: Value::Null,
         }
+    }
+
+    /// Turned `yaw_deg` about +Y.
+    pub fn turned(mut self, yaw_deg: f64) -> Node {
+        let half = yaw_deg * std::f64::consts::PI / 360.0;
+        let (sin, cos) = gamecraft_math::Portable::psin_cos(half);
+        self.rotation = [0.0, sin, 0.0, cos];
+        self
+    }
+
+    /// Scaled by `s` on every axis.
+    pub fn scaled(mut self, s: f64) -> Node {
+        self.scale = [s; 3];
+        self
     }
 
     pub fn at(mut self, x: f64, y: f64, z: f64) -> Node {
@@ -55,6 +79,9 @@ pub struct Model {
     pub nodes: Vec<Node>,
     pub roots: Vec<usize>,
     pub asset_extras: Value,
+    /// The glTF mode of each mesh (4: triangles, the default; 5: a strip; 6: a fan); shorter
+    /// than the meshes: the rest are triangles.
+    pub modes: Vec<u16>,
 }
 
 impl Model {
@@ -64,6 +91,7 @@ impl Model {
             nodes,
             roots: roots.to_vec(),
             asset_extras: Value::Null,
+            modes: Vec::new(),
         }
     }
 
@@ -120,7 +148,6 @@ impl Model {
                     count += 1;
                 }
             }
-            let _ = m;
             views
                 .push(json!({"buffer": 0, "byteOffset": offset, "byteLength": bin.len() - offset}));
             accessors.push(json!({
@@ -131,7 +158,11 @@ impl Model {
                 "min": lo,
                 "max": hi,
             }));
-            meshes.push(json!({"primitives": [{"attributes": {"POSITION": accessors.len() - 1}}]}));
+            let mut primitive = json!({"attributes": {"POSITION": accessors.len() - 1}});
+            if let Some(&mode) = self.modes.get(m) {
+                primitive["mode"] = json!(mode);
+            }
+            meshes.push(json!({"primitives": [primitive]}));
         }
         let nodes: Vec<Value> = self
             .nodes
@@ -141,8 +172,18 @@ impl Model {
                 if let Some(mesh) = n.mesh {
                     node["mesh"] = json!(mesh);
                 }
-                if n.translation != [0.0; 3] {
-                    node["translation"] = json!(n.translation);
+                if let Some(matrix) = n.matrix {
+                    node["matrix"] = json!(matrix);
+                } else {
+                    if n.translation != [0.0; 3] {
+                        node["translation"] = json!(n.translation);
+                    }
+                    if n.rotation != [0.0, 0.0, 0.0, 1.0] {
+                        node["rotation"] = json!(n.rotation);
+                    }
+                    if n.scale != [1.0; 3] {
+                        node["scale"] = json!(n.scale);
+                    }
                 }
                 if !n.children.is_empty() {
                     node["children"] = json!(n.children);

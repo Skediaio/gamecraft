@@ -8,11 +8,11 @@ use crate::light;
 use crate::mesh::{self, MeshData};
 use crate::model::{self, Alpha, ModelMaterial, TexRef};
 use crate::plants::{self, PartKind, PlantImage};
-use crate::{Camera, LevelCount, ModelStats, Quality, RenderError};
+use crate::{Camera, FrameStats, LevelCount, ModelStats, Quality, RenderError};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{Picture, PictureRequest, PictureStats};
 use gamecraft_math::{DQuat, DVec3, deg_to_rad};
-use gamecraft_project::lod::{LodDistances, LodOverride};
+use gamecraft_project::lod::{Levels, LodDistances, LodOverride, follows_scale};
 use gamecraft_project::model::resolve_uri;
 use gamecraft_world::{
     Character, Entity, EntityId, Environment, HeightField, Model, Plant, Road, Shape, ShapeKind,
@@ -69,9 +69,14 @@ const MISSING_MODEL_COLOR: [f32; 3] = [1.0, 0.0, 1.0];
 const MISSING_MODEL_SIZE_M: f64 = 0.5;
 /// Most entities a problem line about one model names.
 const MAX_NAMED_ENTITIES: usize = 8;
-/// Switches on the renderer's dissolve of a model's cells that cross the draw distance while
-/// the camera moves (a parked camera shows no dither); the value itself is not a distance.
+/// What is passed as the renderer's `band_m` of a model item: any value above 0 switches on
+/// the dissolve of the cells that cross the draw distance while the camera moves (a parked
+/// camera shows no dither); the value is not a distance.
 const MODEL_CULL_FADE: f32 = 1.0;
+/// The step of the buckets of scale that entities sharing a model item are sorted into when
+/// the item's distances follow the scale (a scattered field of copies, each its own size):
+/// about a tenth of the draw distance between one bucket and the next.
+const SCALE_STEP: f64 = 1.25;
 
 /// A character that is down lies on its side; the base of its body is turned about this.
 const LYING_DEG: f64 = 90.0;
@@ -130,22 +135,70 @@ struct ModelItem {
     instances: Vec<Mat4>,
     /// Triangles each level submits per instance, finest first.
     triangles: Vec<u64>,
+    /// The level of the file each of those is (a level without geometry is left out).
+    drawn: Vec<usize>,
     /// The box of every level's meshes, in the model's own axes.
     bounds: (Vec3, Vec3),
     /// Where each level ends, metres; the last is the draw distance.
     until_m: Vec<f64>,
 }
 
-/// What decides the levels of detail of a model: the distances its component gives and the
-/// scale the rule from the asset's size follows. Entities that agree share one item.
-#[derive(Clone, PartialEq)]
+/// What decides the levels of detail of the models an item draws. Entities that agree share
+/// the item; the numbers are kept as their bits, so that a map can order them.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ModelKey {
-    lod_distances_m: Option<Vec<f64>>,
-    draw_distance_m: Option<f64>,
-    /// The model's scale times the entity's.
-    scale: f64,
+    /// The component's switch distances, as their bits (none given: empty).
+    lod_distances_m: Vec<u64>,
+    /// The component's draw distance, as its bits.
+    draw_distance_m: Option<u64>,
+    /// Where a distance follows the model's scale: the upper bound of the bucket of scales
+    /// (steps of [`SCALE_STEP`]) the item's distances are computed for, as its bits, so that
+    /// a model of the bucket never disappears early. `None` when every distance is given in
+    /// metres: entities of every scale then share the item.
+    scale: Option<u64>,
     /// The item draws the character the camera follows, which is never culled by distance.
     followed: bool,
+}
+
+impl ModelKey {
+    /// The switch distances the component gives.
+    fn distances(&self) -> LodOverride {
+        LodOverride {
+            switch_m: Some(
+                self.lod_distances_m
+                    .iter()
+                    .map(|b| f64::from_bits(*b))
+                    .collect(),
+            ),
+            draw_m: self.draw_distance_m.map(f64::from_bits),
+            coverage: None,
+        }
+    }
+
+    /// The scale the item's distances are computed for: the bucket's upper bound, or 1 when
+    /// they do not follow the scale.
+    fn scale(&self) -> f64 {
+        self.scale.map_or(1.0, f64::from_bits)
+    }
+}
+
+/// The upper bound of the bucket of scales in steps of [`SCALE_STEP`] that holds `scale`.
+/// A scale that is not a positive finite number counts as 1.
+fn scale_bucket(scale: f64) -> f64 {
+    if !(scale.is_finite() && scale > 0.0) {
+        return 1.0;
+    }
+    let mut upper = 1.0;
+    let mut steps = 0usize;
+    while scale > upper && steps < 512 {
+        upper *= SCALE_STEP;
+        steps += 1;
+    }
+    while scale <= upper / SCALE_STEP && steps < 1024 {
+        upper /= SCALE_STEP;
+        steps += 1;
+    }
+    upper
 }
 
 /// What a character item draws, which says how it places its characters.
@@ -354,6 +407,10 @@ pub struct WorldRenderer {
     /// The character the camera follows (a third-person or first-person view): its model is
     /// never culled by distance.
     followed: Option<EntityId>,
+    /// What the renderer divides the distances of the levels by in a live frame: the live
+    /// quality's share (40 % low, 50 % medium, 100 % high), as for everything it draws. A
+    /// picture is always drawn at the highest quality, where it is 1.
+    lod_scale: f32,
 }
 
 /// A model that could not be read or uploaded: why, and the asset files it was being read
@@ -372,10 +429,10 @@ struct ResidentModel {
     bounds: (Vec3, Vec3),
     /// The extent of the model across, metres: the size the rule from the file follows.
     size_m: f64,
-    /// What the asset's file says of the distances of its levels.
-    lod: Option<LodOverride>,
-    /// Sentences about a broken set of levels (said once per build that draws the model).
-    warnings: Vec<String>,
+    /// The levels of the file: the ones that draw (in the order of `levels`), what the file
+    /// says of the distances, and the sentences about a broken set (said once per build that
+    /// draws the model).
+    read: Levels,
     meshes: Vec<vc::MeshId>,
     materials: Vec<vc::MaterialId>,
     textures: Vec<vc::TextureId>,
@@ -485,6 +542,7 @@ impl WorldRenderer {
             models: BTreeMap::new(),
             model_uploads: 0,
             followed: None,
+            lod_scale: quality_lod_scale(&vc::Quality::LOW),
         };
         world_renderer.apply_environment(&Environment::default(), false);
         world_renderer
@@ -671,6 +729,7 @@ impl WorldRenderer {
             fast_shading: false,
             ..preset
         });
+        self.lod_scale = quality_lod_scale(&preset);
     }
 
     /// Records a live frame of the synced scene from `camera` into `target`, stretched to its
@@ -767,11 +826,9 @@ impl WorldRenderer {
             )));
         }
         let stats = self.renderer.stats();
-        let forward_triangles = stats
-            .pass_triangles
-            .iter()
-            .find(|(pass, _)| *pass == "forward")
-            .map_or(0, |(_, triangles)| *triangles);
+        // A picture starts settled and is drawn at the highest quality: the metres as written.
+        let forward_triangles = forward_triangles(&stats);
+        let models = self.account(proj * view, eye, 1.0);
         Ok(Picture {
             width,
             height,
@@ -781,7 +838,7 @@ impl WorldRenderer {
                 draws: u64::from(stats.draw_calls),
                 instances: u64::from(stats.instances),
                 forward_triangles,
-                models: self.account(proj * view, eye),
+                models,
             },
             problems: self.problems(),
         })
@@ -793,12 +850,23 @@ impl WorldRenderer {
     /// they are exact while the camera does not move.
     pub fn count_models(&self, camera: &Camera, aspect: f64) -> Vec<ModelStats> {
         let (view, proj, eye) = camera.matrices(aspect);
-        self.account(proj * view, eye)
+        self.account(proj * view, eye, self.lod_scale)
+    }
+
+    /// Counts of the last live frame ([`WorldRenderer::draw`]): the instances the view drew
+    /// and the triangles its view pass submitted. Zeros before the first frame. What a
+    /// picture drew is in the picture's own stats.
+    pub fn frame_stats(&self) -> FrameStats {
+        let stats = self.renderer.stats();
+        FrameStats {
+            instances: u64::from(stats.instances),
+            forward_triangles: forward_triangles(&stats),
+        }
     }
 
     /// What each model item drew from `eye` through `view_proj`, counted again by the
     /// renderer's rule ([`culling`]).
-    fn account(&self, view_proj: Mat4, eye: Vec3) -> Vec<ModelStats> {
+    fn account(&self, view_proj: Mat4, eye: Vec3, lod_scale: f32) -> Vec<ModelStats> {
         self.built
             .models
             .iter()
@@ -810,6 +878,7 @@ impl WorldRenderer {
                     &item.until_m,
                     view_proj,
                     eye,
+                    lod_scale,
                 );
                 ModelStats {
                     asset: item.asset.clone(),
@@ -819,7 +888,9 @@ impl WorldRenderer {
                     levels: count
                         .levels
                         .into_iter()
-                        .map(|(instances, triangles)| LevelCount {
+                        .zip(&item.drawn)
+                        .map(|((instances, triangles), &level)| LevelCount {
+                            level,
                             instances,
                             triangles,
                         })
@@ -971,6 +1042,22 @@ fn vc_layer(l: &TerrainLayer) -> vc::TerrainLayer {
     }
 }
 
+/// The triangles the view pass of a frame submitted, of the renderer's statistics.
+fn forward_triangles(stats: &vc::RenderStats) -> u64 {
+    stats
+        .pass_triangles
+        .iter()
+        .find(|(pass, _)| *pass == "forward")
+        .map_or(0, |(_, triangles)| *triangles)
+}
+
+/// What the renderer divides the distances of the levels by at a quality: its
+/// `lod_distance_percent` over 100 (40 low, 50 medium, 100 high, 200 ultra), as its own
+/// `lod_scale` figures it, for a view distance GameCraft never changes from 1.
+fn quality_lod_scale(quality: &vc::Quality) -> f32 {
+    quality.lod_distance_percent.max(1) as f32 / 100.0
+}
+
 /// A light for the renderer.
 fn vc_light(s: &light::Spot) -> vc::Light {
     let [x, y, z] = s.position;
@@ -1084,8 +1171,7 @@ fn upload_model(
         levels: Vec::new(),
         bounds: (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
         size_m: data.lods.size_m,
-        lod: data.lods.file.clone(),
-        warnings: data.lods.warnings.clone(),
+        read: data.lods.read.clone(),
         meshes: Vec::new(),
         materials: Vec::new(),
         textures: Vec::new(),
@@ -1197,8 +1283,12 @@ fn upload_model(
         out.free(r);
         return Err(FailedModel { why, files });
     }
-    out.levels = (0..data.lods.levels)
-        .map(|level| {
+    out.levels = data
+        .lods
+        .read
+        .drawn
+        .iter()
+        .map(|&level| {
             let mut parts = Vec::new();
             let mut triangles = 0u64;
             for (part, &mask) in uploaded.iter().zip(&data.lods.drawn_at) {
@@ -1473,12 +1563,13 @@ impl Scene<'_> {
     }
 
     /// Models: one upload per asset (kept from one rebuild to the next), one item per asset
-    /// and set of distances (the component's, the scale) with an instance per entity, its
-    /// levels of detail and its draw distance from the file, the component or the asset's
-    /// size. Characters with a model get an item of their own per set, whose instances follow
-    /// them without a rebuild; the character the camera follows has an item of its own that
-    /// is never culled by distance. A model that cannot be drawn is a small magenta box at
-    /// each entity, with a problem line that names the asset, why and the entities.
+    /// and set of distances (the component's; the scale, in buckets, where a distance follows
+    /// it) with an instance per entity, its levels of detail and its draw distance from the
+    /// file, the component or the asset's size. Characters with a model get an item of their
+    /// own per set, whose instances follow them without a rebuild; the character the camera
+    /// follows has an item of its own that is never culled by distance. A model that cannot
+    /// be drawn is a small magenta box at each entity, with a problem line that names the
+    /// asset, why and the entities.
     fn models(
         &mut self,
         world: &World,
@@ -1488,26 +1579,15 @@ impl Scene<'_> {
         units: Option<UnitMeshes>,
         followed: Option<EntityId>,
     ) {
-        // Per asset, in order of path: the entities that show it, by what decides their levels.
-        let mut groups: BTreeMap<String, Vec<(ModelKey, Vec<&Entity>)>> = BTreeMap::new();
+        let mut by_asset: BTreeMap<String, Vec<&Entity>> = BTreeMap::new();
         for e in world.entities() {
-            let Some(m) = e.model() else { continue };
-            let key = ModelKey {
-                lod_distances_m: m.lod_distances_m.clone(),
-                draw_distance_m: m.draw_distance_m,
-                scale: m.scale * e.scale,
-                followed: Some(e.id) == followed && e.character().is_some(),
-            };
-            let sets = groups.entry(m.asset.clone()).or_default();
-            match sets.iter_mut().find(|(k, _)| *k == key) {
-                Some((_, entities)) => entities.push(e),
-                None => sets.push((key, vec![e])),
+            if let Some(m) = e.model() {
+                by_asset.entry(m.asset.clone()).or_default().push(e);
             }
         }
         let mut missing: Vec<Mat4> = Vec::new();
         let mut missing_characters: Vec<&Entity> = Vec::new();
-        for (asset, sets) in groups {
-            let entities: Vec<&Entity> = sets.iter().flat_map(|(_, e)| e.iter().copied()).collect();
+        for (asset, entities) in by_asset {
             if !resident.contains_key(&asset) {
                 let made = upload_model(self.r, &asset, files);
                 if made.is_ok() {
@@ -1550,26 +1630,55 @@ impl Scene<'_> {
             if let Some(note) = &m.note {
                 self.problems.push(format!("Model `{asset}`: {note}"));
             }
-            for warning in &m.warnings {
+            for warning in &m.read.warnings {
                 self.problems.push(format!("Model `{asset}`: {warning}"));
             }
+            // By what decides the levels, in a map: a thousand scattered copies, each its
+            // own size, are a handful of items, found without a search per entity.
+            let mut sets: BTreeMap<ModelKey, Vec<&Entity>> = BTreeMap::new();
+            for &e in &entities {
+                let Some(model) = e.model() else { continue };
+                let component = LodOverride {
+                    switch_m: model.lod_distances_m.clone(),
+                    draw_m: model.draw_distance_m,
+                    coverage: None,
+                };
+                let scale = model.scale * e.scale;
+                let key = ModelKey {
+                    lod_distances_m: component
+                        .switch_m
+                        .iter()
+                        .flatten()
+                        .map(|d| d.to_bits())
+                        .collect(),
+                    draw_distance_m: component.draw_m.map(f64::to_bits),
+                    scale: follows_scale(m.read.levels, m.read.file.as_ref(), Some(&component))
+                        .then(|| scale_bucket(scale).to_bits()),
+                    followed: Some(e.id) == followed && e.character().is_some(),
+                };
+                sets.entry(key).or_default().push(e);
+            }
+            // In the order of the first entity that shows the set, as the entities come.
+            let mut sets: Vec<(ModelKey, Vec<&Entity>)> = sets.into_iter().collect();
+            sets.sort_by_key(|(_, entities)| entities.first().map(|e| e.id));
+            // In the order of the first entity that shows the set, as the entities come.
+            let mut sets: Vec<(ModelKey, Vec<&Entity>)> = sets.into_iter().collect();
+            sets.sort_by_key(|(_, entities)| entities.first().map(|e| e.id));
             for (key, entities) in sets {
                 // The component's distances, else the file's, else the rule from the size the
-                // model has in the world.
-                let component = LodOverride {
-                    switch_m: key.lod_distances_m.clone(),
-                    draw_m: key.draw_distance_m,
-                };
+                // model has in the world (its bucket's upper scale where they follow it).
+                let component = key.distances();
                 let (distances, notes) = LodDistances::resolve(
-                    m.levels.len(),
-                    m.size_m * key.scale,
-                    m.lod.as_ref(),
+                    m.read.levels,
+                    m.size_m * key.scale(),
+                    m.read.file.as_ref(),
                     Some(&component),
                 );
                 for note in notes {
                     self.problems.push(format!("Model `{asset}`: {note}"));
                 }
-                let mut until_m = distances.ends_m();
+                // Where each level that draws ends; the last is the draw distance.
+                let mut until_m = m.read.drawn_ends(&distances.ends_m());
                 if key.followed
                     && let Some(last) = until_m.last_mut()
                 {
@@ -1657,6 +1766,7 @@ impl Scene<'_> {
             asset: asset.to_string(),
             instances,
             triangles: m.levels.iter().map(|l| l.triangles).collect(),
+            drawn: m.read.drawn.clone(),
             bounds: m.bounds,
             until_m,
         });

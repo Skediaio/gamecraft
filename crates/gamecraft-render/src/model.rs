@@ -14,7 +14,7 @@
 //! recognised by its name only: the workspace builds `gltf` without
 //! `KHR_materials_transmission`.
 
-use gamecraft_project::lod::{self, LodOverride, LodSource};
+use gamecraft_project::lod::{self, Levels, LodSource};
 use gamecraft_project::model::{check_primitive, decode_uri, open};
 use glam::{Mat3, Mat4, Vec3};
 
@@ -127,14 +127,16 @@ pub struct ModelData {
 }
 
 impl ModelData {
-    /// Triangles of the finest level (every triangle of a model without levels).
+    /// Triangles of the finest level that draws (every triangle of a model without levels).
     pub fn triangles(&self) -> usize {
         self.triangles_at(0).unwrap_or(0)
     }
 
-    /// Triangles level `level` draws, `None` when the model has no such level.
+    /// Triangles drawn level `level` draws (in the order of [`Levels::drawn`]); `None` when
+    /// the model has no such level.
     pub fn triangles_at(&self, level: usize) -> Option<usize> {
         self.lods
+            .read
             .triangles
             .get(level)
             .map(|&t| usize::try_from(t).unwrap_or(usize::MAX))
@@ -144,23 +146,18 @@ impl ModelData {
 /// The levels of detail of a model, as its file says ([`gamecraft_project::lod`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ModelLods {
-    /// The levels the model has, finest first; 1 without any.
-    pub levels: usize,
+    /// The levels that draw with their triangles, what the file says of the distances and
+    /// what is broken in it.
+    pub read: Levels,
     /// For each prim of [`ModelData::prims`], in the same order: bit `k` set when the prim
-    /// is drawn at level `k`.
+    /// is drawn at level `k` of the file (the levels that draw are [`Levels::drawn`]).
     pub drawn_at: Vec<u8>,
-    /// Triangles per level, finest first.
-    pub triangles: Vec<u64>,
-    /// The extent of the model across its box, metres: the size the screen-size rule
-    /// follows. Not a finite number when the model has no vertices.
+    /// The extent of the finest level that draws across its box, metres, over every vertex
+    /// the file has there (strips and fans included): the size the screen-size rule follows,
+    /// as the host measures it. Not a finite number when the model has no vertices.
     pub size_m: f64,
-    /// What the file itself says of the distances of the levels (`asset.extras.gamecraft`,
-    /// else `MSFT_screencoverage`); `None` when it says nothing.
-    pub file: Option<LodOverride>,
     /// How the levels were found; `None` for a model with one level.
     pub source: Option<LodSource>,
-    /// What is broken in the levels, as sentences; the model is drawn all the same.
-    pub warnings: Vec<String>,
 }
 
 fn smooth_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
@@ -274,14 +271,11 @@ pub fn parse(
     // primitive is drawn at which level.
     let plan = lod::plan(&doc, gamecraft_project::model::split_glb(bytes)?.0);
     let mut vertices = 0usize;
-    let mut lo = [f64::INFINITY; 3];
-    let mut hi = [f64::NEG_INFINITY; 3];
+    let mut level_lo = vec![[f64::INFINITY; 3]; plan.levels];
+    let mut level_hi = vec![[f64::NEG_INFINITY; 3]; plan.levels];
     let mut drawn_at: Vec<u8> = Vec::new();
     for visit in lod::walk(&doc, &plan)? {
         let p = visit.primitive;
-        if p.mode() != gltf::mesh::Mode::Triangles {
-            continue;
-        }
         check_primitive(&p)?;
         let r = p.reader(data);
         let Some(pos) = r.read_positions() else {
@@ -291,6 +285,16 @@ pub fn parse(
         vertices = vertices.saturating_add(pos.len());
         if vertices > MAX_VERTICES {
             return Err(format!("the model has more than {MAX_VERTICES} vertices"));
+        }
+        // The size is measured over every vertex of a level, as the host measures the model
+        // (`inspect` counts strips and fans too); only triangle lists are drawn.
+        for k in lod::levels_of(visit.drawn_at) {
+            if let (Some(lo), Some(hi)) = (level_lo.get_mut(k), level_hi.get_mut(k)) {
+                lod::extend_bounds(&visit.world, &pos, lo, hi);
+            }
+        }
+        if p.mode() != gltf::mesh::Mode::Triangles {
+            continue;
         }
         let count = u32::try_from(pos.len()).map_err(|_| "too many vertices")?;
         let mut indices: Vec<u32> = match r.read_indices() {
@@ -323,7 +327,6 @@ pub fn parse(
         let xf = Mat4::from_cols_array(&visit.world.map(|v| v as f32));
         let normal_xf = Mat3::from_mat4(xf).inverse().transpose();
         let flip = xf.determinant() < 0.0;
-        lod::extend_bounds(&visit.world, &pos, &mut lo, &mut hi);
         // Geometry of the same material and the same levels joins one list.
         let at =
             match out.prims.iter().enumerate().position(|(i, q)| {
@@ -371,16 +374,20 @@ pub fn parse(
             }
         }
     }
-    let size_m = lod::size_across(lo, hi);
-    let (file, warnings) = plan.finish(size_m, &triangles);
+    let read = plan.finish(&triangles);
+    let box_of_finest = read
+        .drawn
+        .first()
+        .and_then(|&k| Some((level_lo.get(k)?, level_hi.get(k)?)));
+    let Some((min, max)) = box_of_finest else {
+        return Err("the file has no triangles".into());
+    };
+    let size_m = lod::size_across(*min, *max);
     out.lods = ModelLods {
-        levels: plan.levels,
+        read,
         drawn_at,
-        triangles,
         size_m,
-        file,
         source: plan.source,
-        warnings,
     };
     Ok(out)
 }

@@ -988,4 +988,30 @@ fn a_model_with_levels_of_detail_lists_them_with_their_distances() {
             .contains("level 1 has more triangles (36) than level 0 (12)")),
         "{thing}"
     );
+    // A level without a mesh is left out; as the last one it ends the model where it would
+    // have started, and the rows keep the levels' numbers.
+    let file = models.join("thing.gltf");
+    let mut doc: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    doc["nodes"] = json!([
+        {"name": "Thing_LOD0", "mesh": 0},
+        {"name": "Thing_LOD1", "mesh": 1},
+        {"name": "Thing_LOD2"}
+    ]);
+    fs::write(&file, serde_json::to_vec(&doc).unwrap()).unwrap();
+    ok(&mut h, "project.open", json!({"path": "demo"}));
+    let list = ok(&mut h, "asset.list", json!({}));
+    let thing = &list["assets"].as_array().unwrap()[2];
+    assert_eq!(thing["path"], "models/thing.gltf");
+    let lods = thing["lods"].as_array().unwrap();
+    assert_eq!(lods.len(), 2, "{thing}");
+    assert_eq!(
+        (lods[0]["level"].clone(), lods[1]["level"].clone()),
+        (json!(0), json!(1))
+    );
+    assert_eq!(thing["draw_distance_m"], lods[1]["until_m"]);
+    assert!(thing["lod_warnings"].as_array().unwrap().iter().any(|w| {
+        w.as_str()
+            .unwrap()
+            .contains("level 2 has no geometry and is left out: nothing of the model is drawn")
+    }));
 }

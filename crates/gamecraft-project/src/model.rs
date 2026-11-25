@@ -18,10 +18,11 @@ pub const MAX_MODEL_VERTICES: u64 = 20_000_000;
 /// What [`inspect`] found.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelSummary {
-    /// Triangles of the finest level of detail (of the triangle, strip and fan primitives
-    /// the scene's nodes draw there); [`ModelSummary::lod_triangles`] has the other levels.
+    /// Triangles of the finest level of detail that draws (of the triangle, strip and fan
+    /// primitives the scene's nodes draw there); [`ModelSummary::lod`] has the other levels.
     pub triangles: u64,
-    /// The local bounding box of the vertices of every level, node transforms applied.
+    /// The local bounding box of the vertices of the finest level that draws, node
+    /// transforms applied: the box the simulation collides with and rays hit.
     pub bounds: ModelBounds,
     /// Meshes in the file.
     pub meshes: usize,
@@ -29,18 +30,12 @@ pub struct ModelSummary {
     pub materials: usize,
     /// Images in the file.
     pub images: usize,
-    /// Triangles per level of detail, finest first; one for a model without any. Geometry
-    /// that belongs to no level of a group counts in every level that draws it.
-    pub lod_triangles: Vec<u64>,
+    /// The levels of detail: those that draw with their triangles, what the file says of
+    /// the distances ([`crate::lod::LodOverride`]: `asset.extras.gamecraft`, else
+    /// `MSFT_screencoverage`) and what is broken in them. One level for a model without any.
+    pub lod: crate::lod::Levels,
     /// How the levels were found; `None` for a model with one level.
     pub lod_source: Option<crate::lod::LodSource>,
-    /// What the file itself says of the distances of its levels ([`crate::lod::LodOverride`]:
-    /// `asset.extras.gamecraft`, else `MSFT_screencoverage`); `None` when it says nothing, and
-    /// [`crate::lod::rule`] from the model's size applies.
-    pub lod: Option<crate::lod::LodOverride>,
-    /// What is broken in the levels (a level with more triangles than the one before, a
-    /// missing level, ...), as sentences; the model is drawn all the same.
-    pub lod_warnings: Vec<String>,
 }
 
 impl ModelSummary {
@@ -147,8 +142,9 @@ pub fn folder_of(path: &str) -> &str {
 
 /// Reads a `.glb` or `.gltf` model: `resource(path)` gives the bytes of a file it refers to
 /// (a path relative to the model's folder, from [`references`]). Counts the triangles of each
-/// level of detail ([`crate::lod`]: one for a model without any) and measures its bounding
-/// box over the default scene (else the first). An error, never a panic, for a file that is
+/// level of detail ([`crate::lod`]: one for a model without any) and measures the bounding
+/// box of the finest level that draws, over the default scene (else the first). An error,
+/// never a panic, for a file that is
 /// not glTF, a buffer that is missing or too short, an index past the vertices, a scene
 /// without triangles or a model past the limits.
 pub fn inspect(
@@ -198,9 +194,9 @@ pub fn inspect(
         return Err("the model has no scene".into());
     }
     let mut vertices: u64 = 0;
-    let mut lo = [f64::INFINITY; 3];
-    let mut hi = [f64::NEG_INFINITY; 3];
     let mut level_triangles = vec![0u64; plan.levels];
+    let mut level_lo = vec![[f64::INFINITY; 3]; plan.levels];
+    let mut level_hi = vec![[f64::NEG_INFINITY; 3]; plan.levels];
     for visit in crate::lod::walk(doc, &plan)? {
         let p = visit.primitive;
         let count_of = |n: u64| match p.mode() {
@@ -240,32 +236,40 @@ pub fn inspect(
             continue;
         }
         for k in crate::lod::levels_of(visit.drawn_at) {
-            if let Some(slot) = level_triangles.get_mut(k) {
+            if let (Some(slot), Some(lo), Some(hi)) = (
+                level_triangles.get_mut(k),
+                level_lo.get_mut(k),
+                level_hi.get_mut(k),
+            ) {
                 *slot = slot.saturating_add(drawn);
+                crate::lod::extend_bounds(&visit.world, &positions, lo, hi);
             }
         }
-        crate::lod::extend_bounds(&visit.world, &positions, &mut lo, &mut hi);
     }
-    let triangles = level_triangles.first().copied().unwrap_or(0);
-    let bounds = ModelBounds { min: lo, max: hi };
-    if triangles == 0 {
+    let lod = plan.finish(&level_triangles);
+    // The box of the finest level that draws is the model's: what most engines collide with.
+    let (Some(&finest), Some(triangles)) = (lod.drawn.first(), lod.triangles.first().copied())
+    else {
         return Err("the model's scene has no triangles".into());
-    }
+    };
+    let (Some(min), Some(max)) = (level_lo.get(finest), level_hi.get(finest)) else {
+        return Err("the model's scene has no triangles".into());
+    };
+    let bounds = ModelBounds {
+        min: *min,
+        max: *max,
+    };
     if !bounds.is_valid() {
         return Err("the model's vertices are not finite numbers".into());
     }
-    let size = crate::lod::size_across(bounds.min, bounds.max);
-    let (lod, lod_warnings) = plan.finish(size, &level_triangles);
     Ok(ModelSummary {
         triangles,
         bounds,
         meshes: doc.meshes().len(),
         materials: doc.materials().len(),
         images: doc.images().len(),
-        lod_triangles: level_triangles,
-        lod_source: plan.source,
         lod,
-        lod_warnings,
+        lod_source: plan.source,
     })
 }
 

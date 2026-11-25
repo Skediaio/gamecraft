@@ -228,28 +228,34 @@ fn bounds_json(b: &ModelBounds) -> Value {
     json!({"min": b.min, "max": b.max})
 }
 
-/// The levels of detail of a model as `asset.list` shows them: the triangles of each level
-/// and where it ends (its file's distances, else the rule from its size; a component's
-/// distances are its entities' own), how far it is drawn, how the levels were found and what
-/// is broken in them.
+/// The levels of detail of a model as `asset.list` shows them: the levels that draw, each
+/// with its triangles and where it ends (its file's distances, else the rule from its size; a
+/// component's distances are its entities' own), how far it is drawn, how the levels were
+/// found and what is broken in them.
 fn lods_json(s: &ModelSummary) -> (Value, Value, Value, Value) {
     let (distances, notes) =
-        LodDistances::resolve(s.lod_triangles.len(), s.size_m(), s.lod.as_ref(), None);
+        LodDistances::resolve(s.lod.levels, s.size_m(), s.lod.file.as_ref(), None);
     let ends = distances.ends_m();
     let lods: Vec<Value> = s
-        .lod_triangles
+        .lod
+        .drawn
         .iter()
-        .zip(&ends)
-        .enumerate()
-        .map(|(level, (&triangles, &until_m))| {
-            json!({"level": level, "triangles": triangles, "until_m": until_m})
+        .zip(&s.lod.triangles)
+        .map(|(&level, &triangles)| {
+            json!({"level": level, "triangles": triangles, "until_m": ends.get(level)})
         })
         .collect();
-    let mut warnings: Vec<String> = s.lod_warnings.clone();
+    let mut warnings: Vec<String> = s.lod.warnings.clone();
     warnings.extend(notes);
+    let draw_m = s
+        .lod
+        .drawn_ends(&ends)
+        .last()
+        .copied()
+        .unwrap_or(f64::INFINITY);
     (
         Value::from(lods),
-        json!(distances.draw_m),
+        json!(draw_m),
         s.lod_source
             .map_or(Value::Null, |source| json!(source.name())),
         Value::from(warnings),

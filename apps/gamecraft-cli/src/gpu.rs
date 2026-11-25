@@ -109,8 +109,8 @@ impl Pictures for GpuPictures {
                             "drawn": m.drawn,
                             "culled": m.culled,
                             "until_m": m.until_m,
-                            "levels": m.levels.iter().enumerate().map(|(level, l)| {
-                                json!({"level": level, "instances": l.instances, "triangles": l.triangles})
+                            "levels": m.levels.iter().map(|l| {
+                                json!({"level": l.level, "instances": l.instances, "triangles": l.triangles})
                             }).collect::<Vec<_>>(),
                         })
                     }).collect::<Vec<_>>(),

@@ -17,7 +17,9 @@
 
 use gamecraft_project::textures::pack_glb;
 use gamecraft_render::model;
-use gamecraft_render::{Camera, LevelCount, Picture, PictureRequest, WorldRenderer, headless_gpu};
+use gamecraft_render::{
+    Camera, LevelCount, Picture, PictureRequest, Quality, WorldRenderer, headless_gpu,
+};
 use gamecraft_world::{Character, Component, EntityDraft, Model, World};
 use serde_json::{Value, json};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -47,6 +49,17 @@ fn node(name: &'static str, mesh: Option<usize>) -> Node {
 /// A GLB with a mesh per count of `boxes` (unit cubes side by side along x, 12 triangles
 /// each, no material), the `nodes` over them showing `roots`, and `extras` on its asset.
 fn glb(boxes: &[usize], nodes: &[Node], roots: &[usize], extras: Value) -> Vec<u8> {
+    glb_modes(boxes, &[], nodes, roots, extras)
+}
+
+/// [`glb`] with the glTF `mode` of each mesh (4 triangles when left out; 5 a strip, 6 a fan).
+fn glb_modes(
+    boxes: &[usize],
+    modes: &[u16],
+    nodes: &[Node],
+    roots: &[usize],
+    extras: Value,
+) -> Vec<u8> {
     let mut bin: Vec<u8> = Vec::new();
     let mut views = Vec::new();
     let mut accessors = Vec::new();
@@ -75,7 +88,11 @@ fn glb(boxes: &[usize], nodes: &[Node], roots: &[usize], extras: Value) -> Vec<u
             "min": lo,
             "max": hi
         }));
-        meshes.push(json!({"primitives": [{"attributes": {"POSITION": accessors.len() - 1}}]}));
+        let mut primitive = json!({"attributes": {"POSITION": accessors.len() - 1}});
+        if let Some(&mode) = modes.get(meshes.len()) {
+            primitive["mode"] = json!(mode);
+        }
+        meshes.push(json!({"primitives": [primitive]}));
     }
     let nodes_json: Vec<Value> = nodes
         .iter()
@@ -202,22 +219,35 @@ fn named_with(extras: Value) -> Vec<u8> {
     )
 }
 
+/// What the row of the file's level `k` says (nothing drawn when the row is missing).
 fn level(list: Vec<LevelCount>, k: usize) -> LevelCount {
-    list.get(k).copied().unwrap_or_default()
+    list.iter()
+        .find(|l| l.level == k)
+        .copied()
+        .unwrap_or(lc(k, 0, 0))
+}
+
+/// The row of the file's level `level`.
+fn lc(level: usize, instances: usize, triangles: u64) -> LevelCount {
+    LevelCount {
+        level,
+        instances,
+        triangles,
+    }
 }
 
 #[test]
 fn a_file_says_its_levels_by_names_or_by_the_extension() {
     for bytes in [named(), msft()] {
         let m = model::parse(&bytes, &|_: &str| None).unwrap();
-        assert_eq!(m.lods.levels, 3);
+        assert_eq!(m.lods.read.levels, 3);
         assert_eq!(m.triangles(), 36);
         assert_eq!((m.triangles_at(1), m.triangles_at(2)), (Some(24), Some(12)));
-        assert_eq!(m.lods.triangles, vec![36, 24, 12]);
+        assert_eq!(m.lods.read.triangles, vec![36, 24, 12]);
         // One prim per level, in the order the scene is walked: the finest level at the
         // group's node, then the others standing in (the last one pushed is popped first).
         assert_eq!(m.lods.drawn_at, vec![1, 4, 2], "one prim per level");
-        assert!(m.lods.file.is_none() && m.lods.warnings.is_empty());
+        assert!(m.lods.read.file.is_none() && m.lods.read.warnings.is_empty());
         assert!((m.lods.size_m - 11f64.sqrt()).abs() < 1e-12);
         assert!(m.lods.source.is_some());
     }
@@ -235,10 +265,10 @@ fn a_file_says_its_levels_by_names_or_by_the_extension() {
     let m = model::parse(&shared, &|_: &str| None).unwrap();
     // The finest level at the group's node, its coarser level standing in, then the slab.
     assert_eq!(m.lods.drawn_at, vec![1, 2, 3], "{:?}", m.lods);
-    assert_eq!(m.lods.triangles, vec![48, 24]);
+    assert_eq!(m.lods.read.triangles, vec![48, 24]);
     assert_eq!(m.triangles(), 48);
     let crate_ = model::parse(CRATE, &|_: &str| None).unwrap();
-    assert_eq!((crate_.lods.levels, crate_.triangles()), (1, 12));
+    assert_eq!((crate_.lods.read.levels, crate_.triangles()), (1, 12));
     assert_eq!(crate_.lods.drawn_at, vec![1]);
     // The file's distances and a broken set come back as said.
     let m = model::parse(
@@ -246,10 +276,10 @@ fn a_file_says_its_levels_by_names_or_by_the_extension() {
         &|_: &str| None,
     )
     .unwrap();
-    assert_eq!(m.lods.file.as_ref().unwrap().draw_m, Some(300.0));
+    assert_eq!(m.lods.read.file.as_ref().unwrap().draw_m, Some(300.0));
     let m = model::parse(&backwards(), &|_: &str| None).unwrap();
     assert_eq!(
-        m.lods.warnings,
+        m.lods.read.warnings,
         vec![
             "level 1 has more triangles (24) than level 0 (12); the levels should get coarser, \
              check their order (the model is drawn as it is)",
@@ -269,7 +299,7 @@ fn every_truncation_and_mutation_of_a_file_with_levels_is_an_error_never_a_panic
             let mut bad = bytes.clone();
             bad[at] ^= 0xA5;
             if let Ok(m) = model::parse(&bad, &|_: &str| None) {
-                for k in 0..m.lods.levels {
+                for k in 0..m.lods.read.levels {
                     let _ = m.triangles_at(k);
                 }
             }
@@ -281,11 +311,11 @@ fn every_truncation_and_mutation_of_a_file_with_levels_is_an_error_never_a_panic
 
 static SERIAL: Mutex<()> = Mutex::new(());
 
-fn renderer() -> Option<(MutexGuard<'static, ()>, WorldRenderer)> {
+fn gpu() -> Option<(MutexGuard<'static, ()>, wgpu::Device, wgpu::Queue)> {
     static GPU: OnceLock<Result<(wgpu::Device, wgpu::Queue), String>> = OnceLock::new();
     let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     match GPU.get_or_init(|| headless_gpu().map_err(|e| e.to_string())) {
-        Ok((device, queue)) => Some((guard, WorldRenderer::new(device.clone(), queue.clone()))),
+        Ok((device, queue)) => Some((guard, device.clone(), queue.clone())),
         Err(e) => {
             if std::env::var("GAMECRAFT_REQUIRE_GPU").as_deref() == Ok("1") {
                 panic!("GAMECRAFT_REQUIRE_GPU=1 but there is no GPU: {e}");
@@ -294,6 +324,11 @@ fn renderer() -> Option<(MutexGuard<'static, ()>, WorldRenderer)> {
             None
         }
     }
+}
+
+fn renderer() -> Option<(MutexGuard<'static, ()>, WorldRenderer)> {
+    let (guard, device, queue) = gpu()?;
+    Some((guard, WorldRenderer::new(device, queue)))
 }
 
 /// A world without terrain (the ground plane is not drawn: the counts are the models' own).
@@ -371,27 +406,9 @@ fn the_finest_level_is_near_the_coarsest_far_and_nothing_beyond_the_draw_distanc
         let m = one(&p);
         assert_eq!(m.asset, ASSET);
         assert_eq!((m.instances, m.drawn, m.culled), (3, 2, 1), "{m:?}");
-        assert_eq!(
-            level(m.levels.clone(), 0),
-            LevelCount {
-                instances: 1,
-                triangles: 36
-            }
-        );
-        assert_eq!(
-            level(m.levels.clone(), 1),
-            LevelCount {
-                instances: 0,
-                triangles: 0
-            }
-        );
-        assert_eq!(
-            level(m.levels.clone(), 2),
-            LevelCount {
-                instances: 1,
-                triangles: 12
-            }
-        );
+        assert_eq!(level(m.levels.clone(), 0), lc(0, 1, 36));
+        assert_eq!(level(m.levels.clone(), 1), lc(1, 0, 0));
+        assert_eq!(level(m.levels.clone(), 2), lc(2, 1, 12));
         assert_eq!(m.until_m, vec![20.0, 60.0, 150.0]);
         // What the renderer submitted in the view: the two levels that drew, no more.
         assert_eq!(p.stats.forward_triangles, base + 36 + 12, "{:?}", p.stats);
@@ -402,27 +419,9 @@ fn the_finest_level_is_near_the_coarsest_far_and_nothing_beyond_the_draw_distanc
         let p = picture(&mut r, far);
         let m = one(&p);
         assert_eq!((m.drawn, m.culled), (2, 1), "{m:?}");
-        assert_eq!(
-            level(m.levels.clone(), 0),
-            LevelCount {
-                instances: 0,
-                triangles: 0
-            }
-        );
-        assert_eq!(
-            level(m.levels.clone(), 1),
-            LevelCount {
-                instances: 1,
-                triangles: 24
-            }
-        );
-        assert_eq!(
-            level(m.levels.clone(), 2),
-            LevelCount {
-                instances: 1,
-                triangles: 12
-            }
-        );
+        assert_eq!(level(m.levels.clone(), 0), lc(0, 0, 0));
+        assert_eq!(level(m.levels.clone(), 1), lc(1, 1, 24));
+        assert_eq!(level(m.levels.clone(), 2), lc(2, 1, 12));
         assert_eq!(p.stats.forward_triangles, base + 24 + 12, "{:?}", p.stats);
     }
 }
@@ -454,13 +453,7 @@ fn a_model_without_levels_is_drawn_as_before_and_culled_by_its_size() {
     let p = picture(&mut r, camera);
     let m = one(&p);
     assert_eq!((m.instances, m.drawn, m.culled), (2, 1, 1), "{m:?}");
-    assert_eq!(
-        m.levels,
-        vec![LevelCount {
-            instances: 1,
-            triangles: 12
-        }]
-    );
+    assert_eq!(m.levels, vec![lc(0, 1, 12)]);
     // 0.9 m on a side, 1.56 m across: drawn to about 364 m (the rule).
     assert!(
         m.until_m.len() == 1 && (364.0..366.0).contains(&m.until_m[0]),
@@ -682,23 +675,10 @@ fn a_broken_set_of_levels_warns_and_is_drawn() {
     );
     let m = one(&p);
     assert_eq!((m.drawn, m.culled), (2, 0), "{m:?}");
-    assert_eq!(
-        m.levels,
-        vec![
-            LevelCount {
-                instances: 1,
-                triangles: 12
-            },
-            LevelCount {
-                instances: 0,
-                triangles: 0
-            },
-            LevelCount {
-                instances: 1,
-                triangles: 36
-            }
-        ]
-    );
+    // The size is the finest level's (one cube), so its first change is at 6 m: the model
+    // 10 m away is already at the second level, the one 100 m away at the third.
+    assert_eq!(m.until_m[0], 6.0, "{m:?}");
+    assert_eq!(m.levels, vec![lc(0, 0, 0), lc(1, 1, 24), lc(2, 1, 36)]);
 }
 
 #[test]
@@ -745,4 +725,307 @@ fn a_character_the_camera_follows_is_never_culled_by_distance() {
     r.set_followed_character(None);
     r.sync(&w, None);
     assert_eq!(one(&picture(&mut r, camera)).culled, 1);
+}
+
+// ------------------------------------------------------------------ review round 1
+
+#[test]
+fn the_size_is_the_host_s_strips_and_fans_included() {
+    // A strip beside the levels: the host measures the model over its vertices too, so the
+    // renderer must as well, or its levels would end at other distances than `asset.list`
+    // says.
+    let bytes = glb_modes(
+        &[3, 1, 5],
+        &[4, 4, 5],
+        &[
+            node("Thing_LOD0", Some(0)),
+            node("Thing_LOD1", Some(1)),
+            node("Slab", Some(2)),
+        ],
+        &[0, 1, 2],
+        Value::Null,
+    );
+    let m = model::parse(&bytes, &|_: &str| None).unwrap();
+    let s = gamecraft_project::inspect(&bytes, &|_: &str| None).unwrap();
+    assert_eq!(m.lods.size_m, s.size_m(), "the same size to the bit");
+    assert!(
+        (m.lods.size_m - 27f64.sqrt()).abs() < 1e-9,
+        "{}",
+        m.lods.size_m
+    );
+    // The strip is not drawn (the renderer draws triangle lists only), so it is not in the
+    // triangles of a level; the host counts it, as it always did.
+    assert_eq!(m.lods.read.triangles, vec![36, 12]);
+    assert_eq!(
+        s.lod.triangles,
+        vec![36 + 178, 12 + 178],
+        "180 vertices in a strip: 178 triangles"
+    );
+}
+
+/// The one model row of a count.
+fn only(rows: &[gamecraft_render::ModelStats]) -> gamecraft_render::ModelStats {
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    rows[0].clone()
+}
+
+#[test]
+fn a_thousand_scattered_copies_with_their_own_scales_are_a_handful_of_items() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let mut rng = gamecraft_math::Rng::new(7);
+    let mut w = world();
+    let mut fixed = world();
+    for i in 0..1000 {
+        let (x, z) = (f64::from(i % 40) * 6.0, f64::from(i / 40) * 6.0);
+        let scale = rng.range(0.5, 2.0);
+        add(
+            &mut w,
+            &format!("Crate {i}"),
+            "models/crate.glb",
+            [x, 0.0, z],
+            |m| m.scale = scale,
+        );
+        add(
+            &mut fixed,
+            &format!("Crate {i}"),
+            "models/crate.glb",
+            [x, 0.0, z],
+            |m| {
+                m.scale = scale;
+                m.draw_distance_m = Some(600.0);
+            },
+        );
+    }
+    r.provide_asset("models/crate.glb", CRATE.to_vec());
+    let camera = view([120.0, 90.0, 140.0], [117.0, 0.0, 72.0]);
+    let base = baseline(&mut r, camera);
+    assert_eq!(r.sync(&w, None), Vec::<String>::new());
+    let p = picture(&mut r, camera);
+    let rows = &p.stats.models;
+    assert!(
+        (6..=9).contains(&rows.len()),
+        "{} items for 1000 copies of their own size",
+        rows.len()
+    );
+    assert_eq!(rows.iter().map(|m| m.instances).sum::<usize>(), 1000);
+    let counted: u64 = rows
+        .iter()
+        .flat_map(|m| m.levels.iter().map(|l| l.triangles))
+        .sum();
+    assert_eq!(p.stats.forward_triangles, base + counted, "{:?}", p.stats);
+    assert!(p.problems.is_empty(), "{:?}", p.problems);
+    // A bucket's distances are its upper scale's: a copy is never culled early.
+    for row in rows {
+        let biggest = row.until_m.last().copied().unwrap_or(0.0)
+            / (0.9 * 3f64.sqrt() * 270.0 / (2.0 * 0.5773502691896257));
+        let smallest = biggest / 1.25;
+        assert!(
+            row.instances > 0 && biggest >= 0.5 && smallest < 2.0,
+            "the bucket {:?} of scales {:.3}..{:.3}",
+            row.until_m,
+            smallest,
+            biggest
+        );
+    }
+    // Distances given in metres do not follow the scale: every copy shares one item.
+    assert_eq!(r.sync(&fixed, None), Vec::<String>::new());
+    let p = picture(&mut r, camera);
+    assert_eq!(p.stats.models.len(), 1, "{:?}", p.stats.models);
+    assert_eq!(p.stats.models[0].until_m, vec![600.0]);
+    let counted: u64 = p
+        .stats
+        .models
+        .iter()
+        .flat_map(|m| m.levels.iter().map(|l| l.triangles))
+        .sum();
+    assert_eq!(p.stats.forward_triangles, base + counted, "{:?}", p.stats);
+}
+
+#[test]
+fn a_live_view_counts_at_its_quality_s_distances_and_a_picture_at_the_written_ones() {
+    let Some((_guard, device, queue)) = gpu() else {
+        return;
+    };
+    let mut r = WorldRenderer::new(device.clone(), queue.clone());
+    let mut w = world();
+    add(
+        &mut w,
+        "Near",
+        "models/crate.glb",
+        [0.0, 0.0, -100.0],
+        |_| {},
+    );
+    add(
+        &mut w,
+        "Middle",
+        "models/crate.glb",
+        [0.0, 0.0, -300.0],
+        |_| {},
+    );
+    add(
+        &mut w,
+        "Far",
+        "models/crate.glb",
+        [0.0, 0.0, -5000.0],
+        |_| {},
+    );
+    r.provide_asset("models/crate.glb", CRATE.to_vec());
+    let camera = view([0.0, 40.0, 20.0], [0.0, 0.0, -100.0]);
+    // A live frame of an empty world: what the sky alone submits in the view pass.
+    r.resize(320, 240);
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: 320,
+            height: 240,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let target = target.create_view(&Default::default());
+    assert_eq!(r.sync(&world(), None), Vec::<String>::new());
+    let mut encoder = device.create_command_encoder(&Default::default());
+    r.draw(&camera, 0.0, &target, &mut encoder).unwrap();
+    queue.submit([encoder.finish()]);
+    let live_base = r.frame_stats().forward_triangles;
+    assert_eq!(r.sync(&w, None), Vec::<String>::new());
+    // High (the quality of every picture): drawn to 364 m, so two of the three.
+    r.set_quality(Quality::High);
+    let m = only(&r.count_models(&camera, 4.0 / 3.0));
+    assert_eq!((m.drawn, m.culled), (2, 1), "{m:?}");
+    // Medium: the renderer halves every distance, so 300 m is beyond the crate's 182 m.
+    r.set_quality(Quality::Medium);
+    let m = only(&r.count_models(&camera, 4.0 / 3.0));
+    assert_eq!((m.drawn, m.culled), (1, 2), "{m:?}");
+    // The live frame the renderer draws agrees with the count...
+    let mut encoder = device.create_command_encoder(&Default::default());
+    r.draw(&camera, 0.0, &target, &mut encoder).unwrap();
+    queue.submit([encoder.finish()]);
+    let live = r.frame_stats();
+    assert_eq!(live.instances, 1, "one crate in the live view: {live:?}");
+    assert_eq!(live.forward_triangles, live_base + 12, "{live:?}");
+    // ...and a picture from the same camera is still drawn at the highest quality.
+    let p = picture(&mut r, camera);
+    assert_eq!(
+        (p.stats.models[0].drawn, p.stats.models[0].culled),
+        (2, 1),
+        "{:?}",
+        p.stats
+    );
+    assert_eq!(p.stats.instances, 2);
+    // Low: 40 percent (146 m): the crate at 100 m is still drawn, the others not.
+    r.set_quality(Quality::Low);
+    let m = only(&r.count_models(&camera, 4.0 / 3.0));
+    assert_eq!((m.drawn, m.culled), (1, 2), "{m:?}");
+}
+
+#[test]
+fn a_level_without_geometry_ends_the_model_or_is_left_out() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    // `MSFT_lod` whose last id is a node without a mesh: "draw nothing from here".
+    let mut high = node("High", Some(0));
+    high.extensions = json!({"MSFT_lod": {"ids": [1, 2]}});
+    let last_empty = glb(
+        &[3, 2, 1],
+        &[high, node("Medium", Some(1)), node("Low", None)],
+        &[0],
+        Value::Null,
+    );
+    // Names with the level in the middle missing its mesh.
+    let middle_empty = glb(
+        &[3, 1, 1],
+        &[
+            node("Thing_LOD0", Some(0)),
+            node("Thing_LOD1", None),
+            node("Thing_LOD2", Some(2)),
+        ],
+        &[0, 1, 2],
+        Value::Null,
+    );
+    for (bytes, missing, until, far_triangles, at_50) in [
+        (last_empty, 2, vec![20.0, 60.0], 0, 24),
+        (middle_empty, 1, vec![20.0, 150.0], 12, 12),
+    ] {
+        let mut w = world();
+        for (name, z) in [("Near", -10.0), ("Middle", -50.0), ("Far", -100.0)] {
+            add(&mut w, name, ASSET, [0.0, 0.0, z], |m| {
+                m.lod_distances_m = Some(vec![20.0, 60.0]);
+                m.draw_distance_m = Some(150.0);
+            });
+        }
+        r.provide_asset(ASSET, bytes);
+        let camera = view([0.0, 0.5, 0.0], [0.0, 0.5, -10.0]);
+        let base = baseline(&mut r, camera);
+        let problems = r.sync(&w, None);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].contains(ASSET) && problems[0].contains(&format!("level {missing}")),
+            "{problems:?}"
+        );
+        let p = picture(&mut r, camera);
+        let m = one(&p);
+        assert_eq!(m.until_m, until, "{m:?}");
+        assert_eq!(m.levels.len(), 2, "{m:?}");
+        // Near: the finest level; Middle: the coarse one that draws; Far: beyond 60 m only
+        // where the empty level was the last.
+        let (drawn, far) = if missing == 2 {
+            (2, 0)
+        } else {
+            (3, far_triangles)
+        };
+        assert_eq!((m.drawn, m.culled), (drawn, 3 - drawn), "{m:?}");
+        assert_eq!(
+            p.stats.forward_triangles,
+            base + 36 + at_50 + far,
+            "{:?}",
+            p.stats
+        );
+    }
+}
+
+#[test]
+fn screen_coverage_follows_the_model_s_scale_in_buckets() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let mut w = world();
+    add(&mut w, "One", ASSET, [-20.0, 0.0, 0.0], |_| {});
+    add(&mut w, "Ten", ASSET, [20.0, 0.0, 0.0], |m| m.scale = 10.0);
+    let mut high = node("High", Some(0));
+    high.extensions = json!({"MSFT_lod": {"ids": [1, 2]}});
+    high.extras = json!({"MSFT_screencoverage": [1.0, 0.25, 0.02]});
+    let bytes = glb(
+        &[3, 2, 1],
+        &[high, node("Medium", Some(1)), node("Low", Some(2))],
+        &[0],
+        Value::Null,
+    );
+    r.provide_asset(ASSET, bytes);
+    assert_eq!(r.sync(&w, None), Vec::<String>::new());
+    let rows = r.count_models(&view([0.0, 5.0, 60.0], [0.0, 5.0, 0.0]), 4.0 / 3.0);
+    assert_eq!(rows.len(), 2, "two buckets of scale: {rows:?}");
+    let (one, ten) = (&rows[0], &rows[1]);
+    assert_eq!((one.instances, ten.instances), (1, 1));
+    // The coverage is turned into metres for the size the model has in the world: the
+    // bucket's upper scale (11.64 for 10) times the extent.
+    let half_tan = 0.5773502691896257;
+    for k in 0..3 {
+        let share = [1.0, 0.25, 0.02][k];
+        assert!(
+            (one.until_m[k] - 11f64.sqrt() / (2.0 * half_tan * share)).abs() < 1e-9,
+            "{}",
+            one.until_m[k]
+        );
+        let ratio = ten.until_m[k] / one.until_m[k];
+        assert!((ratio - 11.641_532_182_653_137).abs() < 1e-9, "{ratio}");
+    }
 }

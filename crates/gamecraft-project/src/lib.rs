@@ -57,9 +57,9 @@ pub use error::ProjectError;
 pub use fields::WORLD_FORMAT;
 pub use layer::LAYER_FORMAT;
 pub use lod::{
-    DRAW_COVERAGE, LodDistances, LodOverride, LodSource, MIN_MODEL_SIZE_M, REFERENCE_FOV_Y_DEG,
-    REFERENCE_HEIGHT_PX, SWITCH_COVERAGE, coarser_check, extend_bounds, from_coverage, levels_of,
-    lod_name, rule, size_across,
+    DRAW_COVERAGE, Levels, LodDistances, LodOverride, LodSource, MIN_MODEL_SIZE_M,
+    REFERENCE_FOV_Y_DEG, REFERENCE_HEIGHT_PX, SWITCH_COVERAGE, check_coverage, coarser_check,
+    extend_bounds, follows_scale, from_coverage, levels_of, lod_name, rule, size_across,
 };
 pub use manifest::{Dependency, MAX_PACKS, Manifest, PACK_FORMAT, dependency_order};
 pub use model::{ModelSummary, inspect};
