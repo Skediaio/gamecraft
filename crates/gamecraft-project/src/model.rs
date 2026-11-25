@@ -18,9 +18,10 @@ pub const MAX_MODEL_VERTICES: u64 = 20_000_000;
 /// What [`inspect`] found.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelSummary {
-    /// Triangles drawn (of the triangle, strip and fan primitives of the scene's nodes).
+    /// Triangles of the finest level of detail (of the triangle, strip and fan primitives
+    /// the scene's nodes draw there); [`ModelSummary::lod_triangles`] has the other levels.
     pub triangles: u64,
-    /// The local bounding box of those triangles' vertices, node transforms applied.
+    /// The local bounding box of the vertices of every level, node transforms applied.
     pub bounds: ModelBounds,
     /// Meshes in the file.
     pub meshes: usize,
@@ -28,6 +29,25 @@ pub struct ModelSummary {
     pub materials: usize,
     /// Images in the file.
     pub images: usize,
+    /// Triangles per level of detail, finest first; one for a model without any. Geometry
+    /// that belongs to no level of a group counts in every level that draws it.
+    pub lod_triangles: Vec<u64>,
+    /// How the levels were found; `None` for a model with one level.
+    pub lod_source: Option<crate::lod::LodSource>,
+    /// What the file itself says of the distances of its levels ([`crate::lod::LodOverride`]:
+    /// `asset.extras.gamecraft`, else `MSFT_screencoverage`); `None` when it says nothing, and
+    /// [`crate::lod::rule`] from the model's size applies.
+    pub lod: Option<crate::lod::LodOverride>,
+    /// What is broken in the levels (a level with more triangles than the one before, a
+    /// missing level, ...), as sentences; the model is drawn all the same.
+    pub lod_warnings: Vec<String>,
+}
+
+impl ModelSummary {
+    /// The size the screen-size rule follows: the extent of the bounds across, metres.
+    pub fn size_m(&self) -> f64 {
+        crate::lod::size_across(self.bounds.min, self.bounds.max)
+    }
 }
 
 /// The files a glTF document refers to by relative URI (its buffers and images), in order, as
@@ -126,16 +146,18 @@ pub fn folder_of(path: &str) -> &str {
 }
 
 /// Reads a `.glb` or `.gltf` model: `resource(path)` gives the bytes of a file it refers to
-/// (a path relative to the model's folder, from [`references`]). Counts its triangles and
-/// measures its bounding box over the default scene (else the first). An error, never a
-/// panic, for a file that is not glTF, a buffer that is missing or too short, an index past
-/// the vertices, a scene without triangles or a model past the limits.
+/// (a path relative to the model's folder, from [`references`]). Counts the triangles of each
+/// level of detail ([`crate::lod`]: one for a model without any) and measures its bounding
+/// box over the default scene (else the first). An error, never a panic, for a file that is
+/// not glTF, a buffer that is missing or too short, an index past the vertices, a scene
+/// without triangles or a model past the limits.
 pub fn inspect(
     bytes: &[u8],
     resource: &dyn Fn(&str) -> Option<Vec<u8>>,
 ) -> Result<ModelSummary, String> {
     let (document, blob) = open(bytes)?;
     let doc = &document;
+    let plan = crate::lod::plan(doc, split_glb(bytes)?.0);
     let mut buffers: Vec<Option<Vec<u8>>> = Vec::new();
     for buffer in doc.buffers() {
         let data =
@@ -168,80 +190,63 @@ pub fn inspect(
         buffers.push(data);
     }
     let data = |b: gltf::Buffer| buffers.get(b.index()).and_then(|d| d.as_deref());
-    let scene = doc
+    if doc
         .default_scene()
         .or_else(|| doc.scenes().next())
-        .ok_or("the model has no scene")?;
-    let mut triangles: u64 = 0;
+        .is_none()
+    {
+        return Err("the model has no scene".into());
+    }
     let mut vertices: u64 = 0;
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
-    let mut visits = 0usize;
-    let mut stack: Vec<(gltf::Node, [f64; 16], usize)> =
-        scene.nodes().map(|n| (n, IDENTITY, 0)).collect();
-    while let Some((node, parent, depth)) = stack.pop() {
-        visits += 1;
-        if visits > MAX_NODE_VISITS || depth > MAX_NODE_DEPTH {
+    let mut level_triangles = vec![0u64; plan.levels];
+    for visit in crate::lod::walk(doc, &plan)? {
+        let p = visit.primitive;
+        let count_of = |n: u64| match p.mode() {
+            gltf::mesh::Mode::Triangles => n / 3,
+            gltf::mesh::Mode::TriangleStrip | gltf::mesh::Mode::TriangleFan => n.saturating_sub(2),
+            _ => 0,
+        };
+        check_primitive(&p)?;
+        let r = p.reader(data);
+        let Some(positions) = r.read_positions() else {
+            continue;
+        };
+        let positions: Vec<[f32; 3]> = positions.collect();
+        let n = positions.len() as u64;
+        vertices = vertices.saturating_add(n);
+        if vertices > MAX_MODEL_VERTICES {
             return Err(format!(
-                "the scene's node tree is deeper than {MAX_NODE_DEPTH} or has more than \
-                 {MAX_NODE_VISITS} node visits (a loop?)"
+                "the model has more than {MAX_MODEL_VERTICES} vertices to read"
             ));
         }
-        let local = node.transform().matrix();
-        let xf = mul(&parent, &to_f64(&local));
-        stack.extend(node.children().map(|c| (c, xf, depth + 1)));
-        let Some(mesh) = node.mesh() else { continue };
-        for p in mesh.primitives() {
-            check_primitive(&p)?;
-            let count_of = |n: u64| match p.mode() {
-                gltf::mesh::Mode::Triangles => n / 3,
-                gltf::mesh::Mode::TriangleStrip | gltf::mesh::Mode::TriangleFan => {
-                    n.saturating_sub(2)
-                }
-                _ => 0,
-            };
-            let r = p.reader(data);
-            let Some(positions) = r.read_positions() else {
-                continue;
-            };
-            let positions: Vec<[f32; 3]> = positions.collect();
-            let n = positions.len() as u64;
-            vertices = vertices.saturating_add(n);
-            if vertices > MAX_MODEL_VERTICES {
-                return Err(format!(
-                    "the model has more than {MAX_MODEL_VERTICES} vertices to read"
-                ));
-            }
-            let drawn = match r.read_indices() {
-                Some(indices) => {
-                    let mut count = 0u64;
-                    for i in indices.into_u32() {
-                        if u64::from(i) >= n {
-                            return Err(format!(
-                                "an index {i} points past the {n} vertices of a primitive"
-                            ));
-                        }
-                        count += 1;
+        let drawn = match r.read_indices() {
+            Some(indices) => {
+                let mut count = 0u64;
+                for i in indices.into_u32() {
+                    if u64::from(i) >= n {
+                        return Err(format!(
+                            "an index {i} points past the {n} vertices of a primitive"
+                        ));
                     }
-                    count_of(count)
+                    count += 1;
                 }
-                None => count_of(n),
-            };
-            if drawn == 0 {
-                continue;
+                count_of(count)
             }
-            triangles = triangles.saturating_add(drawn);
-            for q in &positions {
-                let w = apply(&xf, q.map(f64::from));
-                for (axis, v) in w.iter().enumerate() {
-                    if let (Some(l), Some(h)) = (lo.get_mut(axis), hi.get_mut(axis)) {
-                        *l = l.min(*v);
-                        *h = h.max(*v);
-                    }
-                }
+            None => count_of(n),
+        };
+        if drawn == 0 {
+            continue;
+        }
+        for k in crate::lod::levels_of(visit.drawn_at) {
+            if let Some(slot) = level_triangles.get_mut(k) {
+                *slot = slot.saturating_add(drawn);
             }
         }
+        crate::lod::extend_bounds(&visit.world, &positions, &mut lo, &mut hi);
     }
+    let triangles = level_triangles.first().copied().unwrap_or(0);
     let bounds = ModelBounds { min: lo, max: hi };
     if triangles == 0 {
         return Err("the model's scene has no triangles".into());
@@ -249,12 +254,18 @@ pub fn inspect(
     if !bounds.is_valid() {
         return Err("the model's vertices are not finite numbers".into());
     }
+    let size = crate::lod::size_across(bounds.min, bounds.max);
+    let (lod, lod_warnings) = plan.finish(size, &level_triangles);
     Ok(ModelSummary {
         triangles,
         bounds,
         meshes: doc.meshes().len(),
         materials: doc.materials().len(),
         images: doc.images().len(),
+        lod_triangles: level_triangles,
+        lod_source: plan.source,
+        lod,
+        lod_warnings,
     })
 }
 
@@ -453,11 +464,11 @@ pub fn check_primitive(p: &gltf::Primitive) -> Result<(), String> {
 }
 
 /// A column-major 4 x 4 matrix, as glTF gives them.
-const IDENTITY: [f64; 16] = [
+pub(crate) const IDENTITY: [f64; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
 ];
 
-fn to_f64(m: &[[f32; 4]; 4]) -> [f64; 16] {
+pub(crate) fn to_f64(m: &[[f32; 4]; 4]) -> [f64; 16] {
     let mut out = [0.0; 16];
     for (dst, src) in out.iter_mut().zip(m.iter().flatten()) {
         *dst = f64::from(*src);
@@ -471,7 +482,7 @@ fn at(m: &[f64; 16], c: usize, r: usize) -> f64 {
 }
 
 /// `a * b`, column-major, in a fixed order of operations.
-fn mul(a: &[f64; 16], b: &[f64; 16]) -> [f64; 16] {
+pub(crate) fn mul(a: &[f64; 16], b: &[f64; 16]) -> [f64; 16] {
     let mut out = [0.0; 16];
     for c in 0..4 {
         for r in 0..4 {
@@ -488,7 +499,7 @@ fn mul(a: &[f64; 16], b: &[f64; 16]) -> [f64; 16] {
 }
 
 /// The point `p` transformed by `m` (an affine transform: the last row is ignored).
-fn apply(m: &[f64; 16], p: [f64; 3]) -> [f64; 3] {
+pub(crate) fn apply(m: &[f64; 16], p: [f64; 3]) -> [f64; 3] {
     let [x, y, z] = p;
     let row = |r: usize| at(m, 0, r) * x + at(m, 1, r) * y + at(m, 2, r) * z + at(m, 3, r);
     [row(0), row(1), row(2)]

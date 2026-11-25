@@ -139,7 +139,9 @@ engine's `plants` module, so a VisionCraft API change touches one adapter.
 
 What GameCraft needs and VisionCraft's renderer does not have is built in VisionCraft. Known
 gaps today: skeletal animation, camera-relative rendering for very large worlds, streaming of
-terrain chunks by distance. If the shared part grows, the renderer and the plant generator move
+terrain chunks by distance, and statistics per level of detail (the renderer counts a frame's
+instances and triangles only; the adapter counts what each model drew per level again by the
+renderer's rule, `gamecraft-render/src/culling.rs`). If the shared part grows, the renderer and the plant generator move
 to a repository of their own that both projects depend on (`decisions.md`).
 
 ## Structural debt

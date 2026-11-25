@@ -158,3 +158,5 @@ pub fn canonical(
 pub fn load_one(id: &str, source: &PackSource) -> (Project, World) {
     Project::load(id, &packs(vec![(id, source.clone())]), None).unwrap()
 }
+
+pub mod gltf;

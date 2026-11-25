@@ -44,6 +44,8 @@ fn with_model(
                 scale: 2.0,
                 solid,
                 collider,
+                lod_distances_m: None,
+                draw_distance_m: None,
             })],
             layer: None,
         })

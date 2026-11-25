@@ -13,7 +13,13 @@
 //! - **Models**: glTF assets of a pack (`model` components), handed over by the host
 //!   ([`WorldRenderer::provide_asset`]), read with their PBR materials and PNG or JPEG textures
 //!   ([`model`]), uploaded once per asset and drawn as one item with an instance per entity. A
-//!   model that cannot be drawn is a small magenta box with a problem line.
+//!   model that cannot be drawn is a small magenta box with a problem line. A model with
+//!   **levels of detail** (`_LOD<n>` names or `MSFT_lod` in its file, `gamecraft_project::lod`)
+//!   draws its finest level near the camera and coarser ones farther away, and is not drawn
+//!   beyond a draw distance; both come from its size unless its file or its component says
+//!   ([`WorldRenderer::sync`]). What each model drew, per level, is counted again on the CPU by
+//!   the renderer's own rule (`culling`) and comes with every picture
+//!   ([`PictureStats::models`]).
 //! - **Roads**: every `road` draped on the terrain's triangles a few centimetres above them
 //!   ([`roads`]), one item per terrain chunk and colour, rough and lit like the ground under
 //!   it; where roads overlap the higher tier lies on top, so no two surfaces are coplanar.
@@ -41,6 +47,7 @@
 
 mod blit;
 mod camera;
+mod culling;
 pub mod effects;
 mod image;
 mod light;
@@ -160,7 +167,7 @@ pub struct Picture {
 }
 
 /// Counts of the frame a picture was drawn with, over all passes (shadows included).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PictureStats {
     /// Triangles submitted.
     pub triangles: u64,
@@ -168,6 +175,42 @@ pub struct PictureStats {
     pub draws: u64,
     /// Instances drawn in the camera's view.
     pub instances: u64,
+    /// Triangles submitted in the view pass alone (not the shadows, the reflection or the
+    /// post-processing).
+    pub forward_triangles: u64,
+    /// What each model drew in the view: one row per model item (an asset as entities with
+    /// the same distances and scale show it), in order of asset path. Empty without models.
+    pub models: Vec<ModelStats>,
+}
+
+/// What one model (an asset as entities with the same distances and scale show it) drew in
+/// the view of a picture, counted by the renderer's own rule on the CPU (`culling`): exact
+/// for a picture, which starts settled.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModelStats {
+    /// The asset, by its path inside a pack's `assets/` folder.
+    pub asset: String,
+    /// Instances in the scene.
+    pub instances: usize,
+    /// Instances drawn in the view: after the levels and the culling.
+    pub drawn: usize,
+    /// Instances not drawn: outside the view or beyond the draw distance.
+    pub culled: usize,
+    /// Per level, finest first: the instances drawn at it and the triangles they submit in
+    /// the view pass.
+    pub levels: Vec<LevelCount>,
+    /// Where each level ends, metres from the camera; the last is the draw distance, infinite
+    /// for a model that is never culled (a character the camera follows).
+    pub until_m: Vec<f64>,
+}
+
+/// What one level of detail of a model drew.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LevelCount {
+    /// Instances drawn at this level.
+    pub instances: usize,
+    /// Triangles they submit in the view pass.
+    pub triangles: u64,
 }
 
 /// Why a picture could not be made.

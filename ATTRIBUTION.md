@@ -24,6 +24,7 @@ change.
 | `crates/gamecraft-render/src/model.rs` | Ported from `apps/visioncraft/src/gltf_load.rs` (the node walk, the merge per material, normals made when missing, the winding flipped under mirroring, the material fields), with the accessor checks, external files, occlusion and samplers added | MIT |
 | `crates/gamecraft-render/src/renderer.rs` (`model_material`) | Ported from `model_material` of `apps/visioncraft/src/library.rs` (glass, cut-out and blended materials), with the normal scale, the occlusion map and the emissive unit added | MIT |
 | `crates/gamecraft-project/src/assets.rs` | The licence record (licence, author, source, title, changes) follows the records of `tools/visioncraft-assets/` | MIT |
+| `crates/gamecraft-render/src/culling.rs` | The count of what the models drew follows the renderer's own rule in `crates/visioncraft-render/src/{lod,lib}.rs` (one level per cell of 8 m by the distance to the cell's box; the box against the clip planes by its centre and extents), so that the numbers match what it draws | MIT |
 | `crates/gamecraft-engine/src/session.rs` | Modelled on `crates/visioncraft-core/src/session.rs` (registry, checks before the handler, snapshot undo, transactions) | MIT |
 
 ## From 3DCraft (MIT, <https://github.com/johancoppens/3dcraft>)

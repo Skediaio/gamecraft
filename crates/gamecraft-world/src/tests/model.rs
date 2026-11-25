@@ -1,8 +1,8 @@
 //! The `model` component: its JSON form, its checks, the derived bounds and the collider box.
 
 use crate::{
-    Component, EntityDraft, Model, ModelBounds, ModelBox, ModelCollider, World, is_asset_path,
-    is_model_path,
+    Component, EntityDraft, MAX_MODEL_LOD_LEVELS, Model, ModelBounds, ModelBox, ModelCollider,
+    World, is_asset_path, is_model_path,
 };
 use std::collections::BTreeMap;
 
@@ -12,6 +12,8 @@ fn model(asset: &str) -> Model {
         scale: 1.0,
         solid: true,
         collider: ModelCollider::Box,
+        lod_distances_m: None,
+        draw_distance_m: None,
     }
 }
 
@@ -140,4 +142,112 @@ fn the_collider_box_is_the_bounds_scaled_and_turned_about_the_base() {
     none.collider = ModelCollider::None;
     let w = world_with(none, 0.0, 1.0);
     assert_eq!(ModelBox::of(w.entities().next().unwrap(), &bounds), None);
+}
+
+#[test]
+fn lod_distances_are_optional_increasing_and_never_past_the_draw_distance() {
+    // Left out, the component writes exactly as before.
+    let c = Component::Model(model("crate.glb"));
+    assert_eq!(
+        serde_json::to_string(&c).unwrap(),
+        r#"{"type":"model","asset":"crate.glb","scale":1.0,"solid":true,"collider":"box"}"#
+    );
+    let c: Component = serde_json::from_str(
+        r#"{"type": "model", "asset": "crate.glb", "lod_distances_m": [40, 150.5], "draw_distance_m": 800}"#,
+    )
+    .unwrap();
+    let Component::Model(m) = &c else { panic!() };
+    assert_eq!(m.lod_distances_m.as_deref(), Some(&[40.0, 150.5][..]));
+    assert_eq!(m.draw_distance_m, Some(800.0));
+    let text = serde_json::to_string(&c).unwrap();
+    assert!(
+        text.contains(r#""lod_distances_m":[40.0,150.5],"draw_distance_m":800.0"#),
+        "{text}"
+    );
+    assert!(
+        serde_json::from_str::<Component>(
+            r#"{"type": "model", "asset": "a.glb", "lod_distance_m": [4]}"#
+        )
+        .is_err(),
+        "an unknown field is refused"
+    );
+    // A model with them validates, and round-trips through the world.
+    let mut w = world_with(model("crate.glb"), 0.0, 1.0);
+    let id = w.entities().next().unwrap().id;
+    w.entity_mut(id).unwrap().set_component(c);
+    w.validate().unwrap();
+    assert_eq!(
+        w.entity(id)
+            .unwrap()
+            .model()
+            .unwrap()
+            .lod_distances_m
+            .as_deref(),
+        Some(&[40.0, 150.5][..])
+    );
+
+    // The world refuses the entity that carries such distances as it is added.
+    let bad = |change: fn(&mut Model)| {
+        let mut m = model("crate.glb");
+        change(&mut m);
+        let mut w = World::new("m", 1);
+        w.add_entity(EntityDraft {
+            name: "Crate".into(),
+            components: vec![Component::Model(m)],
+            ..EntityDraft::default()
+        })
+        .err()
+        .map_or_else(|| "it was accepted".to_string(), |e| e.to_string())
+    };
+    let e = bad(|m| m.lod_distances_m = Some(vec![40.0, 40.0]));
+    assert!(
+        e.contains("model.lod_distances_m[1]") && e.contains("40"),
+        "{e}"
+    );
+    let e = bad(|m| m.lod_distances_m = Some(vec![100.0, 60.0]));
+    assert!(
+        e.contains("model.lod_distances_m[1]") && e.contains("100"),
+        "{e}"
+    );
+    let e = bad(|m| m.lod_distances_m = Some(vec![40.0, 0.0]));
+    assert!(
+        e.contains("model.lod_distances_m[1]") && e.contains("above 0"),
+        "{e}"
+    );
+    let e = bad(|m| m.lod_distances_m = Some(vec![-1.0]));
+    assert!(e.contains("model.lod_distances_m[0]"), "{e}");
+    let e = bad(|m| m.lod_distances_m = Some(vec![10.0; MAX_MODEL_LOD_LEVELS]));
+    assert!(
+        e.contains("model.lod_distances_m") && e.contains("8 distances") && e.contains("at most 7"),
+        "{e}"
+    );
+    let e = bad(|m| {
+        m.lod_distances_m = Some(vec![40.0, 150.0]);
+        m.draw_distance_m = Some(100.0);
+    });
+    assert!(
+        e.contains("model.lod_distances_m") && e.contains("150") && e.contains("draw_distance_m"),
+        "{e}"
+    );
+    // Equal to the draw distance is past it too.
+    let e = bad(|m| {
+        m.lod_distances_m = Some(vec![100.0]);
+        m.draw_distance_m = Some(100.0);
+    });
+    assert!(e.contains("model.draw_distance_m"), "{e}");
+    let e = bad(|m| m.draw_distance_m = Some(0.0));
+    assert!(
+        e.contains("model.draw_distance_m") && e.contains("above 0"),
+        "{e}"
+    );
+    let e = bad(|m| m.draw_distance_m = Some(f64::INFINITY));
+    assert!(
+        e.contains("model.draw_distance_m") && e.contains("finite"),
+        "{e}"
+    );
+    // Seven distances for eight levels, and a draw distance beyond the last, are fine.
+    let mut ok = model("crate.glb");
+    ok.lod_distances_m = Some((1..8).map(|k| 10.0 * f64::from(k)).collect());
+    ok.draw_distance_m = Some(1000.0);
+    world_with(ok, 0.0, 1.0).validate().unwrap();
 }

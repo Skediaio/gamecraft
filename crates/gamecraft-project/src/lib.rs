@@ -26,7 +26,9 @@
 //! ([`assets`]: CC0 or CC-BY only); [`Project::assets`] gives the assets of all packs, a later
 //! pack's asset replacing an earlier one's of the same path. [`model::inspect`] reads a glTF
 //! model's triangle count and bounding box from its bytes, and [`model::resolve_uri`] names the
-//! file a model refers to inside `assets/`. The images the models share are the pack's
+//! file a model refers to inside `assets/`. Its **levels of detail** ([`lod`]: the
+//! `_LOD<n>` names and the `MSFT_lod` extension of glTF, and the distances the levels change
+//! at) are found there by the same walk for the host and the renderer. The images the models share are the pack's
 //! **texture store** ([`textures`]): an import extracts them into `assets/textures/<hash>.<ext>`.
 //!
 //! Pure: no files, no clock. The host reads and writes the files (`gamecraft-automation`).
@@ -36,6 +38,7 @@ pub mod cells;
 mod error;
 mod fields;
 mod layer;
+pub mod lod;
 mod manifest;
 pub mod model;
 mod pack;
@@ -53,6 +56,11 @@ pub use cells::{Cell, DEFAULT_CELL_SIZE_M, cells_in_area};
 pub use error::ProjectError;
 pub use fields::WORLD_FORMAT;
 pub use layer::LAYER_FORMAT;
+pub use lod::{
+    DRAW_COVERAGE, LodDistances, LodOverride, LodSource, MIN_MODEL_SIZE_M, REFERENCE_FOV_Y_DEG,
+    REFERENCE_HEIGHT_PX, SWITCH_COVERAGE, coarser_check, extend_bounds, from_coverage, levels_of,
+    lod_name, rule, size_across,
+};
 pub use manifest::{Dependency, MAX_PACKS, Manifest, PACK_FORMAT, dependency_order};
 pub use model::{ModelSummary, inspect};
 pub use pack::{MAX_LAYERS, PackSource};

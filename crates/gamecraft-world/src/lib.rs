@@ -55,8 +55,8 @@ pub use environment::{Environment, STANDARD_TEMPERATURE_C, SunPosition};
 pub use error::WorldError;
 pub use grid_heights::GridHeights;
 pub use model::{
-    MAX_ASSET_PATH_CHARS, MODEL_EXTENSIONS, Model, ModelBounds, ModelBox, ModelCollider,
-    is_asset_path, is_model_path,
+    MAX_ASSET_PATH_CHARS, MAX_MODEL_LOD_LEVELS, MODEL_EXTENSIONS, Model, ModelBounds, ModelBox,
+    ModelCollider, is_asset_path, is_model_path,
 };
 pub use prefab::{Prefab, PrefabChild, Spawn, Spawned};
 pub use road::{

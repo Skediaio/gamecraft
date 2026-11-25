@@ -8,10 +8,13 @@
 //! opened and every accessor checked by `gamecraft_project::model` first (the `gltf` crate's
 //! reader can panic on hostile files), a `.gltf` reads its buffers and images from the files
 //! beside it, the occlusion texture is read (VisionCraft's library packs it into the
-//! metallic-roughness image), and the texture samplers' wrap modes are kept. Glass is still
+//! metallic-roughness image), the texture samplers' wrap modes are kept, and the walk over the
+//! scene is `gamecraft_project::lod::walk`, which tells the levels of detail of every
+//! primitive (the same walk as the host's `inspect`, so both read the same levels). Glass is still
 //! recognised by its name only: the workspace builds `gltf` without
 //! `KHR_materials_transmission`.
 
+use gamecraft_project::lod::{self, LodOverride, LodSource};
 use gamecraft_project::model::{check_primitive, decode_uri, open};
 use glam::{Mat3, Mat4, Vec3};
 
@@ -19,10 +22,6 @@ use glam::{Mat3, Mat4, Vec3};
 pub const MAX_TEXTURE_SIDE: u32 = 8192;
 /// Most vertices of one model.
 pub const MAX_VERTICES: usize = 4_000_000;
-/// Deepest chain of nodes followed below a scene's roots.
-const MAX_NODE_DEPTH: usize = 64;
-/// Most node visits while walking a scene.
-const MAX_NODE_VISITS: usize = 100_000;
 
 /// How a material treats its alpha.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -96,7 +95,8 @@ impl Default for ModelMaterial {
     }
 }
 
-/// All triangles of one material, in the model's own axes.
+/// All triangles of one material that the same levels of detail draw, in the model's own
+/// axes (the node transforms applied).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Prim {
     /// Index into [`ModelData::materials`].
@@ -114,19 +114,53 @@ pub struct Prim {
 /// A model read into plain CPU data.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ModelData {
-    /// One triangle list per material used.
+    /// One triangle list per material and set of levels that draw it. A model with levels of
+    /// detail keeps them apart: one list for the geometry of each level, one for the geometry
+    /// every level shares ([`ModelData::lods`]).
     pub prims: Vec<Prim>,
     /// The materials (the last one is glTF's default, for primitives without one).
     pub materials: Vec<ModelMaterial>,
     /// Encoded (PNG or JPEG) bytes per glTF image.
     pub images: Vec<Vec<u8>>,
+    /// The levels of detail.
+    pub lods: ModelLods,
 }
 
 impl ModelData {
-    /// Triangles of all primitives.
+    /// Triangles of the finest level (every triangle of a model without levels).
     pub fn triangles(&self) -> usize {
-        self.prims.iter().map(|p| p.indices.len() / 3).sum()
+        self.triangles_at(0).unwrap_or(0)
     }
+
+    /// Triangles level `level` draws, `None` when the model has no such level.
+    pub fn triangles_at(&self, level: usize) -> Option<usize> {
+        self.lods
+            .triangles
+            .get(level)
+            .map(|&t| usize::try_from(t).unwrap_or(usize::MAX))
+    }
+}
+
+/// The levels of detail of a model, as its file says ([`gamecraft_project::lod`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModelLods {
+    /// The levels the model has, finest first; 1 without any.
+    pub levels: usize,
+    /// For each prim of [`ModelData::prims`], in the same order: bit `k` set when the prim
+    /// is drawn at level `k`.
+    pub drawn_at: Vec<u8>,
+    /// Triangles per level, finest first.
+    pub triangles: Vec<u64>,
+    /// The extent of the model across its box, metres: the size the screen-size rule
+    /// follows. Not a finite number when the model has no vertices.
+    pub size_m: f64,
+    /// What the file itself says of the distances of the levels (`asset.extras.gamecraft`,
+    /// else `MSFT_screencoverage`); `None` when it says nothing.
+    pub file: Option<LodOverride>,
+    /// How the levels were found; `None` for a model with one level.
+    pub source: Option<LodSource>,
+    /// What is broken in the levels, as sentences; the model is drawn all the same.
+    pub warnings: Vec<String>,
 }
 
 fn smooth_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
@@ -236,99 +270,118 @@ pub fn parse(
     let default_material = out.materials.len();
     out.materials.push(ModelMaterial::default());
 
-    let scene = doc
-        .default_scene()
-        .or_else(|| doc.scenes().next())
-        .ok_or("the file has no scene")?;
-    let mut stack: Vec<(gltf::Node, Mat4, usize)> =
-        scene.nodes().map(|n| (n, Mat4::IDENTITY, 0)).collect();
-    let mut visits = 0usize;
+    // The levels of detail: which node stands for the levels of its object and which
+    // primitive is drawn at which level.
+    let plan = lod::plan(&doc, gamecraft_project::model::split_glb(bytes)?.0);
     let mut vertices = 0usize;
-    while let Some((node, parent, depth)) = stack.pop() {
-        visits += 1;
-        if visits > MAX_NODE_VISITS || depth > MAX_NODE_DEPTH {
-            return Err("the scene's node tree is too deep or loops".into());
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    let mut drawn_at: Vec<u8> = Vec::new();
+    for visit in lod::walk(&doc, &plan)? {
+        let p = visit.primitive;
+        if p.mode() != gltf::mesh::Mode::Triangles {
+            continue;
         }
-        let xf = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
-        stack.extend(node.children().map(|c| (c, xf, depth + 1)));
-        let Some(mesh) = node.mesh() else { continue };
+        check_primitive(&p)?;
+        let r = p.reader(data);
+        let Some(pos) = r.read_positions() else {
+            continue;
+        };
+        let pos: Vec<[f32; 3]> = pos.collect();
+        vertices = vertices.saturating_add(pos.len());
+        if vertices > MAX_VERTICES {
+            return Err(format!("the model has more than {MAX_VERTICES} vertices"));
+        }
+        let count = u32::try_from(pos.len()).map_err(|_| "too many vertices")?;
+        let mut indices: Vec<u32> = match r.read_indices() {
+            Some(i) => i.into_u32().collect(),
+            None => (0..count).collect(),
+        };
+        indices.truncate(indices.len() / 3 * 3);
+        if indices.iter().any(|&i| i >= count) {
+            return Err("an index points past the vertices".into());
+        }
+        if indices.is_empty() {
+            continue;
+        }
+        let normals: Vec<[f32; 3]> = match r.read_normals() {
+            Some(n) => n.collect(),
+            None => smooth_normals(&pos, &indices),
+        };
+        let uvs: Vec<[f32; 2]> = match r.read_tex_coords(0) {
+            Some(t) => t.into_f32().collect(),
+            None => vec![[0.0; 2]; pos.len()],
+        };
+        if normals.len() != pos.len() || uvs.len() != pos.len() {
+            return Err("vertex attributes differ in length".into());
+        }
+        let material = p
+            .material()
+            .index()
+            .unwrap_or(default_material)
+            .min(default_material);
+        let xf = Mat4::from_cols_array(&visit.world.map(|v| v as f32));
         let normal_xf = Mat3::from_mat4(xf).inverse().transpose();
         let flip = xf.determinant() < 0.0;
-        for p in mesh.primitives() {
-            if p.mode() != gltf::mesh::Mode::Triangles {
-                continue;
-            }
-            check_primitive(&p)?;
-            let r = p.reader(data);
-            let Some(pos) = r.read_positions() else {
-                continue;
-            };
-            let pos: Vec<[f32; 3]> = pos.collect();
-            vertices = vertices.saturating_add(pos.len());
-            if vertices > MAX_VERTICES {
-                return Err(format!("the model has more than {MAX_VERTICES} vertices"));
-            }
-            let count = u32::try_from(pos.len()).map_err(|_| "too many vertices")?;
-            let mut indices: Vec<u32> = match r.read_indices() {
-                Some(i) => i.into_u32().collect(),
-                None => (0..count).collect(),
-            };
-            indices.truncate(indices.len() / 3 * 3);
-            if indices.iter().any(|&i| i >= count) {
-                return Err("an index points past the vertices".into());
-            }
-            let normals: Vec<[f32; 3]> = match r.read_normals() {
-                Some(n) => n.collect(),
-                None => smooth_normals(&pos, &indices),
-            };
-            let uvs: Vec<[f32; 2]> = match r.read_tex_coords(0) {
-                Some(t) => t.into_f32().collect(),
-                None => vec![[0.0; 2]; pos.len()],
-            };
-            if normals.len() != pos.len() || uvs.len() != pos.len() {
-                return Err("vertex attributes differ in length".into());
-            }
-            let material = p
-                .material()
-                .index()
-                .unwrap_or(default_material)
-                .min(default_material);
-            let at = match out.prims.iter().position(|q| q.material == material) {
+        lod::extend_bounds(&visit.world, &pos, &mut lo, &mut hi);
+        // Geometry of the same material and the same levels joins one list.
+        let at =
+            match out.prims.iter().enumerate().position(|(i, q)| {
+                q.material == material && drawn_at.get(i) == Some(&visit.drawn_at)
+            }) {
                 Some(i) => i,
                 None => {
                     out.prims.push(Prim {
                         material,
                         ..Default::default()
                     });
+                    drawn_at.push(visit.drawn_at);
                     out.prims.len() - 1
                 }
             };
-            let Some(dst) = out.prims.get_mut(at) else {
-                continue;
-            };
-            let base = u32::try_from(dst.positions.len()).map_err(|_| "too many vertices")?;
-            dst.positions.extend(
-                pos.iter()
-                    .map(|&q| xf.transform_point3(Vec3::from(q)).to_array()),
-            );
-            dst.normals.extend(
-                normals
-                    .iter()
-                    .map(|&n| (normal_xf * Vec3::from(n)).normalize_or(Vec3::Y).to_array()),
-            );
-            dst.uvs.extend(uvs);
-            if flip {
-                for t in indices.as_chunks_mut::<3>().0 {
-                    t.swap(1, 2);
-                }
+        let Some(dst) = out.prims.get_mut(at) else {
+            continue;
+        };
+        let base = u32::try_from(dst.positions.len()).map_err(|_| "too many vertices")?;
+        dst.positions.extend(
+            pos.iter()
+                .map(|&q| xf.transform_point3(Vec3::from(q)).to_array()),
+        );
+        dst.normals.extend(
+            normals
+                .iter()
+                .map(|&n| (normal_xf * Vec3::from(n)).normalize_or(Vec3::Y).to_array()),
+        );
+        dst.uvs.extend(uvs);
+        if flip {
+            for t in indices.as_chunks_mut::<3>().0 {
+                t.swap(1, 2);
             }
-            dst.indices.extend(indices.iter().map(|i| i + base));
         }
+        dst.indices.extend(indices.iter().map(|i| i + base));
     }
-    out.prims.retain(|p| !p.indices.is_empty());
     if out.prims.is_empty() {
         return Err("the file has no triangles".into());
     }
+    let mut triangles = vec![0u64; plan.levels];
+    for (prim, &mask) in out.prims.iter().zip(&drawn_at) {
+        for k in lod::levels_of(mask) {
+            if let Some(slot) = triangles.get_mut(k) {
+                *slot = slot.saturating_add((prim.indices.len() / 3) as u64);
+            }
+        }
+    }
+    let size_m = lod::size_across(lo, hi);
+    let (file, warnings) = plan.finish(size_m, &triangles);
+    out.lods = ModelLods {
+        levels: plan.levels,
+        drawn_at,
+        triangles,
+        size_m,
+        file,
+        source: plan.source,
+        warnings,
+    };
     Ok(out)
 }
 

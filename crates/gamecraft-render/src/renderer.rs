@@ -2,15 +2,17 @@
 //! (`visioncraft-render`). A VisionCraft API change lands here.
 
 use crate::blit::Blit;
+use crate::culling;
 use crate::effects::{self, Effects, Segment};
 use crate::light;
 use crate::mesh::{self, MeshData};
 use crate::model::{self, Alpha, ModelMaterial, TexRef};
 use crate::plants::{self, PartKind, PlantImage};
-use crate::{Camera, Quality, RenderError};
+use crate::{Camera, LevelCount, ModelStats, Quality, RenderError};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{Picture, PictureRequest, PictureStats};
 use gamecraft_math::{DQuat, DVec3, deg_to_rad};
+use gamecraft_project::lod::{LodDistances, LodOverride};
 use gamecraft_project::model::resolve_uri;
 use gamecraft_world::{
     Character, Entity, EntityId, Environment, HeightField, Model, Plant, Road, Shape, ShapeKind,
@@ -67,6 +69,9 @@ const MISSING_MODEL_COLOR: [f32; 3] = [1.0, 0.0, 1.0];
 const MISSING_MODEL_SIZE_M: f64 = 0.5;
 /// Most entities a problem line about one model names.
 const MAX_NAMED_ENTITIES: usize = 8;
+/// Switches on the renderer's dissolve of a model's cells that cross the draw distance while
+/// the camera moves (a parked camera shows no dither); the value itself is not a distance.
+const MODEL_CULL_FADE: f32 = 1.0;
 
 /// A character that is down lies on its side; the base of its body is turned about this.
 const LYING_DEG: f64 = 90.0;
@@ -104,6 +109,8 @@ struct Built {
     textures: Vec<vc::TextureId>,
     /// The character items, whose instances follow the characters without a rebuild.
     characters: Vec<CharacterGroup>,
+    /// The model items, for the count of what a frame drew ([`WorldRenderer::render`]).
+    models: Vec<ModelItem>,
 }
 
 /// One character item: the characters it draws, in instance order, and where it drew them.
@@ -112,6 +119,33 @@ struct CharacterGroup {
     ids: Vec<EntityId>,
     instances: Vec<Mat4>,
     body: Body,
+    /// Its row among [`Built::models`] when it draws a model.
+    model: Option<usize>,
+}
+
+/// One model item: what is needed to count again what the renderer draws of it.
+struct ModelItem {
+    asset: String,
+    /// The item's instances, as last handed to the renderer.
+    instances: Vec<Mat4>,
+    /// Triangles each level submits per instance, finest first.
+    triangles: Vec<u64>,
+    /// The box of every level's meshes, in the model's own axes.
+    bounds: (Vec3, Vec3),
+    /// Where each level ends, metres; the last is the draw distance.
+    until_m: Vec<f64>,
+}
+
+/// What decides the levels of detail of a model: the distances its component gives and the
+/// scale the rule from the asset's size follows. Entities that agree share one item.
+#[derive(Clone, PartialEq)]
+struct ModelKey {
+    lod_distances_m: Option<Vec<f64>>,
+    draw_distance_m: Option<f64>,
+    /// The model's scale times the entity's.
+    scale: f64,
+    /// The item draws the character the camera follows, which is never culled by distance.
+    followed: bool,
 }
 
 /// What a character item draws, which says how it places its characters.
@@ -317,6 +351,9 @@ pub struct WorldRenderer {
     models: BTreeMap<String, Result<ResidentModel, FailedModel>>,
     /// Model uploads so far: one per asset (and again after its files change).
     model_uploads: u64,
+    /// The character the camera follows (a third-person or first-person view): its model is
+    /// never culled by distance.
+    followed: Option<EntityId>,
 }
 
 /// A model that could not be read or uploaded: why, and the asset files it was being read
@@ -326,9 +363,19 @@ struct FailedModel {
     files: Vec<String>,
 }
 
-/// A model on the GPU: its parts (one per material) and everything to free with it.
+/// A model on the GPU: its levels of detail, and everything to free with it.
 struct ResidentModel {
-    parts: Vec<(vc::MeshId, vc::MaterialId)>,
+    /// One entry per level of detail, finest first. A model without any has one.
+    levels: Vec<ResidentLevel>,
+    /// The box of every level's vertices, the model's own axes (the box the renderer
+    /// culls by, of the meshes as uploaded).
+    bounds: (Vec3, Vec3),
+    /// The extent of the model across, metres: the size the rule from the file follows.
+    size_m: f64,
+    /// What the asset's file says of the distances of its levels.
+    lod: Option<LodOverride>,
+    /// Sentences about a broken set of levels (said once per build that draws the model).
+    warnings: Vec<String>,
     meshes: Vec<vc::MeshId>,
     materials: Vec<vc::MaterialId>,
     textures: Vec<vc::TextureId>,
@@ -336,6 +383,13 @@ struct ResidentModel {
     files: Vec<String>,
     /// Textures that could not be decoded, as a sentence; the model is drawn without them.
     note: Option<String>,
+}
+
+/// One level of detail of a model on the GPU: the meshes it draws (one per material and set
+/// of levels that share them) and their triangles. A mesh every level draws is in each.
+struct ResidentLevel {
+    parts: Vec<(vc::MeshId, vc::MaterialId)>,
+    triangles: u64,
 }
 
 impl ResidentModel {
@@ -430,6 +484,7 @@ impl WorldRenderer {
             assets_revision: 0,
             models: BTreeMap::new(),
             model_uploads: 0,
+            followed: None,
         };
         world_renderer.apply_environment(&Environment::default(), false);
         world_renderer
@@ -492,6 +547,17 @@ impl WorldRenderer {
     /// light still shines. No rebuild.
     pub fn set_hidden_character(&mut self, id: Option<EntityId>) {
         self.hidden = id;
+    }
+
+    /// Names the character the camera follows from the next [`WorldRenderer::sync`] on (a
+    /// first-person or third-person view), or none. Its model is drawn at every distance: the
+    /// draw distance that culls the other models never takes it away, though its levels change
+    /// as those of any model. The scene is built again when the character changes.
+    pub fn set_followed_character(&mut self, id: Option<EntityId>) {
+        if self.followed != id {
+            self.followed = id;
+            self.synced = None;
+        }
     }
 
     /// Hands the renderer what is in flight and what just hit: tracers become thin bright
@@ -660,7 +726,10 @@ impl WorldRenderer {
     /// Moves every character item's instances to where its characters are now.
     fn move_characters(&mut self, world: &World) {
         let hidden = self.hidden;
-        for group in &mut self.built.characters {
+        let Built {
+            characters, models, ..
+        } = &mut self.built;
+        for group in characters {
             let instances: Vec<Mat4> = group
                 .ids
                 .iter()
@@ -670,6 +739,9 @@ impl WorldRenderer {
                 .collect();
             if instances != group.instances {
                 self.renderer.set_instances(group.item, &instances);
+                if let Some(row) = group.model.and_then(|i| models.get_mut(i)) {
+                    row.instances.clone_from(&instances);
+                }
                 group.instances = instances;
             }
         }
@@ -695,6 +767,11 @@ impl WorldRenderer {
             )));
         }
         let stats = self.renderer.stats();
+        let forward_triangles = stats
+            .pass_triangles
+            .iter()
+            .find(|(pass, _)| *pass == "forward")
+            .map_or(0, |(_, triangles)| *triangles);
         Ok(Picture {
             width,
             height,
@@ -703,9 +780,54 @@ impl WorldRenderer {
                 triangles: stats.triangles,
                 draws: u64::from(stats.draw_calls),
                 instances: u64::from(stats.instances),
+                forward_triangles,
+                models: self.account(proj * view, eye),
             },
             problems: self.problems(),
         })
+    }
+
+    /// What the models of the synced scene draw from `camera` in a view of width / height
+    /// `aspect`: the rows a picture from it carries in [`PictureStats::models`], counted by
+    /// the renderer's rule on the CPU ([`culling`]). For a live view that shows its numbers;
+    /// they are exact while the camera does not move.
+    pub fn count_models(&self, camera: &Camera, aspect: f64) -> Vec<ModelStats> {
+        let (view, proj, eye) = camera.matrices(aspect);
+        self.account(proj * view, eye)
+    }
+
+    /// What each model item drew from `eye` through `view_proj`, counted again by the
+    /// renderer's rule ([`culling`]).
+    fn account(&self, view_proj: Mat4, eye: Vec3) -> Vec<ModelStats> {
+        self.built
+            .models
+            .iter()
+            .map(|item| {
+                let count = culling::count(
+                    &item.instances,
+                    &item.triangles,
+                    item.bounds,
+                    &item.until_m,
+                    view_proj,
+                    eye,
+                );
+                ModelStats {
+                    asset: item.asset.clone(),
+                    instances: item.instances.len(),
+                    drawn: count.drawn,
+                    culled: count.culled,
+                    levels: count
+                        .levels
+                        .into_iter()
+                        .map(|(instances, triangles)| LevelCount {
+                            instances,
+                            triangles,
+                        })
+                        .collect(),
+                    until_m: item.until_m.clone(),
+                }
+            })
+            .collect()
     }
 
     /// How many draw items the renderer holds (terrain chunks, shape groups, characters,
@@ -819,6 +941,7 @@ impl WorldRenderer {
             &self.asset_files,
             &mut self.model_uploads,
             self.units,
+            self.followed,
         );
         scene.characters(world);
         scene.plants(world);
@@ -864,6 +987,7 @@ fn vc_light(s: &light::Spot) -> vc::Light {
 /// Removes everything a build added.
 fn free(r: &mut vc::Renderer, built: &mut Built) {
     built.characters.clear();
+    built.models.clear();
     for id in built.items.drain(..) {
         r.remove_item(id);
     }
@@ -906,8 +1030,9 @@ enum Role {
 }
 
 /// Reads the model `path` from the handed-over `files` and uploads it: one mesh and one
-/// material per glTF material used, each image decoded and uploaded once per role. Errors say
-/// why it cannot be drawn; a texture that cannot be decoded is left out with a note.
+/// material per glTF material and set of levels that share them, each image decoded and
+/// uploaded once per role; its levels of detail as the file says them. Errors say why it
+/// cannot be drawn; a texture that cannot be decoded is left out with a note.
 fn upload_model(
     r: &mut vc::Renderer,
     path: &str,
@@ -956,7 +1081,11 @@ fn upload_model(
         }
     };
     let mut out = ResidentModel {
-        parts: Vec::new(),
+        levels: Vec::new(),
+        bounds: (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+        size_m: data.lods.size_m,
+        lod: data.lods.file.clone(),
+        warnings: data.lods.warnings.clone(),
         meshes: Vec::new(),
         materials: Vec::new(),
         textures: Vec::new(),
@@ -1010,9 +1139,13 @@ fn upload_model(
         textures.insert(key, id);
         id
     };
+    // One mesh and one material per prim (a glTF material and the levels that draw it), as
+    // before the levels; each level then lists the prims it draws.
+    let mut uploaded: Vec<Option<(vc::MeshId, vc::MaterialId, u64)>> = Vec::new();
     let mut fail = None;
     for prim in &data.prims {
         let Some(m) = data.materials.get(prim.material) else {
+            uploaded.push(None);
             continue;
         };
         let orm_role = if m.occlusion_image.is_some()
@@ -1034,7 +1167,7 @@ fn upload_model(
         };
         let material = r.add_material(&model_material(m, maps));
         out.materials.push(material);
-        let uploaded = r.add_mesh(&vc::Mesh {
+        let mesh = r.add_mesh(&vc::Mesh {
             positions: &prim.positions,
             normals: &prim.normals,
             indices: &prim.indices,
@@ -1042,10 +1175,16 @@ fn upload_model(
             uvs: Some(&prim.uvs),
             wind: None,
         });
-        match uploaded {
+        match mesh {
             Ok(mesh) => {
                 out.meshes.push(mesh);
-                out.parts.push((mesh, material));
+                // The box of the mesh as the renderer holds it (its vertices), for the count.
+                for p in &prim.positions {
+                    let p = Vec3::from(*p);
+                    out.bounds.0 = out.bounds.0.min(p);
+                    out.bounds.1 = out.bounds.1.max(p);
+                }
+                uploaded.push(Some((mesh, material, (prim.indices.len() / 3) as u64)));
             }
             Err(e) => {
                 fail = Some(format!("a mesh could not be uploaded: {e}"));
@@ -1058,6 +1197,21 @@ fn upload_model(
         out.free(r);
         return Err(FailedModel { why, files });
     }
+    out.levels = (0..data.lods.levels)
+        .map(|level| {
+            let mut parts = Vec::new();
+            let mut triangles = 0u64;
+            for (part, &mask) in uploaded.iter().zip(&data.lods.drawn_at) {
+                if let Some((mesh, material, count)) = part
+                    && mask >> level & 1 == 1
+                {
+                    parts.push((*mesh, *material));
+                    triangles += count;
+                }
+            }
+            ResidentLevel { parts, triangles }
+        })
+        .collect();
     if !notes.is_empty() {
         out.note = Some(format!(
             "some textures could not be read and are left out ({})",
@@ -1319,10 +1473,12 @@ impl Scene<'_> {
     }
 
     /// Models: one upload per asset (kept from one rebuild to the next), one item per asset
-    /// with an instance per entity. Characters with a model get an item of their own per
-    /// asset, whose instances follow them without a rebuild. A model that cannot be drawn is a
-    /// small magenta box at each entity, with a problem line that names the asset, why and the
-    /// entities.
+    /// and set of distances (the component's, the scale) with an instance per entity, its
+    /// levels of detail and its draw distance from the file, the component or the asset's
+    /// size. Characters with a model get an item of their own per set, whose instances follow
+    /// them without a rebuild; the character the camera follows has an item of its own that
+    /// is never culled by distance. A model that cannot be drawn is a small magenta box at
+    /// each entity, with a problem line that names the asset, why and the entities.
     fn models(
         &mut self,
         world: &World,
@@ -1330,20 +1486,28 @@ impl Scene<'_> {
         files: &BTreeMap<String, Vec<u8>>,
         uploads: &mut u64,
         units: Option<UnitMeshes>,
+        followed: Option<EntityId>,
     ) {
-        let mut groups: BTreeMap<String, Vec<&Entity>> = BTreeMap::new();
+        // Per asset, in order of path: the entities that show it, by what decides their levels.
+        let mut groups: BTreeMap<String, Vec<(ModelKey, Vec<&Entity>)>> = BTreeMap::new();
         for e in world.entities() {
-            if let Some(m) = e.model() {
-                groups.entry(m.asset.clone()).or_default().push(e);
+            let Some(m) = e.model() else { continue };
+            let key = ModelKey {
+                lod_distances_m: m.lod_distances_m.clone(),
+                draw_distance_m: m.draw_distance_m,
+                scale: m.scale * e.scale,
+                followed: Some(e.id) == followed && e.character().is_some(),
+            };
+            let sets = groups.entry(m.asset.clone()).or_default();
+            match sets.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, entities)) => entities.push(e),
+                None => sets.push((key, vec![e])),
             }
         }
         let mut missing: Vec<Mat4> = Vec::new();
         let mut missing_characters: Vec<&Entity> = Vec::new();
-        for (asset, entities) in groups {
-            let (characters, statics): (Vec<&Entity>, Vec<&Entity>) = entities
-                .iter()
-                .copied()
-                .partition(|e| e.character().is_some());
+        for (asset, sets) in groups {
+            let entities: Vec<&Entity> = sets.iter().flat_map(|(_, e)| e.iter().copied()).collect();
             if !resident.contains_key(&asset) {
                 let made = upload_model(self.r, &asset, files);
                 if made.is_ok() {
@@ -1351,63 +1515,103 @@ impl Scene<'_> {
                 }
                 resident.insert(asset.clone(), made);
             }
-            match resident.get(&asset) {
-                None => {}
-                Some(Ok(m)) => {
-                    if let Some(note) = &m.note {
-                        self.problems.push(format!("Model `{asset}`: {note}"));
-                    }
-                    let lods: Vec<(vc::MeshId, vc::MaterialId, f32)> = m
-                        .parts
+            let Some(Ok(m)) = resident.get(&asset) else {
+                let Some(Err(failed)) = resident.get(&asset) else {
+                    continue;
+                };
+                let why = &failed.why;
+                let named: Vec<String> = entities
+                    .iter()
+                    .take(MAX_NAMED_ENTITIES)
+                    .map(|e| format!("{} \"{}\"", e.id, e.name))
+                    .collect();
+                let more = match entities.len().saturating_sub(MAX_NAMED_ENTITIES) {
+                    0 => String::new(),
+                    n => format!(" and {n} more"),
+                };
+                self.problems.push(format!(
+                    "Model `{asset}` of entity {}{more} cannot be drawn: {why}; it is \
+                     drawn as a small magenta box.",
+                    named.join(", ")
+                ));
+                missing.extend(
+                    entities
                         .iter()
-                        .map(|&(mesh, material)| (mesh, material, f32::INFINITY))
-                        .collect();
-                    if !statics.is_empty() {
-                        let instances: Vec<Mat4> = statics
-                            .iter()
-                            .filter_map(|e| {
-                                let s = e.model()?.scale * e.scale;
-                                Some(placement(e.position, e.rotation_y_deg, [s; 3]))
-                            })
-                            .collect();
-                        let id = self.r.add_lod_item(&lods, &instances);
-                        self.built.items.push(id);
-                    }
-                    if !characters.is_empty() {
-                        let body = Body::Model { size: 1.0 };
-                        let instances: Vec<Mat4> =
-                            characters.iter().map(|e| character_pose(e, body)).collect();
-                        let item = self.r.add_lod_item(&lods, &instances);
-                        self.built.items.push(item);
-                        self.built.characters.push(CharacterGroup {
-                            item,
-                            ids: characters.iter().map(|e| e.id).collect(),
-                            instances,
-                            body,
-                        });
-                    }
+                        .filter(|e| e.character().is_none())
+                        .map(|e| {
+                            let s = e.model().map_or(1.0, |m| m.scale) * e.scale;
+                            placement(e.position, e.rotation_y_deg, [MISSING_MODEL_SIZE_M * s; 3])
+                        }),
+                );
+                missing_characters
+                    .extend(entities.iter().copied().filter(|e| e.character().is_some()));
+                continue;
+            };
+            if let Some(note) = &m.note {
+                self.problems.push(format!("Model `{asset}`: {note}"));
+            }
+            for warning in &m.warnings {
+                self.problems.push(format!("Model `{asset}`: {warning}"));
+            }
+            for (key, entities) in sets {
+                // The component's distances, else the file's, else the rule from the size the
+                // model has in the world.
+                let component = LodOverride {
+                    switch_m: key.lod_distances_m.clone(),
+                    draw_m: key.draw_distance_m,
+                };
+                let (distances, notes) = LodDistances::resolve(
+                    m.levels.len(),
+                    m.size_m * key.scale,
+                    m.lod.as_ref(),
+                    Some(&component),
+                );
+                for note in notes {
+                    self.problems.push(format!("Model `{asset}`: {note}"));
                 }
-                Some(Err(failed)) => {
-                    let why = &failed.why;
-                    let named: Vec<String> = entities
+                let mut until_m = distances.ends_m();
+                if key.followed
+                    && let Some(last) = until_m.last_mut()
+                {
+                    *last = f64::INFINITY;
+                }
+                let parts: Vec<(vc::MeshId, vc::MaterialId, f32)> = m
+                    .levels
+                    .iter()
+                    .zip(&until_m)
+                    .flat_map(|(level, &end)| {
+                        level
+                            .parts
+                            .iter()
+                            .map(move |&(mesh, material)| (mesh, material, end as f32))
+                    })
+                    .collect();
+                let (characters, statics): (Vec<&Entity>, Vec<&Entity>) = entities
+                    .iter()
+                    .copied()
+                    .partition(|e| e.character().is_some());
+                if !statics.is_empty() {
+                    let instances: Vec<Mat4> = statics
                         .iter()
-                        .take(MAX_NAMED_ENTITIES)
-                        .map(|e| format!("{} \"{}\"", e.id, e.name))
+                        .filter_map(|e| {
+                            let s = e.model()?.scale * e.scale;
+                            Some(placement(e.position, e.rotation_y_deg, [s; 3]))
+                        })
                         .collect();
-                    let more = match entities.len().saturating_sub(MAX_NAMED_ENTITIES) {
-                        0 => String::new(),
-                        n => format!(" and {n} more"),
-                    };
-                    self.problems.push(format!(
-                        "Model `{asset}` of entity {}{more} cannot be drawn: {why}; it is \
-                         drawn as a small magenta box.",
-                        named.join(", ")
-                    ));
-                    missing.extend(statics.iter().map(|e| {
-                        let s = e.model().map_or(1.0, |m| m.scale) * e.scale;
-                        placement(e.position, e.rotation_y_deg, [MISSING_MODEL_SIZE_M * s; 3])
-                    }));
-                    missing_characters.extend(characters);
+                    self.add_model_item(&asset, &parts, instances, m, until_m.clone());
+                }
+                if !characters.is_empty() {
+                    let body = Body::Model { size: 1.0 };
+                    let instances: Vec<Mat4> =
+                        characters.iter().map(|e| character_pose(e, body)).collect();
+                    let item = self.add_model_item(&asset, &parts, instances.clone(), m, until_m);
+                    self.built.characters.push(CharacterGroup {
+                        item,
+                        ids: characters.iter().map(|e| e.id).collect(),
+                        instances,
+                        body,
+                        model: Some(self.built.models.len().saturating_sub(1)),
+                    });
                 }
             }
         }
@@ -1431,8 +1635,32 @@ impl Scene<'_> {
                 ids: missing_characters.iter().map(|e| e.id).collect(),
                 instances,
                 body,
+                model: None,
             });
         }
+    }
+
+    /// Adds the item of a model with its levels (`parts`: a mesh, its material and where its
+    /// level ends), and remembers what is needed to count what it draws.
+    fn add_model_item(
+        &mut self,
+        asset: &str,
+        parts: &[(vc::MeshId, vc::MaterialId, f32)],
+        instances: Vec<Mat4>,
+        m: &ResidentModel,
+        until_m: Vec<f64>,
+    ) -> vc::ItemId {
+        let item = self.r.add_lod_item(parts, &instances);
+        self.r.set_item_cull_fade(item, MODEL_CULL_FADE);
+        self.built.items.push(item);
+        self.built.models.push(ModelItem {
+            asset: asset.to_string(),
+            instances,
+            triangles: m.levels.iter().map(|l| l.triangles).collect(),
+            bounds: m.bounds,
+            until_m,
+        });
+        item
     }
 
     /// Characters without a model: one body and visor mesh per distinct size, an instance per
@@ -1479,6 +1707,7 @@ impl Scene<'_> {
                     body: Body::Capsule {
                         radius_m: character.radius_m,
                     },
+                    model: None,
                 });
             }
         }
@@ -1655,6 +1884,8 @@ mod tests {
             scale,
             solid: false,
             collider: ModelCollider::Box,
+            lod_distances_m: None,
+            draw_distance_m: None,
         })
     }
 

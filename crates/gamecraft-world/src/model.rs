@@ -20,6 +20,10 @@ pub const MAX_ASSET_PATH_CHARS: usize = 200;
 /// The file extensions of a model asset.
 pub const MODEL_EXTENSIONS: [&str; 2] = ["glb", "gltf"];
 
+/// Most levels of detail a model draws: the levels its asset has, or those its switch
+/// distances name (one fewer than this).
+pub const MAX_MODEL_LOD_LEVELS: usize = 8;
+
 /// Whether `path` is a valid asset path: 1 to [`MAX_ASSET_PATH_CHARS`] ASCII letters, digits,
 /// `-`, `_`, `.` and `/`, parts separated by single `/` (none empty, none `.` or `..`, no `/`
 /// at either end). It names a file inside a pack's `assets/` folder.
@@ -86,9 +90,33 @@ pub struct Model {
     /// `box` (the asset's bounding box) or `none`. Default `box`.
     #[serde(default)]
     pub collider: ModelCollider,
+    /// Where the asset's levels of detail give way to the next one, metres from the camera:
+    /// the first ends level 0 (the finest), the second level 1, and so on, each farther than
+    /// the one before. At most one fewer than the asset has levels; the ones left out follow
+    /// the asset itself (its `extras.gamecraft`, else a rule from its size), which is also
+    /// what applies when this is left out. Not written when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lod_distances_m: Option<Vec<f64>>,
+    /// How far away the model is drawn, metres from the camera; beyond it nothing of it is
+    /// drawn. Left out: the asset's own, else from its size. Not written when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draw_distance_m: Option<f64>,
 }
 
 impl Model {
+    /// The component that shows `asset` (a path inside a pack's `assets/` folder) as it comes:
+    /// scale 1, not solid, its bounding box as the collider, the asset's own distances.
+    pub fn of(asset: impl Into<String>) -> Model {
+        Model {
+            asset: asset.into(),
+            scale: 1.0,
+            solid: false,
+            collider: ModelCollider::Box,
+            lod_distances_m: None,
+            draw_distance_m: None,
+        }
+    }
+
     pub(crate) fn validate(&self, ctx: Ctx) -> Result<(), WorldError> {
         if !is_model_path(&self.asset) {
             let shown: String = self.asset.chars().take(MAX_ASSET_PATH_CHARS + 8).collect();
@@ -102,7 +130,64 @@ impl Model {
                 ),
             ));
         }
-        ctx.range("model.scale", self.scale, SCALE_MIN, SCALE_MAX, "")
+        ctx.range("model.scale", self.scale, SCALE_MIN, SCALE_MAX, "")?;
+        self.validate_lod(ctx)
+    }
+
+    /// The level-of-detail distances: at most one fewer than a model may have levels, each
+    /// finite and above 0, each farther than the one before, and the last nearer than the draw
+    /// distance when the component gives one (a level past it would never be drawn).
+    fn validate_lod(&self, ctx: Ctx) -> Result<(), WorldError> {
+        let Some(distances) = &self.lod_distances_m else {
+            if let Some(draw) = &self.draw_distance_m {
+                ctx.positive("model.draw_distance_m", *draw, " m")?;
+            }
+            return Ok(());
+        };
+        if distances.len() >= MAX_MODEL_LOD_LEVELS {
+            return Err(ctx.invalid(
+                "model.lod_distances_m",
+                format!("{} distances", distances.len()),
+                format!(
+                    "it must hold at most {} (one fewer than the {} levels a model may have)",
+                    MAX_MODEL_LOD_LEVELS - 1,
+                    MAX_MODEL_LOD_LEVELS
+                ),
+            ));
+        }
+        let mut previous: Option<f64> = None;
+        for (k, &d) in distances.iter().enumerate() {
+            ctx.positive(format!("model.lod_distances_m[{k}]"), d, " m")?;
+            if let Some(before) = previous
+                && d <= before
+            {
+                return Err(ctx.invalid(
+                    format!("model.lod_distances_m[{k}]"),
+                    d,
+                    format!(
+                        "it must be farther than the one before ({before} m): each coarser level \
+                         takes over farther away"
+                    ),
+                ));
+            }
+            previous = Some(d);
+        }
+        if let (Some(&last), Some(&draw)) = (distances.last(), self.draw_distance_m.as_ref())
+            && last >= draw
+        {
+            return Err(ctx.invalid(
+                "model.lod_distances_m",
+                last,
+                format!(
+                    "its last distance must be nearer than model.draw_distance_m ({draw} m), or \
+                     the coarsest level is never drawn"
+                ),
+            ));
+        }
+        if let Some(draw) = &self.draw_distance_m {
+            ctx.positive("model.draw_distance_m", *draw, " m")?;
+        }
+        Ok(())
     }
 }
 
