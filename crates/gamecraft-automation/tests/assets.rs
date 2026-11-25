@@ -11,7 +11,9 @@
 
 mod common;
 
-use common::models::{embedded_image, glb_with_image, gltf_with_files};
+use common::models::{
+    embedded_image, glb_json_only, glb_with_image, gltf_with_files, gltf_with_image_in_buffer,
+};
 use common::{TempDir, err, host_in, ok};
 use gamecraft_automation::{Host, Pictures, RenderRequest, Rendered};
 use gamecraft_world::{HeightField, World};
@@ -676,5 +678,114 @@ fn the_renderer_is_handed_a_shared_texture_under_its_own_path() {
                 .len() as usize
         )),
         "{got:?}"
+    );
+}
+
+// ---------------------------------------------------------------- review round
+
+#[test]
+fn a_glb_without_a_binary_chunk_imports_and_the_project_reopens() {
+    let (dir, mut h) = project("assets-glb-json-only");
+    let (wood, _) = demo_images();
+    fs::create_dir_all(dir.path().join("downloads/tex")).unwrap();
+    let (model, bin) = glb_json_only("tex/wood.png", "house.bin", "house");
+    fs::write(dir.path().join("downloads/house.glb"), model).unwrap();
+    fs::write(dir.path().join("downloads/house.bin"), bin).unwrap();
+    fs::write(dir.path().join("downloads/tex/wood.png"), &wood).unwrap();
+    let done = ok(
+        &mut h,
+        "asset.import",
+        json!({"file": "downloads/house.glb", "to": "models/house.glb", "license": "CC0-1.0",
+               "author": "Ada", "source_url": "https://example.org/house"}),
+    );
+    let name = textures(&dir)[0].clone();
+    assert_eq!(
+        done["files"],
+        json!([
+            format!("assets/textures/{name}"),
+            format!("assets/textures/{name}.license.json"),
+            "assets/models/house.bin",
+            "assets/models/house.glb",
+            "assets/models/house.glb.license.json"
+        ]),
+        "{done}"
+    );
+    // Still a GLB (a JSON chunk only), which the host reads again on the next open.
+    let stored = fs::read(dir.path().join("game/assets/models/house.glb")).unwrap();
+    assert!(stored.starts_with(b"glTF"));
+    ok(&mut h, "project.open", json!({"path": "game"}));
+    let list = ok(&mut h, "asset.list", json!({}));
+    assert_eq!(list["assets"][0]["triangles"], 1, "{list}");
+    assert_eq!(list["textures"][0]["used_by"], json!(["models/house.glb"]));
+}
+
+#[test]
+fn a_buffer_file_that_held_the_image_is_rewritten_without_it() {
+    let (dir, mut h) = project("assets-bin-image");
+    let (wood, _) = demo_images();
+    // The model's one buffer file holds the geometry and the image.
+    let (text, bin) = gltf_with_image_in_buffer(&wood, "house.bin", "house");
+    fs::write(dir.path().join("downloads/house.gltf"), &text).unwrap();
+    fs::write(dir.path().join("downloads/house.bin"), &bin).unwrap();
+    let done = ok(
+        &mut h,
+        "asset.import",
+        json!({"file": "downloads/house.gltf", "to": "models/house.gltf",
+               "license": "CC0-1.0", "author": "Ada", "source_url": "https://example.org/house"}),
+    );
+    assert_eq!(done["triangles"], 1, "{done}");
+    assert_eq!(done["files"].as_array().unwrap().len(), 5, "{done}");
+    let kept = fs::read(dir.path().join("game/assets/models/house.bin")).unwrap();
+    assert_eq!(kept.len(), 42, "the geometry alone: {} bytes", kept.len());
+    let stored: Value = serde_json::from_str(
+        &fs::read_to_string(dir.path().join("game/assets/models/house.gltf")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stored["buffers"][0]["byteLength"], 42);
+    assert_eq!(
+        stored["images"][0]["uri"],
+        format!("../textures/{}", textures(&dir)[0])
+    );
+    ok(&mut h, "project.open", json!({"path": "game"}));
+    let list = ok(&mut h, "asset.list", json!({}));
+    assert_eq!(list["assets"][0]["triangles"], 1, "{list}");
+    assert_eq!(list["assets"][0]["files"][1], "assets/models/house.bin");
+}
+
+#[test]
+fn a_store_file_replaced_by_hand_is_refused() {
+    let (dir, mut h) = project("assets-replaced");
+    let (wood, plank) = demo_images();
+    fs::write(
+        dir.path().join("downloads/a.glb"),
+        glb_with_image(&wood, "a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("downloads/b.glb"),
+        glb_with_image(&wood, "b"),
+    )
+    .unwrap();
+    import(&mut h, "downloads/a.glb", "models/a.glb");
+    let name = textures(&dir)[0].clone();
+    // Someone replaced the texture with other bytes under the same name.
+    fs::write(
+        dir.path().join(format!("game/assets/textures/{name}")),
+        &plank,
+    )
+    .unwrap();
+    let e = err(
+        &mut h,
+        "asset.import",
+        json!({"file": "downloads/b.glb", "to": "models/b.glb", "license": "CC0-1.0",
+               "author": "Ada", "source_url": "https://example.org/models"}),
+    );
+    assert!(
+        e.contains(&format!("textures/{name}")) && e.contains("other bytes"),
+        "{e}"
+    );
+    assert!(
+        !dir.path().join("game/assets/models/b.glb").exists(),
+        "nothing is written"
     );
 }

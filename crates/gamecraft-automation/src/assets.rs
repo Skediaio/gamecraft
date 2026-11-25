@@ -17,7 +17,7 @@ use crate::files::{Direction, MAX_ASSET_BYTES, resolve, write_whole};
 use crate::host::Host;
 use gamecraft_engine::{CommandSpec, ParamType as T, param};
 use gamecraft_project::model::{folder_of, references, resolve_uri, split_glb};
-use gamecraft_project::textures::{self, Imported, content_hash, hash_of, is_texture};
+use gamecraft_project::textures::{self, Imported, is_texture};
 use gamecraft_project::{
     ASSETS_DIR, AssetRecord, License, ModelSummary, PackAsset, Project, credits, inspect,
     record_path,
@@ -502,16 +502,15 @@ impl Host {
             let inside = texture.path.as_str();
             let relative = format!("{ASSETS_DIR}/{inside}");
             let texture_record_file = record_path(inside);
-            let name = inside.rsplit_once('/').map_or(inside, |(_, n)| n);
             let stored = if dir.join(&relative).exists() {
+                // The file must be this very image: another image with a colliding hash is
+                // an error, not a reuse.
                 let existing = read_pack_file(&dir, &relative)?;
-                if hash_of(name).is_some()
-                    && content_hash(&existing) != content_hash(&texture.bytes)
-                {
+                if existing != texture.bytes {
                     return Err(format!(
                         "`{relative}` exists already in the pack's texture store but holds other \
-                         bytes than the image it is named after; it was replaced or renamed by \
-                         hand: remove it and its record, then import again"
+                         bytes than the image it is named after (it was replaced or renamed by \
+                         hand): remove it and its record, then import again"
                     ));
                 }
                 if !dir.join(&texture_record_file).exists() {
@@ -543,19 +542,27 @@ impl Host {
                 "record": texture_record_file,
             }));
         }
-        // The model's other files (a .gltf's buffers), the model and its record.
+        // The model's other files (a .gltf's buffers: rewritten when they held images, else
+        // copied as they came), the model and its record. A model's bytes are its own files;
+        // the textures it refers to are assets of their own, counted once.
         let mut files = vec![format!("{ASSETS_DIR}/{to}")];
         let mut total = model.len() as u64;
-        for (uri, inside) in &buffers {
-            let data = resource(uri)
-                .ok_or_else(|| format!("`{file}` refers to `{uri}`, which was not read"))?;
-            files.push(format!("{ASSETS_DIR}/{inside}"));
+        for kept in &buffers {
+            let data = match kept.bytes.clone().or_else(|| parts.get(&kept.uri).cloned()) {
+                Some(data) => data,
+                None => {
+                    return Err(format!(
+                        "`{file}` refers to `{}`, which was not read",
+                        kept.uri
+                    ));
+                }
+            };
+            files.push(format!("{ASSETS_DIR}/{}", kept.path));
             total = total.saturating_add(data.len() as u64);
-            targets.push((format!("{ASSETS_DIR}/{inside}"), data));
+            targets.push((format!("{ASSETS_DIR}/{}", kept.path), data));
         }
         for texture in &textures {
             files.push(format!("{ASSETS_DIR}/{}", texture.path));
-            total = total.saturating_add(texture.bytes.len() as u64);
         }
         targets.push((format!("{ASSETS_DIR}/{to}"), model));
         for (relative, _) in &targets {

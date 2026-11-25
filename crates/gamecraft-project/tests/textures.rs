@@ -11,7 +11,9 @@
 )]
 
 use gamecraft_project::ModelSummary;
-use gamecraft_project::model::{decode_uri, inspect, references, resolve_uri, split_glb};
+use gamecraft_project::model::{
+    decode_uri, glb_json_len, inspect, references, resolve_uri, split_glb,
+};
 use gamecraft_project::textures::{
     Imported, content_hash, import, pack_glb, texture_name, texture_path,
 };
@@ -177,6 +179,21 @@ fn read_back(
             .map(|t| t.bytes.clone())
             .or_else(|| resource(r))
     })
+}
+
+/// The files a stored model keeps beside it: (URI, path inside assets/, the length of the
+/// bytes the import rewrote, or `None` to copy the file as it came).
+fn files_of(i: &Imported) -> Vec<(String, String, Option<usize>)> {
+    i.files
+        .iter()
+        .map(|f| {
+            (
+                f.uri.clone(),
+                f.path.clone(),
+                f.bytes.as_ref().map(Vec::len),
+            )
+        })
+        .collect()
 }
 
 /// The JSON document of a model file.
@@ -379,10 +396,11 @@ fn a_gltf_keeps_its_buffers_beside_it_and_its_images_in_the_store() {
     );
     assert_eq!(doc["buffers"], json!([house_bin(bin.len())]));
     assert_eq!(
-        i.files,
+        files_of(&i),
         [(
             "house.bin".to_string(),
-            "models/houses/house.bin".to_string()
+            "models/houses/house.bin".to_string(),
+            None
         )]
     );
     assert_eq!(i.summary, inspect(text.as_bytes(), &found).unwrap());
@@ -440,6 +458,12 @@ fn a_gltf_s_files_are_named_and_placed_inside_assets() {
             "texture store",
         ),
         ("my%20house.bin", "models/house.gltf", "plain file"),
+        ("../house.glb", "models/house.gltf", "model path"),
+        (
+            "house.bin.license.json",
+            "models/house.gltf",
+            "licence record",
+        ),
     ] {
         let (text, bin) = gltf(
             json!({"uri": "tex/wood.png"}),
@@ -465,8 +489,8 @@ fn a_gltf_s_files_are_named_and_placed_inside_assets() {
     };
     let i = import(text.as_bytes(), &found, "models/house.gltf").unwrap();
     assert_eq!(
-        i.files,
-        [("../house.bin".to_string(), "house.bin".to_string())]
+        files_of(&i),
+        [("../house.bin".to_string(), "house.bin".to_string(), None)]
     );
     assert_eq!(read_back(&i, "models/", &found).unwrap(), i.summary);
     // A model that cannot be read is refused first, with why.
@@ -497,7 +521,10 @@ fn a_model_without_images_is_stored_as_it_came() {
     let i = import(&text, &found, "models/x.gltf").unwrap();
     assert_eq!(i.model, text);
     assert!(i.textures.is_empty());
-    assert_eq!(i.files, [("x.bin".to_string(), "models/x.bin".to_string())]);
+    assert_eq!(
+        files_of(&i),
+        [("x.bin".to_string(), "models/x.bin".to_string(), None)]
+    );
     assert_eq!(read_back(&i, "models/", &found).unwrap(), i.summary);
 }
 
@@ -612,4 +639,208 @@ fn a_broken_model_is_an_error_never_a_panic() {
         "{}",
         i.textures[0].path
     );
+}
+
+// ---------------------------------------------------------------- review round
+
+/// A GLB whose geometry is in the files `buffers` name (no binary chunk), its image `image`.
+fn glb_with_buffers(image: Value, buffers: Value, bin: Option<&[u8]>) -> Vec<u8> {
+    let (mut doc, _) = model(PNG, "x", false, false);
+    doc["images"] = json!([image]);
+    doc["buffers"] = buffers;
+    let views: Vec<Value> = doc["bufferViews"].as_array().unwrap().clone();
+    let _ = views;
+    pack_glb(&serde_json::to_vec(&doc).unwrap(), bin).unwrap()
+}
+
+#[test]
+fn a_glb_without_a_binary_chunk_stays_a_glb() {
+    let wood = embedded_image(CRATE);
+    // The geometry in a file beside it, the image as a data: URI: a GLB with a JSON chunk only.
+    let (text, bin) = gltf(
+        json!({"uri": format!("data:image/png;base64,{}", base64(&wood))}),
+        house_bin,
+    );
+    let doc: Value = serde_json::from_str(&text).unwrap();
+    let source = glb_with_buffers(doc["images"][0].clone(), doc["buffers"].clone(), None);
+    let found = |r: &str| (r == "house.bin").then(|| bin.clone());
+    let i = import(&source, &found, "models/x.glb").unwrap();
+    assert!(
+        i.model.starts_with(b"glTF"),
+        "still a GLB, whatever it holds"
+    );
+    assert_eq!(split_glb(&i.model).unwrap().1, None);
+    assert_eq!(
+        glb_json_len(&i.model[..20], i.model.len() as u64),
+        Ok(i.model.len() - 20),
+        "the host can read its JSON chunk"
+    );
+    assert_eq!(read_back(&i, "models/", &found).unwrap(), i.summary);
+    // The image beside it instead: the same.
+    let (text, bin) = gltf(json!({"uri": "tex/wood.png"}), house_bin);
+    let doc: Value = serde_json::from_str(&text).unwrap();
+    let source = glb_with_buffers(doc["images"][0].clone(), doc["buffers"].clone(), None);
+    let found = |r: &str| {
+        (r == "house.bin")
+            .then(|| bin.clone())
+            .or((r == "tex/wood.png").then(|| wood.clone()))
+    };
+    let i = import(&source, &found, "models/x.glb").unwrap();
+    assert!(i.model.starts_with(b"glTF"));
+    assert_eq!(split_glb(&i.model).unwrap().1, None);
+    assert_eq!(read_back(&i, "models/", &found).unwrap(), i.summary);
+}
+
+#[test]
+fn a_buffer_that_keeps_no_view_is_dropped_and_the_buffers_renumbered() {
+    let wood = embedded_image(CRATE);
+    // A GLB whose binary chunk holds only the image, its geometry in a file beside it.
+    let (d, bin) = model(&wood, "x", false, false);
+    let views = d["bufferViews"].as_array().unwrap();
+    let (geometry, image) = (
+        json!({"uri": "geo.bin", "byteLength": bin.len()}),
+        json!([views[2].clone()]),
+    );
+    let mut doc = d.clone();
+    doc["buffers"] = json!([{"byteLength": bin.len()}, geometry]);
+    doc["bufferViews"] = json!([
+        {"buffer": 1, "byteOffset": views[0]["byteOffset"].clone(), "byteLength": views[0]["byteLength"].clone(), "target": 34962},
+        {"buffer": 1, "byteOffset": views[1]["byteOffset"].clone(), "byteLength": views[1]["byteLength"].clone(), "target": 34963},
+        {"buffer": 0, "byteOffset": image[0]["byteOffset"].clone(), "byteLength": image[0]["byteLength"].clone()}
+    ]);
+    doc["images"] = json!([{"bufferView": 2, "mimeType": "image/png"}]);
+    let source = pack_glb(&serde_json::to_vec(&doc).unwrap(), Some(&bin)).unwrap();
+    let found = |r: &str| (r == "geo.bin").then(|| bin.clone());
+    let i = import(&source, &found, "models/x.glb").unwrap();
+    // No binary chunk, no buffer for it: the geometry's buffer is buffer 0 now.
+    assert!(i.model.starts_with(b"glTF"));
+    assert_eq!(split_glb(&i.model).unwrap().1, None, "no empty chunk");
+    let after = json_of(&i.model);
+    // The geometry's file lost no view of its own: copied as it came.
+    assert_eq!(
+        after["buffers"],
+        json!([{"uri": "geo.bin", "byteLength": bin.len()}])
+    );
+    assert_eq!(after["bufferViews"].as_array().unwrap().len(), 2);
+    assert_eq!(after["bufferViews"][0]["buffer"], 0);
+    assert_eq!(after["bufferViews"][1]["buffer"], 0);
+    assert_eq!(
+        after["bufferViews"][0]["byteOffset"],
+        views[0]["byteOffset"]
+    );
+    assert_eq!(after["accessors"][0]["bufferView"], 0);
+    assert_eq!(after["accessors"][1]["bufferView"], 1);
+    assert_eq!(
+        files_of(&i),
+        [("geo.bin".to_string(), "models/geo.bin".to_string(), None)]
+    );
+    assert_eq!(read_back(&i, "models/", &found).unwrap(), i.summary);
+}
+
+#[test]
+fn an_extension_that_names_buffer_views_stops_the_import() {
+    let wood = embedded_image(CRATE);
+    let (mut doc, bin) = model(&wood, "x", false, false);
+    doc["extensionsUsed"] = json!(["EXT_meshopt_compression"]);
+    doc["meshes"][0]["primitives"][0]["extensions"] =
+        json!({"EXT_meshopt_compression": {"bufferView": 2, "count": 3}});
+    let source = pack_glb(&serde_json::to_vec(&doc).unwrap(), Some(&bin)).unwrap();
+    let e = import(&source, &none, "models/x.glb").unwrap_err();
+    assert!(
+        e.contains("EXT_meshopt_compression")
+            && e.contains("bufferView")
+            && e.contains("meshes[0]"),
+        "{e}"
+    );
+    // The same model with its image as a file drops no view and needs no renumbering.
+    let (text, bin) = gltf(
+        json!({"uri": "tex/wood.png"}),
+        |len| json!({"uri": "house.bin", "byteLength": len}),
+    );
+    let mut doc: Value = serde_json::from_str(&text).unwrap();
+    doc["extensionsUsed"] = json!(["EXT_meshopt_compression"]);
+    doc["meshes"][0]["primitives"][0]["extensions"] =
+        json!({"EXT_meshopt_compression": {"bufferView": 1, "count": 3}});
+    let found = |r: &str| {
+        (r == "tex/wood.png")
+            .then(|| wood.clone())
+            .or((r == "house.bin").then(|| bin.clone()))
+    };
+    let i = import(&serde_json::to_vec(&doc).unwrap(), &found, "models/x.gltf").unwrap();
+    assert_eq!(
+        json_of_text(&i.model)["meshes"][0]["primitives"][0]["extensions"]["EXT_meshopt_compression"]
+            ["bufferView"],
+        1
+    );
+    // A buffer extension's fallback buffer view counts too.
+    let (mut doc, bin) = model(&wood, "x", false, false);
+    doc["buffers"][0]["extensions"] = json!({"EXT_meshopt_compression": {"fallbackBufferView": 2}});
+    let source = pack_glb(&serde_json::to_vec(&doc).unwrap(), Some(&bin)).unwrap();
+    let e = import(&source, &none, "models/x.glb").unwrap_err();
+    assert!(
+        e.contains("fallbackBufferView") && e.contains("buffers[0]"),
+        "{e}"
+    );
+}
+
+/// The JSON document of a stored `.gltf`.
+fn json_of_text(json: &[u8]) -> Value {
+    serde_json::from_slice(json).unwrap()
+}
+
+#[test]
+fn a_buffer_file_that_held_images_is_rewritten_or_dropped() {
+    let wood = embedded_image(CRATE);
+    // One buffer file holds the geometry and the image: it is rewritten without the image.
+    let (mut d, bin) = model(&wood, "house", false, false);
+    d["buffers"] = json!([house_bin(bin.len())]);
+    let text = serde_json::to_vec(&d).unwrap();
+    let found = |r: &str| (r == "house.bin").then(|| bin.clone());
+    let i = import(&text, &found, "models/house.gltf").unwrap();
+    assert_eq!(i.textures[0].bytes, wood);
+    assert_eq!(
+        files_of(&i),
+        [(
+            "house.bin".to_string(),
+            "models/house.bin".to_string(),
+            Some(36 + 6)
+        )]
+    );
+    let doc = json_of_text(&i.model);
+    assert_eq!(doc["buffers"][0]["byteLength"], 36 + 6);
+    assert_eq!(doc["bufferViews"].as_array().unwrap().len(), 2);
+    assert_eq!(read_back(&i, "models/", &found).unwrap(), i.summary);
+    // Two buffer files, one with the geometry and one with only the image: the second goes.
+    let (mut d, bin) = model(&wood, "two", false, false);
+    let geometry = bin[..bin.len() - wood.len() - (4 - wood.len() % 4) % 4].to_vec();
+    let image = bin[bin.len() - wood.len() - (4 - wood.len() % 4) % 4..].to_vec();
+    let views = d["bufferViews"].as_array().unwrap().clone();
+    let image_len = views[2]["byteLength"].as_u64().unwrap();
+    d["buffers"] = json!([
+        {"uri": "geo.bin", "byteLength": geometry.len()},
+        {"uri": "tex.bin", "byteLength": image.len()}
+    ]);
+    d["bufferViews"] = json!([
+        {"buffer": 0, "byteOffset": views[0]["byteOffset"].clone(), "byteLength": views[0]["byteLength"].clone(), "target": 34962},
+        {"buffer": 0, "byteOffset": views[1]["byteOffset"].clone(), "byteLength": views[1]["byteLength"].clone(), "target": 34963},
+        {"buffer": 1, "byteOffset": 0, "byteLength": image_len}
+    ]);
+    let found = |r: &str| {
+        (r == "geo.bin")
+            .then(|| geometry.clone())
+            .or((r == "tex.bin").then(|| image.clone()))
+    };
+    let i = import(&serde_json::to_vec(&d).unwrap(), &found, "models/two.gltf").unwrap();
+    assert_eq!(
+        files_of(&i),
+        [("geo.bin".to_string(), "models/geo.bin".to_string(), None)]
+    );
+    let doc = json_of_text(&i.model);
+    assert_eq!(
+        doc["buffers"],
+        json!([{"uri": "geo.bin", "byteLength": geometry.len()}])
+    );
+    assert_eq!(doc["bufferViews"][0]["buffer"], 0);
+    assert_eq!(doc["accessors"][0]["bufferView"], 0);
+    assert_eq!(read_back(&i, "models/", &found).unwrap(), i.summary);
 }

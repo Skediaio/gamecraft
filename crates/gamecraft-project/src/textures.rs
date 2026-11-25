@@ -13,16 +13,23 @@
 //! The content hash is the workspace's own `gamecraft_math::StateHasher` (FNV-1a, 64 bits):
 //! deterministic, there without a new dependency, and enough to tell a pack's few hundred
 //! textures apart (`docs/decisions.md`, *Shared textures are files of the pack*). A host that
-//! finds a texture of the store already there checks its bytes against its name
-//! ([`hash_of`]), so a file renamed or replaced by hand is refused, not reused.
+//! finds a texture of the store already there compares the file's bytes with the image's
+//! ([`Texture::bytes`]), so a file renamed or replaced by hand is refused, not reused.
 //!
-//! Models with embedded images (imported before the store existed, or written by hand) load
-//! as before: the renderer reads an image from a buffer view or from a URI.
+//! The views that held only images leave the model: a `.glb`'s binary chunk and a rewritten
+//! buffer file lose them, a buffer that keeps no view at all goes, and the accessors point at
+//! the views' new indices. Anything else that names a buffer view (an extension such as
+//! `EXT_meshopt_compression`) stops the import with a sentence, since the engine cannot
+//! renumber what it does not know. Models with embedded images (imported before the store
+//! existed, or written by hand) load as before: the renderer reads an image from a buffer view
+//! or from a URI.
 
+use crate::assets::RECORD_SUFFIX;
 use crate::model::{
     ModelSummary, decode_uri, folder_of, inspect, relative_uri, resolve_uri, split_glb,
 };
 use gamecraft_math::StateHasher;
+use gamecraft_world::is_model_path;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,21 +45,31 @@ pub struct Texture {
     pub bytes: Vec<u8>,
 }
 
+/// A file a stored model keeps beside it (a `.gltf`'s buffer).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelFile {
+    /// The URI as the model writes it.
+    pub uri: String,
+    /// Where its bytes go, inside `assets/`.
+    pub path: String,
+    /// The bytes to write when the import changed the file (a buffer that held images keeps
+    /// its geometry and loses them); `None` to copy the file the model came with as it is.
+    pub bytes: Option<Vec<u8>>,
+}
+
 /// A model made ready for the store by [`import`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Imported {
     /// The model's file as it is stored: its images refer to the texture store by relative
-    /// URIs, and the binary chunk of a `.glb` no longer holds them. A model without images is
-    /// stored as it came.
+    /// URIs, and no buffer of it holds them. A model without images is stored as it came.
     pub model: Vec<u8>,
     /// What reading the model as it came found (triangles, bounds, ...). The stored file
     /// reads the same.
     pub summary: ModelSummary,
     /// The images it uses, each once, in the order of its `images`.
     pub textures: Vec<Texture>,
-    /// The other files it refers to and that are copied beside it (a `.gltf`'s buffers): the
-    /// URI as the model writes it, and the path inside `assets/` where the bytes go.
-    pub files: Vec<(String, String)>,
+    /// The other files it refers to and that go beside it (a `.gltf`'s buffers).
+    pub files: Vec<ModelFile>,
 }
 
 /// The content hash of a texture's bytes: FNV-1a, 64 bits (`gamecraft_math::StateHasher`).
@@ -79,31 +96,26 @@ pub fn is_texture(path: &str) -> bool {
         .is_some_and(|rest| !rest.is_empty())
 }
 
-/// The content hash a texture of the store is named after, when its name is that of a texture
-/// [`import`] stored (`<16 hex digits>.<ext>`); `None` for any other name.
-pub fn hash_of(name: &str) -> Option<u64> {
-    let (digits, _) = name.split_once('.')?;
-    if digits.len() != 16 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    u64::from_str_radix(digits, 16).ok()
-}
-
 /// Makes the model `bytes` (a `.glb` or a `.gltf`) ready to be stored as `to` (its path inside
 /// `assets/`): its images become textures of the store, keyed by their content hash, and its
 /// document refers to them. `resource(path)` gives the bytes of a file the model refers to by
 /// URI, relative to its own folder (its buffers, images beside a `.gltf`).
 ///
 /// The model is read first ([`inspect`]): one that cannot be read is refused, and nothing is
-/// rewritten. The file that comes back reads the same as the one that went in (checked here),
-/// so a model draws exactly as before. An error, never a panic, for anything broken.
+/// rewritten. The views that held only images leave the model: a buffer the import can rewrite
+/// (the binary chunk of a `.glb`, a buffer file) loses them and is given back as new bytes
+/// ([`ModelFile::bytes`]), a buffer that keeps no view goes, and the accessors point at the
+/// views' new indices; a document where anything else names a buffer view is refused. The file
+/// that comes back reads the same as the one that went in (checked here), so a model draws
+/// exactly as before. An error, never a panic, for anything broken.
 pub fn import(
     bytes: &[u8],
     resource: &dyn Fn(&str) -> Option<Vec<u8>>,
     to: &str,
 ) -> Result<Imported, String> {
     let summary = inspect(bytes, resource)?;
-    let (json, bin) = split_glb(bytes)?;
+    let glb = bytes.starts_with(b"glTF");
+    let (json, chunk) = split_glb(bytes)?;
     let mut doc: Value =
         serde_json::from_slice(json).map_err(|e| format!("not a glTF document: {e}"))?;
     let folder = folder_of(to);
@@ -116,8 +128,8 @@ pub fn import(
         let view = image.get("bufferView").and_then(Value::as_u64);
         let (data, mime) = match view {
             Some(view) => {
-                let data =
-                    view_image(&doc, view, bin, resource).map_err(|e| format!("image {i} {e}"))?;
+                let data = view_image(&doc, view, chunk, resource)
+                    .map_err(|e| format!("image {i} {e}"))?;
                 let index = usize::try_from(view).map_err(|_| {
                     format!("image {i} refers to bufferView {view}, which is too large")
                 })?;
@@ -136,36 +148,64 @@ pub fn import(
             },
         };
         let ext = extension_of(&data, mime.as_deref()).map_err(|e| format!("image {i} {e}"))?;
-        let texture = store.keep(data, ext)?;
-        let path = store
-            .textures
-            .get(texture)
-            .map(|t| t.path.as_str())
-            .ok_or_else(|| format!("image {i}: the texture store lost its entry (a bug)"))?;
+        let path = store.keep(data, ext);
         let mut new_image = image.clone();
         let object = new_image
             .as_object_mut()
             .ok_or_else(|| format!("image {i} is not a JSON object"))?;
         object.remove("bufferView");
         object.remove("mimeType");
-        object.insert("uri".into(), Value::String(relative_uri(folder, path)));
+        object.insert("uri".into(), Value::String(relative_uri(folder, &path)));
         new_images.push(new_image);
     }
+    let mut written: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let model = if images.is_empty() {
         bytes.to_vec()
     } else {
         object_mut(&mut doc)?.insert("images".into(), Value::Array(new_images));
-        match bin {
-            None => serde_json::to_vec(&doc)
-                .map_err(|e| format!("the model's document cannot be written: {e}"))?,
-            Some(old) if image_views.is_empty() => {
-                pack_glb(&serde_json::to_vec(&doc).map_err(write_error)?, Some(old))?
+        let dropped: BTreeSet<usize> = image_views.difference(&accessor_views).copied().collect();
+        let mut chunk_bytes: Option<Vec<u8>> = chunk.map(<[u8]>::to_vec);
+        if !dropped.is_empty() {
+            refuse_foreign_view_refs(&doc)?;
+            let buffers = buffer_bytes(&doc, chunk, resource);
+            let rewritten = strip_views(&mut doc, &buffers, &dropped)?;
+            // The binary chunk goes with its buffer, when that keeps no view.
+            let chunk_stays = doc
+                .get("buffers")
+                .and_then(Value::as_array)
+                .and_then(|b| b.first())
+                .is_some_and(|b| b.get("uri").is_none());
+            if !chunk_stays {
+                chunk_bytes = None;
             }
-            Some(old) => strip_views(&mut doc, old, &image_views, &accessor_views)?,
+            for (index, fresh) in rewritten {
+                let is_chunk = doc
+                    .get("buffers")
+                    .and_then(Value::as_array)
+                    .and_then(|b| b.get(index))
+                    .is_some_and(|b| b.get("uri").is_none());
+                if is_chunk {
+                    chunk_bytes = Some(fresh);
+                } else if let Some(uri) = doc
+                    .get("buffers")
+                    .and_then(Value::as_array)
+                    .and_then(|b| b.get(index))
+                    .and_then(|b| b.get("uri"))
+                    .and_then(Value::as_str)
+                {
+                    written.insert(decode_uri(uri)?, fresh);
+                }
+            }
+        }
+        let json = serde_json::to_vec(&doc).map_err(write_error)?;
+        if glb {
+            pack_glb(&json, chunk_bytes.as_deref())?
+        } else {
+            json
         }
     };
     // The other files the model keeps beside it (a .gltf's buffers), placed inside assets/.
-    let mut files: Vec<(String, String)> = Vec::new();
+    let mut files: Vec<ModelFile> = Vec::new();
     for buffer in doc
         .get("buffers")
         .and_then(Value::as_array)
@@ -183,17 +223,40 @@ pub fn import(
                  ({TEXTURES_DIR}/); move the file beside the model"
             ));
         }
-        if !files.iter().any(|(u, _)| u == &decoded) {
-            files.push((decoded, inside));
+        if is_model_path(&inside) {
+            return Err(format!(
+                "the model keeps a buffer at `{inside}`, which is a model path (it ends in .glb \
+                 or .gltf); rename the buffer file"
+            ));
         }
+        if inside.ends_with(RECORD_SUFFIX) {
+            return Err(format!(
+                "the model keeps a buffer at `{inside}`, which is the name of a licence record \
+                 (`*{RECORD_SUFFIX}`); rename the buffer file"
+            ));
+        }
+        if files.iter().any(|f| f.uri == decoded) {
+            continue;
+        }
+        files.push(ModelFile {
+            bytes: written.remove(&decoded),
+            path: inside,
+            uri: decoded,
+        });
     }
-    // The stored file reads back as it came, with the textures where they are now.
+    // The stored file reads back as it came, with the textures and buffers where they are now.
     let stored = |r: &str| -> Option<Vec<u8>> {
         store
-            .textures
-            .iter()
+            .by_hash
+            .values()
             .find(|t| resolve_uri(folder, r).is_ok_and(|inside| inside == t.path))
             .map(|t| t.bytes.clone())
+            .or_else(|| {
+                files
+                    .iter()
+                    .find(|f| f.uri == r)
+                    .and_then(|f| f.bytes.clone())
+            })
             .or_else(|| resource(r))
     };
     let after = inspect(&model, &stored).map_err(|e| {
@@ -209,32 +272,38 @@ pub fn import(
     Ok(Imported {
         model,
         summary,
-        textures: store.textures,
+        textures: store.into_textures(),
         files,
     })
 }
 
-/// The textures found so far, each once by content hash.
+/// The textures found so far, each once by content hash, in the order they came.
 #[derive(Default)]
 struct Store {
-    textures: Vec<Texture>,
-    by_hash: BTreeMap<u64, usize>,
+    by_hash: BTreeMap<u64, Texture>,
+    order: Vec<u64>,
 }
 
 impl Store {
-    /// Keeps `data` (a `ext` image) and gives the index of its texture.
-    fn keep(&mut self, data: Vec<u8>, ext: &str) -> Result<usize, String> {
+    /// Keeps `data` (an `ext` image) and gives the path of its texture inside `assets/`.
+    fn keep(&mut self, data: Vec<u8>, ext: &str) -> String {
         let hash = content_hash(&data);
-        if let Some(at) = self.by_hash.get(&hash) {
-            return Ok(*at);
-        }
-        let at = self.textures.len();
-        self.textures.push(Texture {
-            path: texture_path(&texture_name(hash, ext)),
-            bytes: data,
+        let texture = self.by_hash.entry(hash).or_insert_with(|| {
+            self.order.push(hash);
+            Texture {
+                path: texture_path(&texture_name(hash, ext)),
+                bytes: data,
+            }
         });
-        self.by_hash.insert(hash, at);
-        Ok(at)
+        texture.path.clone()
+    }
+
+    /// The textures in the order the model's images named them.
+    fn into_textures(mut self) -> Vec<Texture> {
+        self.order
+            .into_iter()
+            .filter_map(|hash| self.by_hash.remove(&hash))
+            .collect()
     }
 }
 
@@ -281,6 +350,27 @@ fn accessor_views(doc: &Value) -> BTreeSet<usize> {
         }
     }
     out
+}
+
+/// The bytes of each buffer of `doc` the import can rewrite, by index: the file's binary chunk
+/// (buffer 0 when it has no URI) and the buffer files `resource` gives. A buffer that is not
+/// here is left as it is.
+fn buffer_bytes(
+    doc: &Value,
+    chunk: Option<&[u8]>,
+    resource: &dyn Fn(&str) -> Option<Vec<u8>>,
+) -> Vec<Option<Vec<u8>>> {
+    doc.get("buffers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .map(|(i, b)| match b.get("uri").and_then(Value::as_str) {
+            None if i == 0 => chunk.map(<[u8]>::to_vec),
+            None => None,
+            Some(uri) => decode_uri(uri).ok().and_then(|path| resource(&path)),
+        })
+        .collect()
 }
 
 /// The bytes of the image in buffer view `bv` of `doc`: in the file's binary chunk, or in a
@@ -433,72 +523,208 @@ fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// Rewrites the GLB `doc` and its binary chunk `old` without the views that only held images:
-/// every other view of the binary chunk is copied into a new chunk, one after the other, and
-/// the accessors point at the views' new indices. Gives the new GLB file.
+/// Refuses a document where anything but the accessors (and the images, gone by now) names a
+/// buffer view: an extension object (`EXT_meshopt_compression`, `KHR_draco_mesh_compression`,
+/// a buffer's fallback view) would keep the index of a view the import drops.
+fn refuse_foreign_view_refs(doc: &Value) -> Result<(), String> {
+    let mut found = Vec::new();
+    walk_view_refs(doc, String::new(), &mut found);
+    if found.is_empty() {
+        return Ok(());
+    }
+    let used: Vec<&str> = doc
+        .get("extensionsUsed")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let used = if used.is_empty() {
+        String::new()
+    } else {
+        format!(" (`extensionsUsed`: {})", used.join(", "))
+    };
+    Err(format!(
+        "its images lie in buffer views the import would drop, but {} name{} a buffer view \
+         besides the accessors{used}; the import cannot renumber those: export the model with \
+         its images as files beside it, or without that extension",
+        found.join(", "),
+        if found.len() == 1 { "s" } else { "" }
+    ))
+}
+
+/// Collects the JSON paths of the keys that name a buffer view outside the places the import
+/// renumbers: the view list itself, an accessor's own view and a sparse accessor's two.
+fn walk_view_refs(value: &Value, path: String, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, v) in map {
+                let name = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                if key.to_ascii_lowercase().contains("bufferview")
+                    && !renumbered_view_ref(&path, key)
+                {
+                    out.push(name.clone());
+                }
+                walk_view_refs(v, name, out);
+            }
+        }
+        Value::Array(items) => {
+            for (i, v) in items.iter().enumerate() {
+                walk_view_refs(v, format!("{path}[{i}]"), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether the key `key` at `path` is a buffer view reference the import renumbers itself.
+fn renumbered_view_ref(path: &str, key: &str) -> bool {
+    if path.is_empty() {
+        return key == "bufferViews";
+    }
+    let accessor = path.starts_with("accessors[") && !path.contains('.');
+    (accessor || path.ends_with(".sparse.indices") || path.ends_with(".sparse.values"))
+        && key == "bufferView"
+        && path.starts_with("accessors[")
+}
+
+/// Rewrites `doc` without the views in `dropped` (those that held only images). A buffer whose
+/// bytes are in `buffers` is rebuilt from the views it keeps, one after the other (4-byte
+/// aligned, and its `byteLength` follows); one of those that keeps no view goes, with the
+/// binary chunk. Every other buffer stays as it is. The accessors and the kept views point at
+/// the new indices. Gives the new bytes of the rewritten buffers by their new index.
 fn strip_views(
     doc: &mut Value,
-    old: &[u8],
-    image_views: &BTreeSet<usize>,
-    accessor_views: &BTreeSet<usize>,
-) -> Result<Vec<u8>, String> {
+    buffers: &[Option<Vec<u8>>],
+    dropped: &BTreeSet<usize>,
+) -> Result<BTreeMap<usize, Vec<u8>>, String> {
     let views = doc
         .get("bufferViews")
         .and_then(Value::as_array)
+        .cloned()
         .ok_or("has images in buffer views but no bufferViews")?;
-    let chunk_buffer = doc
-        .get("buffers")
-        .and_then(Value::as_array)
-        .and_then(|b| b.first())
-        .is_some_and(|b| b.get("uri").is_none());
     let mut kept: Vec<Value> = Vec::with_capacity(views.len());
     let mut remap: Vec<Option<usize>> = Vec::with_capacity(views.len());
-    let mut bin: Vec<u8> = Vec::new();
+    let buffer_of = |view: &Value| {
+        view.get("buffer")
+            .and_then(Value::as_u64)
+            .and_then(|b| usize::try_from(b).ok())
+            .unwrap_or(0)
+    };
+    let mut fresh: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
+    // The buffers that had views, and those that lose one (known before any view is kept:
+    // a dropped view may come after the kept ones).
+    let had_views: BTreeSet<usize> = views.iter().map(buffer_of).collect();
+    let lost: BTreeSet<usize> = views
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| dropped.contains(i))
+        .map(|(_, view)| buffer_of(view))
+        .collect();
+    let mut keeps_views: BTreeSet<usize> = BTreeSet::new();
     for (i, view) in views.iter().enumerate() {
-        if image_views.contains(&i) && !accessor_views.contains(&i) {
+        if dropped.contains(&i) {
             remap.push(None);
             continue;
         }
         let number = |k: &str| view.get(k).and_then(Value::as_u64);
+        let b = usize_of(number("buffer").unwrap_or(0))
+            .map_err(|e| format!("a buffer view names a buffer that {e}"))?;
         let mut copy = view.clone();
-        if chunk_buffer && number("buffer").unwrap_or(0) == 0 {
+        // A buffer that lost a view is rebuilt from the views it keeps, when its bytes are
+        // there; any other stays as it is.
+        if let Some(old) = buffers
+            .get(b)
+            .and_then(Option::as_deref)
+            .filter(|_| lost.contains(&b))
+        {
             let at = usize_of(number("byteOffset").unwrap_or(0))?;
             let len = usize_of(number("byteLength").ok_or("has no byteLength")?)?;
-            let end = at.checked_add(len).ok_or("reaches past the binary chunk")?;
-            let data = old.get(at..end).ok_or("reaches past the binary chunk")?;
-            while !bin.len().is_multiple_of(4) {
-                bin.push(0);
+            let end = at.checked_add(len).ok_or("reaches past its buffer")?;
+            let data = old.get(at..end).ok_or("reaches past its buffer")?;
+            let out = fresh.entry(b).or_default();
+            while !out.len().is_multiple_of(4) {
+                out.push(0);
             }
             copy.as_object_mut()
                 .ok_or("is not a JSON object")?
-                .insert("byteOffset".into(), Value::from(bin.len()));
-            bin.extend_from_slice(data);
+                .insert("byteOffset".into(), Value::from(out.len()));
+            out.extend_from_slice(data);
         }
+        keeps_views.insert(b);
         remap.push(Some(kept.len()));
         kept.push(copy);
     }
     let object = object_mut(doc)?;
+    remap_accessors(object, &remap)?;
     if kept.is_empty() {
         object.remove("bufferViews");
-        object.remove("buffers");
-        let json = serde_json::to_vec(doc).map_err(write_error)?;
-        return pack_glb(&json, None);
+    } else {
+        object.insert("bufferViews".into(), Value::Array(kept));
     }
-    remap_accessors(object, &remap)?;
-    object.insert("bufferViews".into(), Value::Array(kept));
-    let first = object
-        .get_mut("buffers")
+    // The buffers: one that had views and keeps none goes (with the binary chunk); the others
+    // stay, the rewritten ones with the length of their new bytes.
+    let old_buffers = object
+        .get("buffers")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or("has images in buffer views but no buffers")?;
+    let mut new_buffers: Vec<Value> = Vec::with_capacity(old_buffers.len());
+    let mut buffer_remap: Vec<Option<usize>> = Vec::with_capacity(old_buffers.len());
+    for (i, mut buffer) in old_buffers.into_iter().enumerate() {
+        if had_views.contains(&i) && !keeps_views.contains(&i) {
+            buffer_remap.push(None);
+            continue;
+        }
+        if let Some(bytes) = fresh.get(&i) {
+            buffer
+                .as_object_mut()
+                .ok_or("has a buffer that is not a JSON object")?
+                .insert("byteLength".into(), Value::from(bytes.len()));
+        }
+        buffer_remap.push(Some(new_buffers.len()));
+        new_buffers.push(buffer);
+    }
+    for view in object
+        .get_mut("bufferViews")
         .and_then(Value::as_array_mut)
-        .and_then(|b| b.first_mut())
-        .ok_or("has images in buffer views but no buffers")?
-        .as_object_mut()
-        .ok_or("has a buffer that is not a JSON object")?;
-    first.insert("byteLength".into(), Value::from(bin.len()));
-    while !bin.len().is_multiple_of(4) {
-        bin.push(0);
+        .into_iter()
+        .flatten()
+    {
+        let Some(o) = view.as_object_mut() else {
+            continue;
+        };
+        let Some(b) = o.get("buffer").and_then(Value::as_u64) else {
+            continue;
+        };
+        let new = usize_of(b)
+            .ok()
+            .and_then(|i| buffer_remap.get(i).copied().flatten())
+            .ok_or_else(|| {
+                format!("a buffer view reads buffer {b}, which keeps no view and was dropped")
+            })?;
+        o.insert("buffer".into(), Value::from(new));
     }
-    let json = serde_json::to_vec(doc).map_err(write_error)?;
-    pack_glb(&json, Some(&bin))
+    if new_buffers.is_empty() {
+        object.remove("buffers");
+    } else {
+        object.insert("buffers".into(), Value::Array(new_buffers));
+    }
+    Ok(fresh
+        .into_iter()
+        .filter(|(b, _)| keeps_views.contains(b))
+        .filter_map(|(b, bytes)| {
+            buffer_remap
+                .get(b)
+                .copied()
+                .flatten()
+                .map(|new| (new, bytes))
+        })
+        .collect())
 }
 
 /// Points every accessor of `doc` at the new index of its buffer view (`remap`: old index to
@@ -589,8 +815,6 @@ mod tests {
         let hash = content_hash(b"not an image");
         let name = texture_name(hash, "png");
         assert_eq!(name.len(), 20);
-        assert_eq!(hash_of(&name), Some(hash));
-        assert_eq!(hash_of("wood.png"), None);
         assert_eq!(texture_path(&name), format!("textures/{name}"));
         assert!(is_texture("textures/wood.png"));
         assert!(!is_texture("models/wood.png"));
