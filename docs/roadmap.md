@@ -207,6 +207,29 @@ the project's `ENGINE-WISHLIST.md`):
   `entity.scatter` with a layer parameter and a rotation bias, and plants for dry regions
   (a true date palm, dry scrub).
 
+### Open: found by building a large real-place map (2026-11-25)
+
+A game built an 8 km map at 4 m from a DEM and an OpenStreetMap extract (about 62 000 entities,
+295 000 with prefab children, 288 000 instances and 38 M triangles in a wide view). What it needs
+from the engine, as mechanisms with no game in them, in the order they are scheduled:
+
+1. **Generated worlds are stored as cells, not as scripts.** A guideline (commit the generator
+   and its sources, and the cells `project.save` writes; a generated build script is a build
+   artefact) and a `gamecraft-cli` command that runs a script and saves the result as a celled
+   project in one step.
+2. **Far levels of detail for groups (HLOD):** a cell, or a block within it, merged into one
+   simplified mesh or impostor for distance, built from the cell's content and rebuilt when the
+   cell changes. Per-model levels still draw every instance.
+3. **Terrain from a DEM at full resolution:** a heightmap in tiles as the source (1-4 m, imported
+   from a DEM), with sculpting as a layer over it, instead of a coarse control grid plus at most
+   1 024 edits.
+4. **A navigation mesh per cell**, built from solids and terrain, rebuilt for the cells an edit
+   touches and queried by the simulation (walls, gates, bridges, rooftops); part of M7, after
+   cells are streamed near the player.
+5. **A generic geodata importer** (optional): a DEM and an OpenStreetMap extract to a pack
+   (frame, terrain, roads, building footprints, water, licence records); rules of a place stay in
+   the game.
+
 ## M4: Physics
 
 Rigid bodies, colliders from shapes and models, ray and shape casts, joints, then vehicles. All
