@@ -136,7 +136,9 @@ struct HlodBuilt {
     triangles: u64,
     /// The box of every merged mesh, in world coordinates.
     bounds: (Vec3, Vec3),
-    /// Where it takes over from the cell's own items.
+    /// Where it takes over from the cell's own items (read by the statistics of a live
+    /// view, which the browser build has not).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     near_m: f64,
 }
 
@@ -1120,6 +1122,7 @@ impl WorldRenderer {
 
     /// What the far levels drew from `eye` through `view_proj` by the same rule: a cell is
     /// drawn when its box is farther than its take-over distance and within [`FAR_M`].
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn account_hlod(&self, view_proj: Mat4, eye: Vec3, lod_scale: f32) -> HlodStats {
         let mut stats = HlodStats {
             cells: self.built.hlod.len(),

@@ -99,9 +99,15 @@ block within it, for the same reason.
 - **No hole at a cell's corner, and no flicker where both draw.** The renderer measures an item's
   distance to the box of its cluster of instances (8 m) and the merged mesh's to the cell's box: a
   cluster at a cell's far corner is up to a cell's diagonal farther than the cell. So the cell's own
-  items draw until a diagonal past the take-over distance, and every merged entity is scaled 0.5 %
-  about its own origin, so where both draw the copy stays inside the real geometry. A VisionCraft
-  item's first level starts at distance 0, so the near level of a merged item is an empty mesh.
+  items draw until a diagonal past the take-over distance, and every merged entity is pulled
+  towards its own origin by 0.25 % a side, or 2 cm on an axis longer than 8 m, so where both
+  draw the copy stays inside the real geometry. (At first every axis lost 0.25 %: half a
+  percent of a 200 m wall is half a metre, and beyond the band its merged copy showed a gap
+  where it met a block; a review fix of the same day, checked on pictures.) The depth buffer
+  cannot tell the copy from the real one 300 m away on a thin shape, so in the band their
+  faces fight faintly; that is for a reversed-Z depth in VisionCraft, as for roads. A
+  VisionCraft item's first level starts at distance 0, so the near level of a merged item is
+  an empty mesh.
 - **A take-over follows the cell's farthest-drawing item**, so a landmark that draws to 3 km holds
   its whole cell at full detail until then: the items are grouped per asset, distances and
   take-over distance, not per cell, so a cell cannot cut one of its items short and an item draws

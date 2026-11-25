@@ -9,7 +9,8 @@
 //! items (at least [`NEAR_MIN_M`]) and is drawn until [`FAR_M`]. The real items of the cell
 //! draw until a cell's diagonal past that, so that a cluster at the cell's far corner never
 //! disappears before the merged mesh shows; in that band both draw, and every merged entity is
-//! scaled about its own origin by [`SHRINK`], so its copy stays inside the real one.
+//! pulled towards its own origin ([`SHRINK`], capped at [`INSET_M`] a side), so its copy stays
+//! inside the real one.
 //!
 //! A cell's content is hashed; a rebuild draws a cell's merged mesh again only when its hash,
 //! its assets or its take-over distance changed, and keeps the rest as they were uploaded.
@@ -29,9 +30,16 @@ pub const NEAR_MIN_M: f64 = 300.0;
 pub const FAR_M: f64 = 20_000.0;
 /// Most vertices in the merged meshes of one cell: past it the cell keeps its own items only.
 pub const MAX_CELL_VERTICES: usize = 4_000_000;
-/// How far every merged entity is scaled about its own origin, as a factor: where the real
-/// items and their merged copy draw together, the copy is inside the real one.
+/// The most an axis of a merged entity is inset, as a share of its length: `1 - SHRINK` over
+/// both sides, so 0.25 % a side. Where the real items and their merged copy draw together,
+/// the copy is inside the real one.
 pub const SHRINK: f32 = 0.995;
+/// How far each side of a merged entity is inset towards its own origin, metres, on an axis
+/// longer than 8 m (where [`SHRINK`]'s share would be more): a 200 m wall loses 2 cm at each
+/// end, not the half a metre a side that the share would take, which showed as a gap where
+/// its merged copy met a block beyond the band where both draw. Short axes keep the share: a
+/// 0.3 m wall is inset 0.75 mm.
+pub const INSET_M: f32 = 0.02;
 
 /// A cell of the ground on the grid of [`CELL_M`]: `cx` covers `cx * CELL_M` to
 /// `(cx + 1) * CELL_M` in x, the same in z.
@@ -172,9 +180,23 @@ pub struct Merged {
     pub indices: Vec<u32>,
 }
 
+/// By what the unit mesh is scaled along an axis `size` metres long in the world, so that it
+/// is inset [`INSET_M`] a side, and never more than the share [`SHRINK`] leaves (so nothing
+/// changes for an entity up to 8 m long, and a tiny one keeps its share): [`SHRINK`] itself
+/// for a size that is not finite or not positive.
+fn inset_factor(size: f32) -> f32 {
+    let longest_shared = 2.0 * INSET_M / (1.0 - SHRINK);
+    if size.is_finite() && size > longest_shared {
+        1.0 - 2.0 * INSET_M / size
+    } else {
+        SHRINK
+    }
+}
+
 impl Merged {
     /// Adds the triangles of `mesh` (its vertex arrays) where `matrix` sends them, every
-    /// vertex scaled about the mesh's own origin by [`SHRINK`]. `false` when the mesh's vertices
+    /// vertex pulled towards the mesh's own origin: by [`SHRINK`] on an axis up to 8 m long, by
+    /// [`INSET_M`] a side on a longer one ([`inset_factor`]). `false` when the mesh's vertices
     /// would pass [`MAX_CELL_VERTICES`] or the index range: nothing is added then.
     pub fn push(
         &mut self,
@@ -193,7 +215,13 @@ impl Merged {
         };
         let normal_xf = glam::Mat3::from_mat4(matrix).inverse().transpose()
             * (1.0 / matrix.x_axis.truncate().length().max(1e-9));
-        let pull = |p: Vec3| p * SHRINK;
+        let pull = |p: Vec3| {
+            Vec3::new(
+                p.x * inset_factor(matrix.x_axis.truncate().length()),
+                p.y * inset_factor(matrix.y_axis.truncate().length()),
+                p.z * inset_factor(matrix.z_axis.truncate().length()),
+            )
+        };
         for (v, at) in positions.iter().zip(normals.iter()) {
             self.positions
                 .push(matrix.transform_point3(pull(Vec3::from(*v))).to_array());
@@ -279,6 +307,46 @@ mod tests {
         };
         assert!(plan.until_m() > 580.0 && plan.until_m() < 582.0);
         assert_eq!(plan.key(), (plan.cell, 7, 400.0f64.to_bits()));
+    }
+
+    #[test]
+    fn a_long_merged_entity_is_inset_by_two_centimetres_and_no_more() {
+        // A wall 200 m long, 3 m high and 0.3 m thick: its copy loses 2 cm at each end (not
+        // half a metre, which showed as a gap where it met a block), and keeps the share of
+        // 0.25 % on the axes that are shorter than 8 m.
+        let mut merged = Merged::default();
+        let at = Mat4::from_scale_rotation_translation(
+            Vec3::new(200.0, 3.0, 0.3),
+            glam::Quat::IDENTITY,
+            Vec3::ZERO,
+        );
+        assert!(merged.push_mesh(&crate::mesh::unit_box(), at));
+        let (lo, hi) = merged.bounds().unwrap();
+        let near = |got: f32, want: f64| (f64::from(got) - want).abs() < 1e-3;
+        assert!(near(lo.x, -99.98) && near(hi.x, 99.98), "{lo:?} {hi:?}");
+        assert!(near(hi.y, 3.0 * 0.995), "{lo:?} {hi:?}");
+        assert!(
+            near(lo.z, -0.15 * 0.995) && near(hi.z, 0.15 * 0.995),
+            "{lo:?} {hi:?}"
+        );
+        // The turn and the move of the entity apply as before.
+        let mut turned = Merged::default();
+        let at = Mat4::from_scale_rotation_translation(
+            Vec3::new(200.0, 3.0, 0.3),
+            glam::Quat::from_rotation_y(core::f32::consts::FRAC_PI_2),
+            Vec3::new(1000.0, 5.0, -7.0),
+        );
+        assert!(turned.push_mesh(&crate::mesh::unit_box(), at));
+        let (lo, hi) = turned.bounds().unwrap();
+        assert!(
+            near(hi.z, -7.0 + 99.98) && near(lo.z, -7.0 - 99.98),
+            "{lo:?} {hi:?}"
+        );
+        assert!(
+            near(lo.x, 1000.0 - 0.15 * 0.995) && near(hi.x, 1000.0 + 0.15 * 0.995),
+            "{lo:?} {hi:?}"
+        );
+        assert!(near(lo.y, 5.0), "{lo:?} {hi:?}");
     }
 
     #[test]
