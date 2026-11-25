@@ -1,0 +1,40 @@
+name: release
+
+# A tag `v*` builds gamecraft-cli for Linux x86_64 in release mode and publishes it as a GitHub
+# release with its SHA-256 checksum. A tag with a hyphen (`v0.1.0-showcase.1`) is a pre-release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gamecraft-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --locked --release -p gamecraft-cli
+      - name: Package
+        run: |
+          name="gamecraft-cli-${GITHUB_REF_NAME}-x86_64-linux"
+          mkdir -p dist
+          cp target/release/gamecraft-cli "dist/${name}"
+          cd dist
+          sha256sum "${name}" > "${name}.sha256"
+          cat "${name}.sha256"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=""
+          case "${GITHUB_REF_NAME}" in *-*) flags="--prerelease" ;; esac
+          gh release create "${GITHUB_REF_NAME}" dist/* ${flags} \
+            --title "gamecraft-cli ${GITHUB_REF_NAME}" \
+            --notes "gamecraft-cli built from ${GITHUB_SHA} for Linux x86_64. Verify with: sha256sum -c <file>.sha256"
