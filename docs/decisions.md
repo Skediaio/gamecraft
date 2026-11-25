@@ -87,6 +87,13 @@ The review round of the same day settled the rest:
   change a picture, not what moves next, and are left out of the simulation's static hash.
 - `MSFT_screencoverage` is kept as the file gives it and turned into metres for the size the
   model has in the world, as the rule is.
+- **Strips and fans are drawn**, as the triangles they stand for (a strip's every second
+  triangle wound the other way, as the format says). Before, the host counted them and the
+  renderer dropped them, so a level made of a strip was listed and never drawn.
+- **The live counts are the live frames' own.** The renderer writes its statistics in the
+  frame path that a picture also goes through, so the adapter keeps the counts of the last
+  live frame itself (`frame_stats`); a picture leaves them as they were.
+- What the distances say of an asset is said once, however many items its entities fill.
 
 ### 2026-11-24: Shared textures are files of the pack, named by their content hash
 

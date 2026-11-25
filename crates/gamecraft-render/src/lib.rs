@@ -185,9 +185,10 @@ pub struct PictureStats {
 }
 
 /// What one model (an asset as entities with the same distances and scale show it) drew in
-/// the view of a frame, counted by the renderer's own rule on the CPU (`culling`): exact for
-/// a picture, which starts settled. For a live view the levels are chosen as the live quality
-/// asks (a lower quality switches sooner).
+/// the view of a frame, counted by the renderer's settled rule on the CPU (`culling`) at the
+/// quality's share of the distances: exact for a picture, which starts settled. A live frame
+/// may differ where a cell lies within about a metre of a threshold, which the renderer keeps
+/// at the level of the frame before.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ModelStats {
     /// The asset, by its path inside a pack's `assets/` folder.
@@ -206,7 +207,8 @@ pub struct ModelStats {
     pub until_m: Vec<f64>,
 }
 
-/// Counts of the last live frame ([`WorldRenderer::draw`]).
+/// Counts of the last live frame ([`WorldRenderer::draw`]); a picture leaves them as they
+/// were.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FrameStats {
     /// Instances drawn in the camera's view: after the levels and the culling.

@@ -286,25 +286,50 @@ pub fn parse(
         if vertices > MAX_VERTICES {
             return Err(format!("the model has more than {MAX_VERTICES} vertices"));
         }
-        // The size is measured over every vertex of a level, as the host measures the model
-        // (`inspect` counts strips and fans too); only triangle lists are drawn.
+        // The size is measured over every vertex of a level, as the host measures the model.
         for k in lod::levels_of(visit.drawn_at) {
             if let (Some(lo), Some(hi)) = (level_lo.get_mut(k), level_hi.get_mut(k)) {
                 lod::extend_bounds(&visit.world, &pos, lo, hi);
             }
         }
-        if p.mode() != gltf::mesh::Mode::Triangles {
-            continue;
-        }
         let count = u32::try_from(pos.len()).map_err(|_| "too many vertices")?;
-        let mut indices: Vec<u32> = match r.read_indices() {
+        let sequence: Vec<u32> = match r.read_indices() {
             Some(i) => i.into_u32().collect(),
             None => (0..count).collect(),
         };
-        indices.truncate(indices.len() / 3 * 3);
-        if indices.iter().any(|&i| i >= count) {
+        if sequence.iter().any(|&i| i >= count) {
             return Err("an index points past the vertices".into());
         }
+        // The triangles of the primitive: a list as it comes (whole triangles); a strip or a
+        // fan as the triangles it stands for, every second triangle of a strip wound the other
+        // way, as the format says. The host counts the same triangles (`inspect`).
+        let mut indices: Vec<u32> = match p.mode() {
+            gltf::mesh::Mode::Triangles => {
+                let mut list = sequence;
+                list.truncate(list.len() / 3 * 3);
+                list
+            }
+            gltf::mesh::Mode::TriangleStrip => sequence
+                .windows(3)
+                .enumerate()
+                .filter_map(|(i, t)| {
+                    let [a, b, c] = [t.first().copied()?, t.get(1).copied()?, t.get(2).copied()?];
+                    Some(if i % 2 == 0 { [a, b, c] } else { [b, a, c] })
+                })
+                .flatten()
+                .collect(),
+            gltf::mesh::Mode::TriangleFan => {
+                let Some(&centre) = sequence.first() else {
+                    continue;
+                };
+                let mut list = Vec::with_capacity(sequence.len().saturating_sub(2) * 3);
+                for (before, now) in sequence.iter().skip(1).zip(sequence.iter().skip(2)) {
+                    list.extend_from_slice(&[centre, *before, *now]);
+                }
+                list
+            }
+            _ => continue,
+        };
         if indices.is_empty() {
             continue;
         }

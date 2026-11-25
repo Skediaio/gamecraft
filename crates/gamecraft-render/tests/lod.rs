@@ -753,14 +753,34 @@ fn the_size_is_the_host_s_strips_and_fans_included() {
         "{}",
         m.lods.size_m
     );
-    // The strip is not drawn (the renderer draws triangle lists only), so it is not in the
-    // triangles of a level; the host counts it, as it always did.
-    assert_eq!(m.lods.read.triangles, vec![36, 12]);
+    // Both readers count the strip's triangles: the renderer draws a strip as the triangles
+    // it stands for.
     assert_eq!(
-        s.lod.triangles,
-        vec![36 + 178, 12 + 178],
-        "180 vertices in a strip: 178 triangles"
+        (m.lods.read.triangles.clone(), s.lod.triangles.clone()),
+        (vec![36 + 178, 12 + 178], vec![36 + 178, 12 + 178])
     );
+}
+
+#[test]
+fn strips_and_fans_are_drawn_as_their_triangles() {
+    // A strip of four points is two triangles, the second wound the other way (2, 1, 3 for
+    // the points 1, 2, 3); a fan of four is two around its first point.
+    let strip = glb_modes(&[1], &[5], &[node("Ribbon", Some(0))], &[0], Value::Null);
+    let m = model::parse(&strip, &|_: &str| None).unwrap();
+    assert_eq!((m.lods.read.levels, m.triangles()), (1, 34));
+    let first: Vec<u32> = m.prims[0].indices.iter().take(9).copied().collect();
+    assert_eq!(first, vec![0, 1, 2, 2, 1, 3, 2, 3, 4]);
+    assert_eq!(
+        gamecraft_project::inspect(&strip, &|_: &str| None)
+            .unwrap()
+            .triangles,
+        34
+    );
+    let fan = glb_modes(&[1], &[6], &[node("Fan", Some(0))], &[0], Value::Null);
+    let m = model::parse(&fan, &|_: &str| None).unwrap();
+    let first: Vec<u32> = m.prims[0].indices.iter().take(9).copied().collect();
+    assert_eq!(first, vec![0, 1, 2, 0, 2, 3, 0, 3, 4]);
+    assert_eq!(m.triangles(), 34);
 }
 
 /// The one model row of a count.
@@ -920,6 +940,12 @@ fn a_live_view_counts_at_its_quality_s_distances_and_a_picture_at_the_written_on
         p.stats
     );
     assert_eq!(p.stats.instances, 2);
+    // The picture went through the renderer's frame path too; the live counts are their own.
+    assert_eq!(
+        r.frame_stats(),
+        live,
+        "a picture does not change the live counts"
+    );
     // Low: 40 percent (146 m): the crate at 100 m is still drawn, the others not.
     r.set_quality(Quality::Low);
     let m = only(&r.count_models(&camera, 4.0 / 3.0));
@@ -1028,4 +1054,115 @@ fn screen_coverage_follows_the_model_s_scale_in_buckets() {
         let ratio = ten.until_m[k] / one.until_m[k];
         assert!((ratio - 11.641_532_182_653_137).abs() < 1e-9, "{ratio}");
     }
+}
+
+#[test]
+fn what_the_distances_say_of_an_asset_is_said_once() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    // Thirty copies of their own size, all with one switch distance more than the model has
+    // changes of level: several items, one line.
+    let mut rng = gamecraft_math::Rng::new(11);
+    let mut w = world();
+    for i in 0..30 {
+        add(
+            &mut w,
+            &format!("Thing {i}"),
+            ASSET,
+            [
+                f64::from(i % 6) * 8.0 - 20.0,
+                0.0,
+                -f64::from(i / 6) * 8.0 - 10.0,
+            ],
+            |m| {
+                m.scale = rng.range(0.5, 2.0);
+                m.lod_distances_m = Some(vec![20.0, 60.0, 90.0]);
+            },
+        );
+    }
+    r.provide_asset(ASSET, named());
+    let problems = r.sync(&w, None);
+    let rows = r.count_models(&view([0.0, 20.0, 30.0], [0.0, 0.0, -20.0]), 4.0 / 3.0);
+    assert!(rows.len() > 1, "{} items", rows.len());
+    let lines: Vec<&String> = problems
+        .iter()
+        .filter(|p| p.contains("switch distance"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{problems:?}");
+    assert!(
+        lines[0].contains(ASSET) && lines[0].contains("1 switch distance(s) more"),
+        "{lines:?}"
+    );
+    let p = picture(&mut r, view([0.0, 20.0, 30.0], [0.0, 0.0, -20.0]));
+    assert_eq!(
+        p.problems
+            .iter()
+            .filter(|p| p.contains("switch distance"))
+            .count(),
+        1,
+        "{:?}",
+        p.problems
+    );
+}
+
+#[test]
+fn a_model_made_of_strips_and_fans_is_drawn() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    // A ribbon that is one strip (34 triangles) and a fan beside it (34), as two assets.
+    let strip = glb_modes(&[1], &[5], &[node("Ribbon", Some(0))], &[0], Value::Null);
+    let fan = glb_modes(&[1], &[6], &[node("Fan", Some(0))], &[0], Value::Null);
+    let mut w = world();
+    add(
+        &mut w,
+        "Ribbon",
+        "models/ribbon.glb",
+        [-3.0, 0.0, -10.0],
+        |_| {},
+    );
+    add(&mut w, "Fan", "models/fan.glb", [3.0, 0.0, -10.0], |_| {});
+    r.provide_asset("models/ribbon.glb", strip);
+    r.provide_asset("models/fan.glb", fan);
+    let camera = view([0.0, 0.5, 0.0], [0.0, 0.5, -10.0]);
+    let base = baseline(&mut r, camera);
+    assert_eq!(r.sync(&w, None), Vec::<String>::new());
+    let p = picture(&mut r, camera);
+    let triangles: u64 = p
+        .stats
+        .models
+        .iter()
+        .map(|m| m.levels.iter().map(|l| l.triangles).sum::<u64>())
+        .sum();
+    assert_eq!(triangles, 2 * 34, "{:?}", p.stats.models);
+    assert_eq!(p.stats.forward_triangles, base + 2 * 34, "{:?}", p.stats);
+    // A level made only of a strip draws like any other: a strip's triangles are its geometry
+    // (three cubes in the fine level, one cube as a strip in the coarse one).
+    let mixed = glb_modes(
+        &[3, 1],
+        &[4, 5],
+        &[node("Thing_LOD0", Some(0)), node("Thing_LOD1", Some(1))],
+        &[0, 1],
+        Value::Null,
+    );
+    let mut w = world();
+    add(&mut w, "Near", ASSET, [10.0, 0.0, -10.0], |m| {
+        m.lod_distances_m = Some(vec![20.0])
+    });
+    add(&mut w, "Far", ASSET, [10.0, 0.0, -100.0], |m| {
+        m.lod_distances_m = Some(vec![20.0])
+    });
+    r.provide_asset(ASSET, mixed);
+    assert_eq!(r.sync(&w, None), Vec::<String>::new());
+    // From above and behind: 16 m to the near one, within its first change of level, and
+    // a hundred to the far one.
+    let p = picture(&mut r, view([10.0, 2.0, 6.0], [10.0, 0.0, -50.0]));
+    let rows = &p.stats.models;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        rows[0].levels,
+        vec![lc(0, 1, 36), lc(1, 1, 34)],
+        "the strip is the coarse level's geometry: {rows:?}"
+    );
 }

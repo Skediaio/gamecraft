@@ -371,7 +371,8 @@ models of a pack share stored once (`gamecraft-project/src/textures.rs`;
   up among the handed files (`resolve_uri`). A model is read once per asset (`gltf`, opened through `gamecraft_project::model::open`, which
   splits the GLB itself and checks the indices and accessors the `gltf` crate's reader would
   otherwise panic on), its PNG and JPEG textures decoded with `image` (at most 8192 pixels a
-  side), one mesh and one material per glTF material, and drawn as one item per asset with an
+  side; triangle lists, strips and fans are drawn, a strip or a fan as the triangles it stands
+  for), one mesh and one material per glTF material, and drawn as one item per asset with an
   instance per entity; it is uploaded again only when a file it was read from changes. glTF
   PBR maps onto VisionCraft's material: base colour (sRGB), metallic-roughness as the packed
   occlusion-roughness-metallic map (red set to 1 unless the occlusion texture is the same

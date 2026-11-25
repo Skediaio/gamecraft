@@ -20,7 +20,7 @@ use gamecraft_world::{
 };
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use visioncraft_render as vc;
 
 /// The output format: sRGB-encoded RGBA8.
@@ -407,6 +407,9 @@ pub struct WorldRenderer {
     /// The character the camera follows (a third-person or first-person view): its model is
     /// never culled by distance.
     followed: Option<EntityId>,
+    /// The counts of the last live frame, kept here: the renderer's own statistics are also
+    /// written by a picture, which is drawn through the same frame path.
+    live_stats: Option<FrameStats>,
     /// What the renderer divides the distances of the levels by in a live frame: the live
     /// quality's share (40 % low, 50 % medium, 100 % high), as for everything it draws. A
     /// picture is always drawn at the highest quality, where it is 1.
@@ -542,6 +545,7 @@ impl WorldRenderer {
             models: BTreeMap::new(),
             model_uploads: 0,
             followed: None,
+            live_stats: None,
             lod_scale: quality_lod_scale(&vc::Quality::LOW),
         };
         world_renderer.apply_environment(&Environment::default(), false);
@@ -766,9 +770,18 @@ impl WorldRenderer {
             Vec::new()
         };
         self.renderer.set_overlay_lines_on_top(&sights);
-        let output = self.renderer.render(encoder);
-        self.blit
-            .record(&self.device, encoder, output, target, format);
+        // Kept as soon as the frame is recorded: the renderer's statistics are overwritten by
+        // the next picture, which goes through the same frame path.
+        let stats = {
+            let output = self.renderer.render(encoder);
+            self.blit
+                .record(&self.device, encoder, output, target, format);
+            self.renderer.stats()
+        };
+        self.live_stats = Some(FrameStats {
+            instances: u64::from(stats.instances),
+            forward_triangles: forward_triangles(&stats),
+        });
         Ok(())
     }
 
@@ -846,22 +859,21 @@ impl WorldRenderer {
 
     /// What the models of the synced scene draw from `camera` in a view of width / height
     /// `aspect`: the rows a picture from it carries in [`PictureStats::models`], counted by
-    /// the renderer's rule on the CPU ([`culling`]). For a live view that shows its numbers;
-    /// they are exact while the camera does not move.
+    /// the renderer's settled rule on the CPU ([`culling`]) at the live quality's share of
+    /// the distances. For a live view that shows its numbers. Exact for a picture, which
+    /// starts settled. A live frame may differ where a cell sits within about a metre of a
+    /// threshold (1 m divided by the quality's share): the renderer keeps such a cell at the
+    /// level of the frame before, by the side the camera came from.
     pub fn count_models(&self, camera: &Camera, aspect: f64) -> Vec<ModelStats> {
         let (view, proj, eye) = camera.matrices(aspect);
         self.account(proj * view, eye, self.lod_scale)
     }
 
     /// Counts of the last live frame ([`WorldRenderer::draw`]): the instances the view drew
-    /// and the triangles its view pass submitted. Zeros before the first frame. What a
-    /// picture drew is in the picture's own stats.
+    /// and the triangles its view pass submitted. Zeros before the first frame. A picture
+    /// ([`WorldRenderer::render`]) does not change them: what it drew is in the picture.
     pub fn frame_stats(&self) -> FrameStats {
-        let stats = self.renderer.stats();
-        FrameStats {
-            instances: u64::from(stats.instances),
-            forward_triangles: forward_triangles(&stats),
-        }
+        self.live_stats.unwrap_or_default()
     }
 
     /// What each model item drew from `eye` through `view_proj`, counted again by the
@@ -1661,9 +1673,8 @@ impl Scene<'_> {
             // In the order of the first entity that shows the set, as the entities come.
             let mut sets: Vec<(ModelKey, Vec<&Entity>)> = sets.into_iter().collect();
             sets.sort_by_key(|(_, entities)| entities.first().map(|e| e.id));
-            // In the order of the first entity that shows the set, as the entities come.
-            let mut sets: Vec<(ModelKey, Vec<&Entity>)> = sets.into_iter().collect();
-            sets.sort_by_key(|(_, entities)| entities.first().map(|e| e.id));
+            // What the distances say of this asset is said once, whatever the number of sets.
+            let mut said: BTreeSet<String> = BTreeSet::new();
             for (key, entities) in sets {
                 // The component's distances, else the file's, else the rule from the size the
                 // model has in the world (its bucket's upper scale where they follow it).
@@ -1675,7 +1686,9 @@ impl Scene<'_> {
                     Some(&component),
                 );
                 for note in notes {
-                    self.problems.push(format!("Model `{asset}`: {note}"));
+                    if said.insert(note.clone()) {
+                        self.problems.push(format!("Model `{asset}`: {note}"));
+                    }
                 }
                 // Where each level that draws ends; the last is the draw distance.
                 let mut until_m = m.read.drawn_ends(&distances.ends_m());
