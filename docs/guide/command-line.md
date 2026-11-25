@@ -199,6 +199,36 @@ answer on stdout says the steps, the entities, the layers, the files written and
 The folder that holds the project is the read root and the write root of the commands the
 script runs.
 
+**Real ground** comes in the same way: `terrain.import` reads an elevation file (a PGM, which every
+GIS tool exports, rows of text, or raw 16-bit or 32-bit samples) and makes it the terrain's
+heightmap at full resolution. `world.json` names it by its shape and a hash of its content; the
+samples are tiles in `worlds/<world>/terrain/heightmap/`, beside the cells. Sculpt edits and paint
+lie over it as over any terrain.
+
+```sh gamecraft-example
+cat > build/dem.txt <<'EOF'
+40 41 42 43
+41 44 46 43
+42 46 48 44
+43 44 44 45
+EOF
+cat > build/valley.json <<'EOF'
+[["terrain.import", {"path": "build/dem.txt", "size_m": 256}],
+ ["entity.add", {"name": "Hut", "layer": "main", "at": [0, 0],
+   "components": [{"type": "shape", "kind": "box", "size": [4, 3, 4], "color": [0.6, 0.4, 0.2]}]}]]
+EOF
+
+gamecraft-cli project bake build/valley.json --into valley --id valley --cell-size-m 128
+gamecraft-cli run valley --cmd query.ground_height --params '{"x": 0, "z": 0}'
+```
+
+`terrain.import` takes `scale_m` and `offset_m` for files whose numbers are raw (height = number x
+scale + offset), `cols` and `rows` for raw files (which do not say), and `size_m` and `cell_m` for
+the terrain (left out: the terrain's own, else 256 m and 2 m). Over `serve` and `mcp` the command
+writes the samples into the open project when its folder is inside the write root; in a plain
+world file (`run --out x.gamecraft`) they live in the session only, so keep a heightmap in a
+project.
+
 `run`, `play`, `info` and `render` take a project folder wherever they take a `.gamecraft` file
 (`gamecraft-cli play examples/skirmish/project --script examples/skirmish/playthrough.json`); the
 folder that holds the project is where its dependencies are found (`"path": "../skirmish/project"`

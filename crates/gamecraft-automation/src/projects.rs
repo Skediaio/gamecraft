@@ -182,7 +182,8 @@ pub(crate) fn project_specs() -> Vec<CommandSpec> {
             ],
             "{path, root, world, worlds, packs: [ids in load order], entities, cell_size_m, \
              cells: null | [[cx, cz]], warnings, index, terrain: null | {tiles, from_cache, \
-             built, written, cache, problem, ms}}",
+             built, written, cache, problem, ms, heightmap: null | {tiles, content, from, \
+             written, error}}}",
             json!({"path": "skirmish-night-mod"}),
         ),
         host_spec(
@@ -754,29 +755,65 @@ impl Host {
         project: Project,
         dir: PathBuf,
         world: gamecraft_world::World,
+        from_session: bool,
     ) -> (Value, Value) {
         let assets = crate::assets::catalog(&project);
         let mut world = world;
         world.set_model_bounds(crate::assets::bounds(&assets));
+        // The heightmap's samples: the session's when they are the ones this world names (a
+        // project made from the session), else the folder's.
+        let heightmap = crate::heightmap::load(
+            self.session.document(),
+            &dir,
+            project.world(),
+            &mut world,
+            writable(&self.access, &dir),
+            from_session,
+        );
         let mut terrain_keys = crate::terrain_cache::Keys::new();
-        let cached = world.terrain.as_ref().map(|terrain| {
-            crate::terrain_cache::load(&dir, project.world(), terrain, writable(&self.access, &dir))
-        });
-        let terrain = match cached {
-            Some(Ok(loaded)) => {
-                terrain_keys = loaded.on_disk;
-                self.session
-                    .replace_document_with_heights(world, loaded.field);
-                loaded.report
+        // Without the heightmap's samples the derived cache is not used either: the next
+        // change would rebuild from nothing.
+        let samples_missing = heightmap.get("error").is_some_and(|e| !e.is_null());
+        let cached = if samples_missing {
+            None
+        } else {
+            world.terrain.as_ref().map(|terrain| {
+                crate::terrain_cache::load(
+                    &dir,
+                    project.world(),
+                    terrain,
+                    writable(&self.access, &dir),
+                )
+            })
+        };
+        let mut terrain = if samples_missing {
+            self.session.replace_document(world);
+            json!({ "error": heightmap.get("error").cloned().unwrap_or(Value::Null) })
+        } else {
+            match cached {
+                Some(Ok(loaded)) => {
+                    terrain_keys = loaded.on_disk;
+                    self.session
+                        .replace_document_with_heights(world, loaded.field);
+                    loaded.report
+                }
+                Some(Err(e)) => {
+                    self.session.replace_document(world);
+                    json!({"error": e})
+                }
+                None => {
+                    self.session.replace_document(world);
+                    Value::Null
+                }
             }
-            Some(Err(e)) => {
-                self.session.replace_document(world);
-                json!({"error": e})
-            }
-            None => {
-                self.session.replace_document(world);
-                Value::Null
-            }
+        };
+        let terrain = if heightmap == Value::Null {
+            terrain
+        } else if let Some(map) = terrain.as_object_mut() {
+            map.insert("heightmap".into(), heightmap);
+            terrain
+        } else {
+            json!({"heightmap": heightmap})
         };
         self.path = None;
         self.saved_revision = self.session.revision();
@@ -868,7 +905,7 @@ impl Host {
         )?;
         let (project, world) =
             Project::load(id, &packs, Some(world_name)).map_err(|e| e.to_string())?;
-        let (index, terrain) = self.take_project(project, dir.clone(), world);
+        let (index, terrain) = self.take_project(project, dir.clone(), world, true);
         Ok(json!({
             "path": dir.display().to_string(),
             "id": id,
@@ -898,7 +935,7 @@ impl Host {
             "entities": loaded.entity_count(),
             "warnings": project.warnings(),
         });
-        let (index, terrain) = self.take_project(project, dir, loaded);
+        let (index, terrain) = self.take_project(project, dir, loaded, false);
         let mut result = result;
         if let Some(map) = result.as_object_mut() {
             map.insert("index".into(), index);
@@ -940,6 +977,19 @@ impl Host {
             .map_err(|e| format!("the document cannot be saved: {e}"))?;
         let dir = open.dir.clone();
         let (written, removed) = write_plan(&dir, &saving)?;
+        // The heightmap's samples the document holds go with it (an import into a project
+        // that could not be written until now).
+        let heightmap_tiles = match self
+            .session
+            .document()
+            .terrain
+            .as_ref()
+            .and_then(|t| t.heightmap())
+            .filter(|m| !m.is_empty())
+        {
+            Some(map) => crate::heightmap::write(&dir, open.project.world(), map).map(|w| w.0)?,
+            None => 0,
+        };
         if let Some(open) = self.project.as_mut() {
             if let Some(copy) = resized {
                 open.project = copy;
@@ -956,6 +1006,7 @@ impl Host {
             "removed": removed,
             "unchanged": unchanged,
             "terrain_tiles_written": tiles,
+            "heightmap_tiles_written": heightmap_tiles,
         }))
     }
 
@@ -1050,7 +1101,7 @@ impl Host {
             .map(|p| p.manifest.id.clone())
             .collect();
         let entities = loaded.entity_count();
-        let _ = self.take_project(project, dir, loaded);
+        let _ = self.take_project(project, dir, loaded, false);
         Ok(json!({"id": id, "path": path, "packs": packs, "entities": entities}))
     }
 

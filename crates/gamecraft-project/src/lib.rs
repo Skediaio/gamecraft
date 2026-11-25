@@ -38,6 +38,7 @@ pub mod bake;
 pub mod cells;
 mod error;
 mod fields;
+pub mod heightmap;
 mod layer;
 pub mod lod;
 mod manifest;
@@ -57,6 +58,11 @@ pub use bake::{BAKE_FILE, BAKE_FORMAT, BakeRecord};
 pub use cells::{Cell, DEFAULT_CELL_SIZE_M, cells_in_area};
 pub use error::ProjectError;
 pub use fields::WORLD_FORMAT;
+pub use heightmap::{
+    ElevationFormat, HEIGHTMAP_DIR, MAX_ELEVATION_BYTES, TILE_BYTES, TILE_HEADER,
+    TILE_HEADER_BYTES, Tile, decode_tile, encode_tile, encode_tiles, read_elevation,
+    tile_file_name,
+};
 pub use layer::LAYER_FORMAT;
 pub use lod::{
     DRAW_COVERAGE, Levels, LodDistances, LodOverride, LodSource, MIN_MODEL_SIZE_M,

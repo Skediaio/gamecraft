@@ -863,6 +863,8 @@ impl Sim {
         let to_sim = |e: gamecraft_world::WorldError| SimError::World(e.to_string());
         let rebuilt = match (&world.terrain, &self.world.terrain, &self.heights) {
             (Some(terrain), Some(old), _) if old == terrain => None,
+            // A heightmap the host has not handed the samples of yet: no ground until then.
+            (Some(terrain), _, _) if terrain.needs_samples() => Some(None),
             (Some(terrain), Some(old), Some(field)) => Some(Some(Arc::new(
                 terrain.rebuild(old, field).map_err(to_sim)?.field,
             ))),

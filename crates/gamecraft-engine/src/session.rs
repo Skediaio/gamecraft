@@ -14,7 +14,7 @@ use crate::params::Params;
 use crate::spec::{CommandSpec, Scope, nearest};
 use crate::triggers::PlayLog;
 use gamecraft_sim::Sim;
-use gamecraft_world::{HeightField, ModelBounds, Terrain, World};
+use gamecraft_world::{HeightField, Heightmap, ModelBounds, Terrain, World, WorldError};
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -45,6 +45,17 @@ impl Edit<'_> {
             )));
         }
         let Some(field) = self.heights else {
+            if self
+                .world
+                .terrain
+                .as_ref()
+                .is_some_and(|t| t.needs_samples())
+            {
+                return Err(failed(format!(
+                    "there is no ground at [{x}, {z}]: the terrain's heightmap has no samples \
+                     yet; the host hands them over (terrain.import over gamecraft-cli)"
+                )));
+            }
             return Err(failed(format!(
                 "there is no ground at [{x}, {z}]: the terrain could not be built"
             )));
@@ -602,6 +613,60 @@ impl Session {
         self.revision += 1;
         self.view_revision += 1;
         self.refresh_heights(None);
+        Ok(())
+    }
+
+    /// Hands over the samples of the terrain's heightmap ([`gamecraft_world::Heightmap`]),
+    /// which the host read from the project's files: they replace those of the document, of
+    /// every world in the history and of the running world, and the height field is built
+    /// again. The document's text does not change (its source names them by content), so
+    /// neither revision changes and nothing is undone by it.
+    pub fn set_heightmap(&mut self, tiles: Heightmap) -> Result<(), WorldError> {
+        // Checked on copies first, so that a refusal leaves the session as it was: a world
+        // takes only the samples its document names ([`World::set_heightmap`]). While a
+        // simulation runs the running world is the one that names them (world commands do
+        // not touch the document then); each of the two that does is set.
+        let names = |world: &World| {
+            world
+                .terrain
+                .as_ref()
+                .is_some_and(|t| t.heightmap().is_some())
+        };
+        let mut document = self.document.clone();
+        let mut running = None;
+        if names(&document) {
+            document.set_heightmap(tiles.clone())?;
+        }
+        if let Some(sim) = self.live.as_ref()
+            && names(sim.world())
+        {
+            let mut world = sim.world().clone();
+            world.set_heightmap(tiles.clone())?;
+            running = Some(world);
+        }
+        if !names(&self.document) && running.is_none() {
+            // Neither names a heightmap: the document's own error says what it has.
+            return self.document.clone().set_heightmap(tiles);
+        }
+        if let (Some(sim), Some(running)) = (self.live.as_mut(), running) {
+            // Only the samples changed, which the simulation's hash does not cover: the
+            // running world is taken over between ticks as after any change. The field is
+            // built here; a failure leaves everything as it was.
+            sim.replace_world(running)
+                .map_err(|e| WorldError::Invalid {
+                    entity: None,
+                    field: "terrain.source".into(),
+                    value: "heightmap".into(),
+                    expected: e.to_string(),
+                })?;
+        }
+        self.document = document;
+        for world in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            // A world of the history that names another heightmap keeps its own, or none.
+            let _ = world.set_heightmap(tiles.clone());
+        }
+        // The field is built again from the samples.
+        self.heights = HeightCache::for_world(&self.document);
         Ok(())
     }
 

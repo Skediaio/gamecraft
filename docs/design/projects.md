@@ -267,6 +267,15 @@ renderer.
   replaces the edits of earlier packs as a whole; a save writes the root pack's file when the
   edits differ from what the files give. Edits for a world without terrain, a bad op, a number
   out of range or a layer that is not one are errors that name the file.
+- **A heightmap's samples** are files of the project too, a source and not derived:
+  `worlds/<world>/terrain/heightmap/tile_<tx>_<tz>.bin` in the root pack's folder, tiles of 128
+  cells: the 10 bytes `GCHEIGHT1\n`, the tile's x and z (i32), then 129 x 129 heights (f32),
+  little-endian, row-major from the north-west corner, neighbours sharing a border row.
+  `world.json` names them (`cols`, `rows`, `content`: the hash of the samples). `project.open`
+  reads them; a missing, cut-short or foreign tile is named in `terrain.heightmap.error` and the
+  world opens without ground. `terrain.import` writes them for the open project when its folder is
+  in the write root, `project.new` for a session that holds samples, `project.save` the samples
+  the document holds and the folder lacks.
 - **The tile cache** is binary and derived: `worlds/<world>/terrain/cache/tile_<x>_<z>.bin` in
   the root pack's folder with a `.gitignore` of `*`. A file is the 8 bytes `GCTILE1\n`, a key
   (u64), the tile's x and z, its columns and rows and the number of layers `n` (u32 each), then

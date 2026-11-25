@@ -171,7 +171,7 @@ mod tests {
         assert!(d.example.is_object());
         let terrain = from_spec(s.spec("terrain.set").unwrap());
         let kind = terrain.params.iter().find(|p| p.name == "kind").unwrap();
-        assert_eq!(kind.allowed, ["flat", "noise", "grid"]);
+        assert_eq!(kind.allowed, ["flat", "noise", "grid", "heightmap"]);
         assert_eq!(kind.default.as_deref(), Some("\"noise\""));
         let inspect = from_spec(s.spec("world.inspect").unwrap());
         assert_eq!((inspect.scope.as_str(), inspect.undoable), ("query", false));

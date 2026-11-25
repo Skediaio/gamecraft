@@ -242,6 +242,12 @@ drops the earlier layer of its name).
   its layer file. A change to something a dependency brought is written into the project's own
   pack as an override (or a removal), so editing the game under a mod makes the mod, never
   changes the game. Saving nothing changed writes nothing.
+- **`terrain.import {path, scale_m?, offset_m?, size_m?}`** makes an elevation file (a PGM, rows
+  of text, raw 16-bit or 32-bit samples, inside the read root) the terrain's heightmap at full
+  resolution: `world.json` names it by its shape and a hash of its content, its samples are tiles
+  in `worlds/<world>/terrain/heightmap/`, and sculpt edits and paint lie over it. Without its
+  samples (a missing or bad tile is named by `project.open`) there is no ground, and a command
+  that needs it says so.
 - **`project.query {sql}`** asks the project's index with one `SELECT`: `entities` (`id, key,
   name, layer, pack, prefab, parent, x, y, z, rotation_y_deg, scale, tags, components`),
   `entity_tags (entity_id, tag)`, `entity_components (entity_id, type, data)`, `prefabs (id,

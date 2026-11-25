@@ -6,8 +6,8 @@ use crate::limits::{MAX_ENTITIES, MAX_HIERARCHY_DEPTH, MAX_PREFABS};
 use crate::prefab::{check_components, place_child, relative};
 use crate::store::EntityMap;
 use crate::{
-    Component, Entity, EntityDraft, EntityId, Environment, ModelBounds, ModelBox, Objective,
-    Prefab, Spawn, Spawned, Terrain, Trigger, VarValue, WorldError,
+    Component, Entity, EntityDraft, EntityId, Environment, Heightmap, ModelBounds, ModelBox,
+    Objective, Prefab, Spawn, Spawned, Terrain, Trigger, VarValue, WorldError,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -285,6 +285,29 @@ impl World {
     /// number that is not finite, or a minimum above the maximum, are left out.
     pub fn set_model_bounds(&mut self, bounds: BTreeMap<String, ModelBounds>) {
         self.model_bounds = bounds.into_iter().filter(|(_, b)| b.is_valid()).collect();
+    }
+
+    /// The samples of the terrain's heightmap when its source is one; `None` otherwise.
+    pub fn heightmap(&self) -> Option<&Heightmap> {
+        self.terrain.as_ref().and_then(Terrain::heightmap)
+    }
+
+    /// Hands over the samples of the terrain's heightmap (the host reads them from the
+    /// project's `terrain/heightmap/` folder). The document's text does not change (the
+    /// source names them by a hash of their content), and only what the document names is
+    /// taken ([`Terrain::set_heightmap`]). An error without a terrain.
+    pub fn set_heightmap(&mut self, tiles: Heightmap) -> Result<(), WorldError> {
+        match self.terrain.as_mut() {
+            Some(terrain) => terrain.set_heightmap(tiles),
+            None => Err(WorldError::Invalid {
+                entity: None,
+                field: "terrain".into(),
+                value: "none".into(),
+                expected: "a terrain whose source is a heightmap, to hand its samples over; \
+                          terrain.set with kind \"heightmap\" makes one"
+                    .into(),
+            }),
+        }
     }
 
     /// The collider box of `entity`'s model in this world: `None` without a model, with the

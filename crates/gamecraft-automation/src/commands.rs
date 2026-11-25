@@ -171,6 +171,7 @@ pub(crate) fn host_specs() -> Vec<CommandSpec> {
         specs.extend(file_specs());
         specs.extend(crate::projects::project_specs());
         specs.extend(crate::assets::asset_specs());
+        specs.push(crate::heightmap::spec());
         specs
     };
     specs
@@ -323,7 +324,7 @@ impl Host {
             {
                 Err("no write root is set (--automation-write-root DIR)".into())
             }
-            "project.open" if self.access.read_root.is_none() => {
+            "project.open" | "terrain.import" if self.access.read_root.is_none() => {
                 Err("no read root is set (--automation-read-root DIR)".into())
             }
             "project.save"
@@ -462,6 +463,8 @@ impl Host {
             "asset.list" => self.asset_list(),
             #[cfg(not(target_arch = "wasm32"))]
             "asset.credits" => self.asset_credits(),
+            #[cfg(not(target_arch = "wasm32"))]
+            "terrain.import" => self.terrain_import(p),
             #[cfg(target_arch = "wasm32")]
             "project.query" => Err(
                 "the project index is native only: the browser has no files and no database; \

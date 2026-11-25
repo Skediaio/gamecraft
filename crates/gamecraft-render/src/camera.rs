@@ -275,6 +275,12 @@ fn world_bounds(world: &World, heights: Option<&HeightField>) -> (DVec3, DVec3) 
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), h| {
                     (lo.min(*h), hi.max(*h))
                 }),
+            // Without its samples (the host hands them over after the command) the ground
+            // is at 0.
+            TerrainSource::Heightmap { ref tiles, .. } => {
+                let (lo, hi) = tiles.height_range();
+                (f64::from(lo), f64::from(hi))
+            }
         };
         add(DVec3::new(-half, y0, -half));
         add(DVec3::new(half, y1, half));

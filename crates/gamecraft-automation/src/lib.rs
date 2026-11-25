@@ -10,7 +10,8 @@
 //! - [`rpc`]: `{"id", "method", "params"}` in, `{"id", "ok", "result" | "error"}` out.
 //! - [`mcp`]: the Model Context Protocol (JSON-RPC 2.0, one message per line).
 //! - [`Host`]: what both run: the engine's commands plus the host's own (`file.*`,
-//!   `project.*`, `pack.*`, `asset.*`, `edit.*`, `view.render`), one namespace and one listing
+//!   `project.*`, `pack.*`, `asset.*`, `terrain.import`, `edit.*`, `view.render`), one
+//!   namespace and one listing
 //!   ([`Host::command_docs`]), and batches.
 //!
 //! Each server is a function from one input line to at most one reply line (`handle_line`),
@@ -26,6 +27,8 @@ pub mod docs;
 mod fields;
 #[cfg(not(target_arch = "wasm32"))]
 mod files;
+#[cfg(not(target_arch = "wasm32"))]
+mod heightmap;
 mod host;
 mod lines;
 pub mod mcp;

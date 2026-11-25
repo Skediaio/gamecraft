@@ -68,20 +68,25 @@ fn probe(set: impl FnOnce(&mut World)) -> Result<(), CommandError> {
 const NOISE_ONLY: [&str; 5] = ["seed", "relief_m", "feature_m", "octaves", "roughness"];
 const FLAT_ONLY: [&str; 1] = ["height_m"];
 const GRID_ONLY: [&str; 3] = ["cols", "rows", "heights"];
+/// A heightmap's parameters; `cols` and `rows` it shares with the grid. Its samples are handed
+/// over by the host, never parameters.
+const HEIGHTMAP_ONLY: [&str; 3] = ["cols", "rows", "content"];
 
 fn terrain_set_spec() -> CommandSpec {
     spec(
         "terrain.set",
         "Set Terrain",
         "Replaces the terrain with a square centred on the origin: flat, rolling land from \
-         seeded noise, or real ground as a control grid of cols x rows height nodes reduced \
-         from elevation data. Its painted layers, paint rules and sculpt edits (in world \
-         coordinates) stay; terrain.clear drops them. Entities are not moved \
-         (entity.snap_to_ground puts them on the new ground). Parameters of the other kind \
-         are refused.",
+         seeded noise, real ground as a control grid of cols x rows height nodes reduced from \
+         elevation data, or real ground at full resolution as a heightmap (its samples are too \
+         many for the command: the host hands them over, as terrain.import does; until then \
+         the ground cannot be built and commands that need it say so). Its painted layers, \
+         paint rules and sculpt edits (in world coordinates) stay; terrain.clear drops them. \
+         Entities are not moved (entity.snap_to_ground puts them on the new ground). \
+         Parameters of the other kind are refused.",
         vec![
             param("kind", T::String, "Where the heights come from.")
-                .allowed(&["flat", "noise", "grid"])
+                .allowed(&["flat", "noise", "grid", "heightmap"])
                 .default(json!("noise")),
             param(
                 "size_m",
@@ -131,7 +136,18 @@ fn terrain_set_spec() -> CommandSpec {
                 T::Integer,
                 "grid: nodes along x, 2 to 513; the grid spans the whole square.",
             ),
-            param("rows", T::Integer, "grid: nodes along z, 2 to 513."),
+            param(
+                "rows",
+                T::Integer,
+                "grid: nodes along z, 2 to 513; heightmap: samples along \
+             z, 2 to 2049.",
+            ),
+            param(
+                "content",
+                T::String,
+                "heightmap: the hash of its samples, sixteen lowercase hexadecimal digits, as \
+                 terrain.import writes it.",
+            ),
             param(
                 "heights",
                 T::Array,
@@ -174,21 +190,27 @@ fn grid_heights(p: &Params<'_>) -> Result<Vec<f64>, CommandError> {
 fn terrain_set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
     let kind = p.str("kind")?.unwrap_or("noise");
     // Every kind names its own parameters; the parameters of the other kinds are refused.
-    const KINDS: [(&str, &[&str]); 3] = [
+    const KINDS: [(&str, &[&str]); 4] = [
         ("flat", &FLAT_ONLY),
         ("noise", &NOISE_ONLY),
         ("grid", &GRID_ONLY),
+        ("heightmap", &HEIGHTMAP_ONLY),
     ];
     if !KINDS.iter().any(|(k, _)| *k == kind) {
         return Err(bad(format!(
-            "`kind` must be one of flat, noise, grid, not {kind:?}"
+            "`kind` must be one of flat, noise, grid, heightmap, not {kind:?}"
         )));
     }
+    let own = KINDS
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .map_or(&[][..], |(_, own)| *own);
     for (other, foreign) in KINDS {
         if other == kind {
             continue;
         }
-        if let Some(name) = foreign.iter().find(|n| p.has(n)) {
+        // A parameter two kinds share (`cols`, `rows`) is no foreigner.
+        if let Some(name) = foreign.iter().find(|n| p.has(n) && !own.contains(n)) {
             return Err(bad(format!(
                 "`{name}` belongs to kind \"{other}\", not to kind \"{kind}\"; leave it out or \
                  set kind \"{other}\""
@@ -199,6 +221,40 @@ fn terrain_set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError
         "flat" => TerrainSource::Flat {
             height_m: p.f64("height_m")?.unwrap_or(0.0),
         },
+        "heightmap" => {
+            // The samples are handed over by the host after this (the host's terrain.import
+            // does both); the field is built then.
+            let (cols, rows, content) = match (
+                p.u32("cols")?,
+                p.u32("rows")?,
+                p.str("content")?.map(str::to_string),
+            ) {
+                (Some(cols), Some(rows), Some(content)) => (cols, rows, content),
+                _ => {
+                    return Err(bad(
+                        "kind \"heightmap\" needs `cols`, `rows` and `content` (the hash of \
+                         its samples, as terrain.import writes it)",
+                    ));
+                }
+            };
+            let kept = edit.world.terrain.take().unwrap_or_default();
+            let terrain = Terrain {
+                size_m: p.f64("size_m")?.unwrap_or(kept.size_m),
+                cell_m: p.f64("cell_m")?.unwrap_or(kept.cell_m),
+                source: TerrainSource::Heightmap {
+                    cols,
+                    rows,
+                    content,
+                    tiles: gamecraft_world::Heightmap::new(),
+                },
+                layers: kept.layers,
+                paint_rules: kept.paint_rules,
+                edits: kept.edits,
+            };
+            terrain.validate().map_err(|e| bad(e.to_string()))?;
+            edit.world.terrain = Some(terrain);
+            return Ok(json!({"cols": cols, "rows": rows, "samples": "handed over by the host"}));
+        }
         "grid" => TerrainSource::Grid {
             cols: p
                 .u32("cols")?

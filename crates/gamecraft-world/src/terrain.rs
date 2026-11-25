@@ -1,6 +1,7 @@
 //! Terrain recipes and the height field derived from them.
 
 use crate::error::Ctx;
+use crate::heightmap::{HEIGHTMAP_SIDE_MAX, HEIGHTMAP_SIDE_MIN};
 use crate::limits::{
     GRID_SAMPLES_MAX, GRID_SIDE_MAX, GRID_SIDE_MIN, MAX_COORDINATE_M, NOISE_FEATURE_MAX_M,
     NOISE_FEATURE_MIN_M, NOISE_OCTAVES_MAX, NOISE_OCTAVES_MIN, NOISE_RELIEF_MAX_M,
@@ -12,7 +13,7 @@ use crate::sculpt::{
     self, Grid, PaintRule, Rect, TerrainEdit, TerrainLayer, WEIGHT_SLOTS, eval_heights,
     eval_weights,
 };
-use crate::{GridHeights, WorldError};
+use crate::{GridHeights, Heightmap, WorldError};
 use gamecraft_math::noise::fbm2;
 use serde::{Deserialize, Serialize};
 
@@ -95,6 +96,24 @@ pub enum TerrainSource {
     /// `z = -size_m / 2 + row * size_m / (rows - 1)`; `cell_m` only sets the sampling of the
     /// built field. Heights are interpolated bilinearly; outside the square the edge nodes
     /// hold.
+    /// Real ground at full resolution: a heightmap of `cols` by `rows` samples, handed to
+    /// the world by the host ([`Heightmap`]; in JSON only `cols`, `rows` and the `content`
+    /// hash appear: the samples are too many for the text). Sample `(c, r)` lies as a grid
+    /// node, `size_m / (cols - 1)` metres apart; heights are interpolated bilinearly and the
+    /// edge samples hold outside. Sculpt edits and paint lie over it as over any source, so
+    /// baked features belong in the heightmap.
+    Heightmap {
+        /// Samples along x, 2 to 2049.
+        cols: u32,
+        /// Samples along z, 2 to 2049.
+        rows: u32,
+        /// The hash of the samples, sixteen lowercase hexadecimal digits
+        /// ([`Heightmap::content_text`]).
+        content: String,
+        /// The samples, handed over by the host; never written to the document.
+        #[serde(skip)]
+        tiles: Heightmap,
+    },
     Grid {
         /// Nodes along x, 2 to 513.
         cols: u32,
@@ -111,6 +130,18 @@ impl Default for Terrain {
     /// Level ground at 0 m, 256 m across at 2 m cells, without layers, rules or edits.
     fn default() -> Terrain {
         Terrain::new(256.0, 2.0, TerrainSource::Flat { height_m: 0.0 })
+    }
+}
+
+impl TerrainSource {
+    /// `flat`, `noise`, `grid` or `heightmap`: the name of the kind.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            TerrainSource::Flat { .. } => "flat",
+            TerrainSource::Noise { .. } => "noise",
+            TerrainSource::Grid { .. } => "grid",
+            TerrainSource::Heightmap { .. } => "heightmap",
+        }
     }
 }
 
@@ -241,6 +272,37 @@ impl Terrain {
                     "",
                 )?;
             }
+            TerrainSource::Heightmap {
+                ref cols,
+                ref rows,
+                ref content,
+                ..
+            } => {
+                for (field, n) in [
+                    ("terrain.source.cols", *cols),
+                    ("terrain.source.rows", *rows),
+                ] {
+                    if !(HEIGHTMAP_SIDE_MIN..=HEIGHTMAP_SIDE_MAX).contains(&n) {
+                        return Err(ctx.invalid(
+                            field,
+                            n,
+                            format!("it must be from {HEIGHTMAP_SIDE_MIN} to {HEIGHTMAP_SIDE_MAX}"),
+                        ));
+                    }
+                }
+                let hex = content.len() == 16
+                    && content
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+                if !hex {
+                    return Err(ctx.invalid(
+                        "terrain.source.content",
+                        content,
+                        "it must be the hash of the heightmap's samples, sixteen lowercase \
+                         hexadecimal digits as terrain.import writes it",
+                    ));
+                }
+            }
             TerrainSource::Grid {
                 ref cols,
                 ref rows,
@@ -314,7 +376,65 @@ impl Terrain {
                 rows,
                 ref heights,
             } => grid_height(self.size_m, cols, rows, heights, x, z),
+            TerrainSource::Heightmap {
+                cols,
+                rows,
+                ref tiles,
+                ..
+            } => bilinear(self.size_m, cols as usize, rows as usize, x, z, |c, r| {
+                tiles.sample(c as u32, r as u32)
+            }),
         }
+    }
+
+    /// The heightmap's samples when the source is one; `None` for any other source.
+    pub fn heightmap(&self) -> Option<&Heightmap> {
+        match &self.source {
+            TerrainSource::Heightmap { tiles, .. } => Some(tiles),
+            _ => None,
+        }
+    }
+
+    /// Whether the source is a heightmap whose samples the host has not handed over yet.
+    pub fn needs_samples(&self) -> bool {
+        matches!(self.source, TerrainSource::Heightmap { ref tiles, .. } if tiles.is_empty())
+    }
+
+    /// Hands over the heightmap's samples (the host reads them from the project). They must
+    /// be what the document names: the same `cols` and `rows` and the same hash of their
+    /// content. The document's text does not change. An error for another source, or for
+    /// samples of another heightmap.
+    pub fn set_heightmap(&mut self, tiles: Heightmap) -> Result<(), WorldError> {
+        let TerrainSource::Heightmap {
+            cols,
+            rows,
+            content,
+            tiles: own,
+        } = &mut self.source
+        else {
+            return Err(WorldError::Invalid {
+                entity: None,
+                field: "terrain.source".into(),
+                value: self.source.kind().into(),
+                expected: "a heightmap, to hand its samples over; terrain.set with kind \
+                          \"heightmap\" makes one"
+                    .into(),
+            });
+        };
+        let said = Heightmap::content_text(tiles.content_hash());
+        if tiles.cols() != *cols || tiles.rows() != *rows || said != *content {
+            return Err(WorldError::Invalid {
+                entity: None,
+                field: "terrain.source.content".into(),
+                value: format!("{said} ({} x {})", tiles.cols(), tiles.rows()),
+                expected: format!(
+                    "the content the document names, {content} ({cols} x {rows}); import the \
+                     heightmap again, or name the one these samples belong to"
+                ),
+            });
+        }
+        *own = tiles;
+        Ok(())
     }
 
     /// Builds the height field: validates, then samples the source at every grid node, applies
@@ -325,6 +445,16 @@ impl Terrain {
     /// a larger terrain extends the same land.
     pub fn build(&self) -> Result<HeightField, WorldError> {
         let grid = self.grid()?;
+        if self.needs_samples() {
+            return Err(WorldError::Invalid {
+                entity: None,
+                field: "terrain.source".into(),
+                value: "heightmap".into(),
+                expected: "a heightmap needs its samples, which the host hands to the world \
+                          from the project's terrain/heightmap folder; terrain.import makes them"
+                    .into(),
+            });
+        }
         let all = grid.all();
         let heights: Vec<f32> =
             eval_heights(&self.edits, &grid, all, |x, z| self.source_height(x, z))
@@ -799,10 +929,25 @@ pub(crate) fn rect_samples(rect: Rect) -> impl Iterator<Item = (usize, usize)> {
 /// the nearest edge node's bilinear value holds; non-finite coordinates give the first height
 /// of a guard path rather than NaN (a validated document never meets this).
 fn grid_height(size_m: f64, cols: u32, rows: u32, heights: &[f64], x: f64, z: f64) -> f64 {
-    debug_assert!(size_m.is_finite() && size_m > 0.0);
-    debug_assert!(cols >= GRID_SIDE_MIN && rows >= GRID_SIDE_MIN);
     debug_assert_eq!(heights.len(), cols as usize * rows as usize);
-    let (cols, rows) = (cols as usize, rows as usize);
+    bilinear(size_m, cols as usize, rows as usize, x, z, |c, r| {
+        heights.get(r * cols as usize + c).copied().unwrap_or(0.0)
+    })
+}
+
+/// The bilinear height at world `x`, `z` of the samples `at(c, r)` of `cols` by `rows`
+/// spanning the square of side `size_m` centred on the origin; the control grid and the
+/// heightmap share it.
+fn bilinear(
+    size_m: f64,
+    cols: usize,
+    rows: usize,
+    x: f64,
+    z: f64,
+    at: impl Fn(usize, usize) -> f64,
+) -> f64 {
+    debug_assert!(size_m.is_finite() && size_m > 0.0);
+    debug_assert!(cols >= 2 && rows >= 2);
     let half = size_m / 2.0;
     // Fractional node coordinates, clamped to the square.
     let u = if x.is_finite() {
@@ -819,7 +964,6 @@ fn grid_height(size_m: f64, cols: u32, rows: u32, heights: &[f64], x: f64, z: f6
     let r0 = (v.floor() as usize).min(rows.saturating_sub(2));
     let fu = u - c0 as f64;
     let fv = v - r0 as f64;
-    let at = |c: usize, r: usize| -> f64 { heights.get(r * cols + c).copied().unwrap_or(0.0) };
     let h00 = at(c0, r0);
     let h10 = at(c0 + 1, r0);
     let h01 = at(c0, r0 + 1);

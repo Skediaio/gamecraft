@@ -223,9 +223,11 @@ from the engine, as mechanisms with no game in them, in the order they are sched
    level), drawn beyond the cell's own items' draw distances and rebuilt only for the cells an
    edit touches; `view.render`'s `stats.hlod` says what they drew (`decisions.md`). Open: a copy
    in the project's cooked cache, plants merged too.
-3. **Terrain from a DEM at full resolution:** a heightmap in tiles as the source (1-4 m, imported
-   from a DEM), with sculpting as a layer over it, instead of a coarse control grid plus at most
-   1 024 edits.
+3. ~~**Terrain from a DEM at full resolution:**~~ Done 2026-11-25: a heightmap in tiles of 128 cells
+   is a terrain source named in `world.json` by its shape and content hash, its samples files of
+   the project (`worlds/<world>/terrain/heightmap/`), read by `terrain.import` from a PGM, text or
+   raw 16/32-bit file, with sculpting, paint and rules over it as over any terrain
+   (`decisions.md`). Open: baking a world's edits into its heightmap, a GeoTIFF decoder.
 4. **A navigation mesh per cell**, built from solids and terrain, rebuilt for the cells an edit
    touches and queried by the simulation (walls, gates, bridges, rooftops); part of M7, after
    cells are streamed near the player.

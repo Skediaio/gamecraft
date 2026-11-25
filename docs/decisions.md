@@ -8,6 +8,43 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-25: A heightmap at full resolution is a source, named by its content
+
+The control grid (2026-11-21) carries the landforms at 30-60 m; a game built an 8 km map at 4 m and
+needed the ground itself at that resolution. `TerrainSource` gains `heightmap`: `cols` x `rows`
+samples (2 to 2049 a side; 1-4 m is usual), interpolated over the square exactly as the grid is,
+with the sculpt edits, the paint and the rules on top as before.
+
+- **The document names the samples and does not hold them.** `world.json` says `cols`, `rows` and
+  `content`, the hash of the samples; a kilometre at 2 m is half a million numbers, too many for
+  text and for the copy of the world every command works on. The host hands them to the engine
+  (`Session::set_heightmap`), which takes only what the document names: other samples, or another
+  shape, are an error that says both. The text, the revision and the history do not move: the
+  samples are not an edit.
+- **A source is a file of the project**, committed with it: `worlds/<world>/terrain/heightmap/
+  tile_<tx>_<tz>.bin`, tiles of 128 cells (129 x 129 samples, neighbours sharing a border row), in
+  the shape of the derived field's cache (`GCHEIGHT1`, the tile's place, f32 samples). Not the
+  cache: that is thrown away at will, this is made only by importing again. A tile that is missing,
+  cut short, a link out of the pack or of another content than the document names is said when
+  the project opens, and the project opens without ground; the derived cache is not used either,
+  since the next sculpt would rebuild from nothing.
+- **`terrain.import` reads what needs no new dependency**: a PGM (P5, 8 or 16 bits, which every
+  GIS tool exports), rows of text, raw 16-bit integers and raw 32-bit floats (little-endian);
+  `scale_m` and `offset_m` turn raw numbers into metres (height = number x scale + offset). The
+  square is centred on the origin as every terrain is, of side `size_m`. A georeference (origin,
+  projection) is the importer's business, not the engine's; GeoTIFF needs a decoder the engine
+  does not have (open, roadmap item 5).
+- **Until the samples arrive there is no ground**, and whatever needs it says so (`terrain.set`
+  with kind `heightmap` names one; `terrain.import` names it and hands the samples over in one
+  step). A running world takes the samples between ticks as any change.
+- **Nothing is lifted for edits**: what the survey already holds belongs in the file (bake it
+  there), the 1 024 edits are for what a game master changes over it. Open: a command that bakes
+  a world's edits into its heightmap.
+- **The samples are plain numbers**, so the simulation's determinism is not touched: no
+  trigonometry, a `BTreeMap` for the tiles, no file and no clock below the host. The state hash
+  covers the document, so two worlds that name one content hash the same; for the samples the
+  host is trusted, as for a model's triangles.
+
 ### 2026-11-25: A cell's static geometry is merged for the distance, in memory
 
 Per-model levels (the decision below on levels of detail) still draw every instance: a district

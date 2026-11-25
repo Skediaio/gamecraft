@@ -31,6 +31,7 @@ mod entity;
 mod environment;
 mod error;
 mod grid_heights;
+pub mod heightmap;
 mod instance;
 pub mod limits;
 mod model;
@@ -54,6 +55,9 @@ pub use entity::{Entity, EntityDraft, EntityId, MAX_LAYER_CHARS, is_layer_name};
 pub use environment::{Environment, STANDARD_TEMPERATURE_C, SunPosition};
 pub use error::WorldError;
 pub use grid_heights::GridHeights;
+pub use heightmap::{
+    Heightmap, TILE_CELLS as HEIGHTMAP_TILE_CELLS, TILE_SAMPLES as HEIGHTMAP_TILE_SAMPLES,
+};
 pub use model::{
     MAX_ASSET_PATH_CHARS, MAX_MODEL_LOD_LEVELS, MODEL_EXTENSIONS, Model, ModelBounds, ModelBox,
     ModelCollider, is_asset_path, is_model_path,
