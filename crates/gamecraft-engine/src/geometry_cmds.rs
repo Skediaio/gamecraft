@@ -1,4 +1,5 @@
-//! Spatial queries: `query.ground_height`, `query.raycast` and `query.line_of_sight`.
+//! Spatial queries: `query.ground_height`, `query.ground`, `query.raycast` and
+//! `query.line_of_sight`.
 //!
 //! A ray hits the terrain (the triangle surface of [`gamecraft_world::HeightField`]) and the
 //! `shape` component of every entity, solid or not: a box turned by the entity's
@@ -6,6 +7,9 @@
 //! entity's position. Plants and characters are not hit yet. A ray that starts inside a shape
 //! hits it at distance 0. The ray maths is [`gamecraft_sim::ray`], the very code the simulation
 //! uses for projectiles and perception.
+//!
+//! `query.ground` is `query.ground_height` for many points at once, for the generator of a
+//! large map that needs the ground under a thousand piers: one call, however many points.
 
 use crate::error::{CommandError, bad};
 use crate::params::Params;
@@ -20,6 +24,10 @@ pub(crate) const SPECS: &[Registration] = &[
     Registration {
         spec: ground_height_spec,
         handler: Handler::Query(ground_height),
+    },
+    Registration {
+        spec: ground_spec,
+        handler: Handler::Query(ground),
     },
     Registration {
         spec: raycast_spec,
@@ -37,6 +45,10 @@ const RAY_MIN_M: f64 = 0.01;
 const RAY_MAX_M: f64 = 100_000.0;
 /// `max_m` when left out, metres.
 const RAY_DEFAULT_M: f64 = 1000.0;
+/// Most points one `query.ground` takes: thousands at once, never a list to exhaust memory.
+pub const MAX_GROUND_POINTS: usize = 65_536;
+/// Largest absolute value of a coordinate of a point of `query.ground`, metres.
+const MAX_POINT_COORDINATE_M: f64 = 1e6;
 
 const NOT_HIT: &str = "Plants and characters are not hit yet.";
 
@@ -61,14 +73,75 @@ fn ground_height_spec() -> CommandSpec {
     .query()
 }
 
-fn ground_height(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
-    let x = p.f64("x")?.ok_or_else(|| bad("missing `x`"))?;
-    let z = p.f64("z")?.ok_or_else(|| bad("missing `z`"))?;
-    let field = session.current_heights();
+/// The ground at `x`, `z` of `field`: the answer of `query.ground_height` for one point
+/// (nulls without ground).
+fn ground_point(field: Option<&gamecraft_world::HeightField>, x: f64, z: f64) -> Value {
     let height = field.and_then(|f| f.height_at(x, z));
     let normal = field.and_then(|f| f.normal_at(x, z));
     let slope = normal.map(|[nx, ny, nz]| rad_to_deg((nx * nx + nz * nz).sqrt().patan2(ny)));
-    Ok(json!({"x": x, "z": z, "height_m": height, "normal": normal, "slope_deg": slope}))
+    json!({"x": x, "z": z, "height_m": height, "normal": normal, "slope_deg": slope})
+}
+
+fn ground_height(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
+    let x = p.f64("x")?.ok_or_else(|| bad("missing `x`"))?;
+    let z = p.f64("z")?.ok_or_else(|| bad("missing `z`"))?;
+    Ok(ground_point(session.current_heights(), x, z))
+}
+
+fn ground_spec() -> CommandSpec {
+    spec(
+        "query.ground",
+        "Ground at Points",
+        "The terrain's height, surface normal and slope at many points of the ground plane          of the current world, in one call: query.ground_height for a list of points, for          the generator of a large map. Terrain only (shapes are not ground); null, point by          point, outside the terrain or without one.",
+        vec![param(
+            "points",
+            T::Array,
+            &format!(
+                "[[x, z], ...] on the ground plane, 1 to {MAX_GROUND_POINTS} of them, each a \
+                 coordinate within ±{MAX_POINT_COORDINATE_M} m; answered in order."
+            ),
+        )
+        .required()
+        .unit("m")],
+        "{points: [{x, z, height_m: number | null, normal: [x, y, z] | null, slope_deg: \
+         number | null}, ...]}: one per point given, in order",
+        json!({"points": [[8, -10], [12, -4], [500, 500]]}),
+    )
+    .query()
+}
+
+fn ground(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
+    let list = p
+        .value("points")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad("`points` must be a list of points: [[x, z], ...]"))?;
+    if list.is_empty() || list.len() > MAX_GROUND_POINTS {
+        return Err(bad(format!(
+            "`points` holds {} points; give 1 to {MAX_GROUND_POINTS}",
+            list.len()
+        )));
+    }
+    let field = session.current_heights();
+    let mut points = Vec::with_capacity(list.len());
+    for (i, v) in list.iter().enumerate() {
+        let wrong = |what: &str| {
+            bad(format!(
+                "`points[{i}]` must be [x, z], two numbers of metres within                  ±{MAX_POINT_COORDINATE_M}; got {what}"
+            ))
+        };
+        let Some(pair) = v.as_array().filter(|pair| pair.len() == 2) else {
+            return Err(wrong(&crate::spec::kind_of(v)));
+        };
+        let mut xz = [0.0; 2];
+        for (slot, item) in xz.iter_mut().zip(pair) {
+            *slot = item
+                .as_f64()
+                .filter(|n| n.is_finite() && n.abs() <= MAX_POINT_COORDINATE_M)
+                .ok_or_else(|| wrong(&crate::spec::kind_of(item)))?;
+        }
+        points.push(ground_point(field, xz[0], xz[1]));
+    }
+    Ok(json!({ "points": points }))
 }
 
 /// The nearest hit within `max_m` of a ray with a unit `dir` in the current world.

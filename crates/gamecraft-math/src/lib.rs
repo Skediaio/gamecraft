@@ -23,7 +23,7 @@ mod rng;
 #[cfg(test)]
 mod tests;
 
-pub use angle::{deg_to_rad, rad_to_deg, wrap_deg, wrap_deg_signed, yaw_forward};
+pub use angle::{deg_to_rad, rad_to_deg, wrap_deg, wrap_deg_signed, yaw_forward, yaw_of};
 pub use glam;
 pub use glam::{DMat4, DQuat, DVec2, DVec3};
 pub use hash::StateHasher;

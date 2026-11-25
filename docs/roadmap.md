@@ -234,8 +234,13 @@ from the engine, as mechanisms with no game in them, in the order they are sched
 5. **A generic geodata importer** (optional): a DEM and an OpenStreetMap extract to a pack
    (frame, terrain, roads, building footprints, water, licence records); rules of a place stay in
    the game.
-6. **A ground-height query while building**, and spans (decks) whose ends snap to the ground,
-   so a generator does not copy the engine's sculpt maths to place bridge ends and pier feet.
+6. ~~**A ground-height query while building**, and spans (decks) whose ends snap to the
+   ground,~~ done 2026-11-25: `query.ground {points}` gives the ground (height, normal, slope)
+   at up to 65 536 points in one call, from the document as it is being built; `at` takes an
+   `offset_m`; `entity.add` and `prefab.spawn` take `span {from, to, offset_m?, length_m?}`,
+   which places a deck level on the higher end's ground, facing `from` to `to`, scaled to span
+   the ends, and says in `ends` how far each end is above its ground (`decisions.md`). Open: a
+   span scales uniformly until item 7, and cannot tilt (full orientation, M3).
 7. **Non-uniform scale for prefab instances** (one deck prefab for every span length).
 8. **Raycasts and simulation at scale:** a spatial index for rays, lines of sight and solids, so a
    world of about 300 000 entities (prefab children included) raycasts in well under a

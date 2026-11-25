@@ -56,6 +56,7 @@ mod road_cmds;
 mod scatter_cmds;
 mod scenario_cmds;
 mod session;
+mod span;
 pub mod spec;
 mod terrain_cmds;
 mod triggers;

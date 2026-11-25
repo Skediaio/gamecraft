@@ -92,6 +92,18 @@ placed by the instance's position and turn (`offset` is in the parent's frame: -
 its right), with `parent` set to the instance. Removing an entity removes everything below it;
 `entity.set` (through `World::place_entity`) moves and turns everything below it rigidly.
 
+**An instance's scale is its children's** (2026-11-25): each stands at its offset times the
+instance's scale, at that scale (`World::set_scale` rescales what is below an entity). An
+unedited child is still derived data, to the bit, so nothing more is written for it; a child
+given a scale of its own keeps it when the instance's changes, multiplied by the ratio. Before
+this a scaled instance's children stayed where the prefab put them, at scale 1.
+
+**Spans** (`span` on `prefab.spawn` and `entity.add`; `decisions.md`, *The ground is asked for
+while building*): the prefab's extent is measured from its children when the span needs a
+length, as the smallest box in the instance's frame around every child's shape and every model
+whose asset has bounds, each turned by the child's rotation and moved to its offset, a nested
+prefab's children included (`gamecraft_world::prefab_box`).
+
 Format version 1 is kept: `prefabs`, `prefab`, `parent` and `overrides` are optional, and a
 document without them is written exactly as before (the same text, so the same static hash).
 

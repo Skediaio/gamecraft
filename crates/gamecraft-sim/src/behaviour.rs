@@ -21,7 +21,7 @@
 //!   starts again at the first; **guard** stands at its post facing the way it faced at the
 //!   start; **idle** stands.
 
-use gamecraft_math::{Portable, Rng, rad_to_deg, wrap_deg};
+use gamecraft_math::{Portable, Rng, rad_to_deg, wrap_deg, yaw_of};
 use gamecraft_world::{Behaviour, BehaviourMode, Entity, EntityId, HeightField, World};
 use serde::Serialize;
 
@@ -156,8 +156,10 @@ pub fn team_of(e: &Entity) -> Option<&str> {
 pub(crate) fn yaw_towards(from: [f64; 3], to: [f64; 3]) -> Option<f64> {
     let (dx, dz) = (to[0] - from[0], to[2] - from[2]);
     let d = (dx * dx + dz * dz).sqrt();
-    // yaw_forward(yaw) = (-sin yaw, 0, -cos yaw), so yaw = atan2(-dx, -dz).
-    (d.is_finite() && d > 1e-9).then(|| wrap_deg(rad_to_deg((-dx).patan2(-dz))))
+    if !(d.is_finite() && d > 1e-9) {
+        return None;
+    }
+    yaw_of(dx, dz)
 }
 
 /// The pitch (degrees) that sends a projectile at `speed_mps` from `from` to `to`, allowing for

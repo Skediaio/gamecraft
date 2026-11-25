@@ -1,4 +1,4 @@
-use crate::{deg_to_rad, rad_to_deg, wrap_deg, wrap_deg_signed, yaw_forward};
+use crate::{deg_to_rad, rad_to_deg, wrap_deg, wrap_deg_signed, yaw_forward, yaw_of};
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-12
@@ -76,4 +76,28 @@ fn yaw_forward_follows_the_convention() {
     let f270 = yaw_forward(-90.0);
     assert!(close(f270.x, 1.0), "{f270}");
     assert!(close(yaw_forward(33.0).length(), 1.0));
+}
+
+#[test]
+fn yaw_of_is_the_inverse_of_yaw_forward() {
+    use crate::yaw_forward;
+    for (dx, dz, want) in [
+        (1.0, 0.0, 270.0),
+        (0.0, 1.0, 180.0),
+        (-1.0, 0.0, 90.0),
+        (3.0, 4.0, 216.86989764584402),
+    ] {
+        let yaw = yaw_of(dx, dz).unwrap();
+        assert!((yaw - want).abs() < 1e-9, "({dx}, {dz}): {yaw} vs {want}");
+        let f = yaw_forward(yaw);
+        let len = (dx * dx + dz * dz).sqrt();
+        assert!((f.x - dx / len).abs() < 1e-9 && (f.z - dz / len).abs() < 1e-9);
+    }
+    // Any length gives the same yaw; a zero or non-finite vector has none.
+    assert_eq!(yaw_of(30.0, 40.0), yaw_of(0.3, 0.4));
+    assert_eq!(yaw_of(0.0, 0.0), None);
+    assert_eq!(yaw_of(-0.0, 0.0), None);
+    assert_eq!(yaw_of(f64::NAN, 1.0), None);
+    assert_eq!(yaw_of(1e150, 1e150), Some(225.0));
+    assert_eq!(yaw_of(1e300, 1e300), None, "the squares overflow");
 }

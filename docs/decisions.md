@@ -8,6 +8,43 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-25: The ground is asked for while building, and a span is placed from two ground points
+
+A generator of a large map had to copy the engine's sculpt maths to put bridge ends and pier
+feet at the right height, which breaks with every sculpt op the engine adds. So the engine
+answers the question itself, and places what depends on it.
+
+- **`query.ground {points: [[x, z], ...]}`** is `query.ground_height` for up to 65 536 points in
+  one call, from the document's own height field (a recipe or a heightmap, with the sculpt
+  edits, the paint and the rules), before any simulation runs, in a script and over MCP. One
+  answer per point, in the order given, nulls where there is no ground, exactly what the
+  single-point query says for that point (one function answers both). Chosen over a raster
+  answer (a generator has a list of places, not a window) and over batching in the protocol
+  (a script is a fixed list of steps and cannot join many answers into one).
+- **`at` takes `offset_m`** on `entity.add`, `entity.set` and `prefab.spawn`: the base stands
+  that high over the ground. Refused without `at`, never ignored.
+- **A span is `{from, to, offset_m?, length_m?}`**, on `entity.add` and `prefab.spawn`. What it
+  places stands level at the midpoint, its base on the **higher** end's ground plus the offset
+  (a deck never sinks into the ground it spans; over sloped ground the lower end is left above
+  its ground, and the answer's `ends` say how far, so the generator can place an abutment or a
+  pier), it faces from `from` to `to`, and it is scaled so that its length along its forward
+  axis spans the two ends. The length is `length_m`, or measured: an entity's box along z (a
+  cylinder's or a sphere's diameter), or a prefab's smallest box around its children's shapes
+  and models with bounds, nested and turned children included. A thing whose geometry is not
+  centred on its origin is still centred on the span: its origin goes past the midpoint.
+  Chosen over a tilted span (entities turn about the vertical axis only until M3), over the
+  mean of the two heights (it buries one end), and over guessing a length for a model without
+  bounds (the span asks for `length_m` instead).
+- **Uniform for now.** A span scales the whole thing, its width and height with it, since an
+  entity's scale is one number; per-axis scale (roadmap item 7) makes a span stretch its
+  length only.
+- **A prefab instance's scale reaches its children.** It did not: a scaled instance's children
+  stayed where the prefab put them, at scale 1. Each child now stands at its offset times the
+  instance's scale, at that scale; `entity.set {scale}` rescales everything below the entity;
+  an unedited child stays derived data, to the bit. No example of this repository has a scaled
+  instance, so no pinned hash moved; a world made before, with scaled instances, shows its
+  children scaled from now on.
+
 ### 2026-11-25: A heightmap at full resolution is a source, named by its content
 
 The control grid (2026-11-21) carries the landforms at 30-60 m; a game built an 8 km map at 4 m and

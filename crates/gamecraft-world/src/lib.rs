@@ -62,7 +62,7 @@ pub use model::{
     MAX_ASSET_PATH_CHARS, MAX_MODEL_LOD_LEVELS, MODEL_EXTENSIONS, Model, ModelBounds, ModelBox,
     ModelCollider, is_asset_path, is_model_path,
 };
-pub use prefab::{Prefab, PrefabChild, Spawn, Spawned};
+pub use prefab::{GroundBox, Prefab, PrefabChild, Spawn, Spawned, components_box, prefab_box};
 pub use road::{
     DrapeStats, DrapedPolygon, Retiered, Road, RoadEnds, RoadMesh, free_road_tier, raycast_roads,
     retier_roads,

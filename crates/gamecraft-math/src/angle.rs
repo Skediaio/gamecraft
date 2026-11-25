@@ -38,3 +38,15 @@ pub fn yaw_forward(yaw_deg: f64) -> DVec3 {
     let (s, c) = deg_to_rad(yaw_deg).psin_cos();
     DVec3::new(-s, 0.0, -c)
 }
+
+/// The yaw, in degrees 0 to 360, whose forward ([`yaw_forward`]) points along `(dx, dz)`:
+/// `yaw_forward(yaw)` is `(-sin yaw, 0, -cos yaw)`, so the yaw is `atan2(-dx, -dz)`. `None`
+/// for a vector of length 0 or one with a number that is not finite.
+pub fn yaw_of(dx: f64, dz: f64) -> Option<f64> {
+    let d = (dx * dx + dz * dz).sqrt();
+    if !(d.is_finite() && d > 0.0) {
+        return None;
+    }
+    let yaw = wrap_deg(rad_to_deg((-dx).patan2(-dz)));
+    yaw.is_finite().then_some(yaw)
+}

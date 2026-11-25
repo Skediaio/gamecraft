@@ -251,6 +251,16 @@ struct VersionProbe {
     gamecraft: Option<serde_json::Value>,
 }
 
+/// An entity's placement: its base position, its turn about +Y in degrees and its scale.
+type Pose = ([f64; 3], f64, f64);
+
+/// Where an entity stood before a move of its tree and where it stands after it.
+#[derive(Clone, Copy)]
+struct Moved {
+    from: Pose,
+    to: Pose,
+}
+
 impl World {
     /// An empty world: no terrain, the default environment, no entities, next id 1.
     pub fn new(name: &str, seed: u64) -> World {
@@ -435,10 +445,10 @@ impl World {
     }
 
     /// Moves and turns entity `id`, and carries everything below it along rigidly (children
-    /// keep their place relative to it). A prefab's child that stands where its prefab puts it
-    /// is placed where the prefab puts it again, to the bit, so it stays derived data
-    /// (`instance.rs`). Nothing changes when a moved entity would be invalid (a coordinate
-    /// beyond 1e6 m, a non-finite number); the error names it.
+    /// keep their place relative to it, at their scale). A prefab's child that stands where
+    /// its prefab puts it is placed where the prefab puts it again, to the bit, so it stays
+    /// derived data (`instance.rs`). Nothing changes when a moved entity would be invalid (a
+    /// coordinate beyond 1e6 m, a non-finite number); the error names it.
     pub fn place_entity(
         &mut self,
         id: EntityId,
@@ -446,15 +456,42 @@ impl World {
         rotation_y_deg: f64,
     ) -> Result<(), WorldError> {
         let below = self.descendants(id);
-        self.place_tree(id, position, rotation_y_deg, &below)
+        let scale = self.placement_of(id)?.2;
+        self.place_tree(id, position, rotation_y_deg, scale, &below)
     }
 
-    /// [`World::place_entity`] with the entities below `id` given, level by level.
+    /// Sets the scale of entity `id` (0.001 to 1000), where it stands: everything below it
+    /// scales with it. A prefab's child that is as its prefab places it stands at its offset
+    /// times the new scale, to the bit; any other entity below keeps its place relative to
+    /// `id` in world metres, grown by the ratio of the scales. A child at the scale the entity
+    /// had (a prefab's, unedited) takes the new scale; one with a scale of its own keeps it,
+    /// multiplied by the ratio. Nothing changes when the result would be invalid; the error
+    /// names it.
+    pub fn set_scale(&mut self, id: EntityId, scale: f64) -> Result<(), WorldError> {
+        let below = self.descendants(id);
+        let (position, rotation_y_deg, _) = self.placement_of(id)?;
+        self.place_tree(id, position, rotation_y_deg, scale, &below)
+    }
+
+    /// Where entity `id` stands, how it is turned and how large it is ([`WorldError::NotFound`]
+    /// without it).
+    fn placement_of(&self, id: EntityId) -> Result<Pose, WorldError> {
+        let entity = self.entities.get(id).ok_or_else(|| WorldError::NotFound {
+            reference: id.to_string(),
+            candidates: Vec::new(),
+        })?;
+        Ok((entity.position, entity.rotation_y_deg, entity.scale))
+    }
+
+    /// [`World::place_entity`] and [`World::set_scale`] in one pass: entity `id` at
+    /// `position`, turned by `rotation_y_deg` and of `scale`, with the entities below `id`
+    /// given, level by level.
     pub(crate) fn place_tree(
         &mut self,
         id: EntityId,
         position: [f64; 3],
         rotation_y_deg: f64,
+        scale: f64,
         below: &[EntityId],
     ) -> Result<(), WorldError> {
         let entity = self.entities.get(id).ok_or_else(|| WorldError::NotFound {
@@ -462,42 +499,72 @@ impl World {
             candidates: Vec::new(),
         })?;
         let lookup = Lookup::new(&self.prefabs)?;
-        let (from, from_yaw) = (entity.position, entity.rotation_y_deg);
+        let from = (entity.position, entity.rotation_y_deg, entity.scale);
+        let (from_pos, from_yaw, from_scale) = from;
+        // How much everything below grows: 1 (exact) when the scale stays.
+        let ratio = scale / from_scale;
         let mut moved = Vec::new();
         // Old and new placement of every moved entity, for the children below it.
-        let mut placements: BTreeMap<EntityId, ([f64; 3], f64, [f64; 3], f64)> = BTreeMap::new();
+        let mut placements: BTreeMap<EntityId, Moved> = BTreeMap::new();
         let mut root = entity.clone();
         root.position = position;
         root.rotation_y_deg = rotation_y_deg;
+        root.scale = scale;
         root.validate()?;
-        placements.insert(id, (from, from_yaw, position, rotation_y_deg));
+        placements.insert(
+            id,
+            Moved {
+                from,
+                to: (position, rotation_y_deg, scale),
+            },
+        );
         moved.push(root);
         for &child in below {
             let Some(e) = self.entities.get(child) else {
                 continue;
             };
             let exact = e.prefab_child.zip(e.parent).and_then(|(slot, parent)| {
-                let (p0, y0, p1, y1) = placements.get(&parent).copied()?;
+                let moved = placements.get(&parent).copied()?;
+                let (p0, y0, s0) = moved.from;
+                let (p1, y1, s1) = moved.to;
                 let def = lookup
                     .of(self.entities.get(parent)?)?
                     .children
                     .get(slot as usize)?;
-                let (was, was_yaw) = place_child(p0, y0, def.offset, def.rotation_y_deg);
+                let (was, was_yaw) = place_child(p0, y0, s0, def.offset, def.rotation_y_deg);
                 let untouched = was
                     .iter()
                     .zip(&e.position)
                     .all(|(a, b)| a.to_bits() == b.to_bits())
-                    && was_yaw.to_bits() == e.rotation_y_deg.to_bits();
-                untouched.then(|| place_child(p1, y1, def.offset, def.rotation_y_deg))
+                    && was_yaw.to_bits() == e.rotation_y_deg.to_bits()
+                    && e.scale.to_bits() == s0.to_bits();
+                untouched.then(|| (place_child(p1, y1, s1, def.offset, def.rotation_y_deg), s1))
             });
-            let (p, yaw) = exact.unwrap_or_else(|| {
-                let (offset, turn) = relative(from, from_yaw, e.position, e.rotation_y_deg);
-                place_child(position, rotation_y_deg, offset, turn)
+            let ((p, yaw), child_scale) = exact.unwrap_or_else(|| {
+                // Relative to `id` as it stood, in world metres of its frame, as before
+                // scales reached children; the ratio is 1 unless the scale changed.
+                let (offset, turn) = relative(from_pos, from_yaw, e.position, e.rotation_y_deg);
+                let own = if e.scale.to_bits() == from_scale.to_bits() {
+                    scale
+                } else {
+                    e.scale * ratio
+                };
+                (
+                    place_child(position, rotation_y_deg, ratio, offset, turn),
+                    own,
+                )
             });
-            placements.insert(child, (e.position, e.rotation_y_deg, p, yaw));
+            placements.insert(
+                child,
+                Moved {
+                    from: (e.position, e.rotation_y_deg, e.scale),
+                    to: (p, yaw, child_scale),
+                },
+            );
             let mut e = e.clone();
             e.position = p;
             e.rotation_y_deg = yaw;
+            e.scale = child_scale;
             e.validate()?;
             moved.push(e);
         }
@@ -654,7 +721,7 @@ impl World {
             name: spawn.name.unwrap_or_else(|| p.name.clone()),
             position: spawn.position,
             rotation_y_deg: spawn.rotation_y_deg,
-            scale: 1.0,
+            scale: spawn.scale,
             prefab: Some(p.id.clone()),
             parent: None,
             layer: spawn.layer.clone(),

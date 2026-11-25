@@ -1,15 +1,22 @@
 //! Prefabs: `prefab.add`, `prefab.set`, `prefab.remove`, `prefab.spawn`, `prefab.list`
 //! (`docs/design/journal.md`, *Prefabs*).
 //!
+//! `prefab.spawn` places its instance by `position`, by `at` (with an `offset_m`) or by
+//! `span`, a deck between two ground points (`span.rs`); a `scale` applies to the instance
+//! and its children.
+//!
 //! A prefab is an entity described once (components and children) and placed many times;
 //! each instance takes the prefab's components with its overrides replacing those of the same
 //! type. `prefab.spawn` is a World command, so it works on a running world too: the game
 //! master's "drop a squad here".
 
-use crate::entity_cmds::placement;
+use crate::entity_cmds::{
+    at_param, offset_param, placement, position_param, span_alone, span_param,
+};
 use crate::error::{CommandError, bad, failed};
 use crate::params::{Params, component};
 use crate::session::{Edit, Handler, Registration, Session};
+use crate::span::Measured;
 use crate::spec::{CommandSpec, ParamType as T, kind_of, nearest, param, spec};
 use gamecraft_world::{Component, Prefab, PrefabChild, Spawn};
 use serde_json::{Map, Value, json};
@@ -321,23 +328,14 @@ fn spawn_spec() -> CommandSpec {
         "Spawn Prefab",
         "Places a prefab: an entity that refers to it, with the prefab's components and \
          `overrides` replacing those of the same type, and its children placed relative to it \
-         (each an entity with the instance as `parent`). Give `position` or `at`. Works on a \
-         running world too: what is spawned takes part from the next tick.",
+         (each an entity with the instance as `parent`, at the instance's scale). Give \
+         `position`, `at` or `span`. Works on a running world too: what is spawned takes part \
+         from the next tick.",
         vec![
             param("prefab", T::String, "The prefab's id.").required(),
-            param(
-                "position",
-                T::Point3,
-                "Where the instance's base stands, [x, y, z]; give this or `at`, not both.",
-            )
-            .unit("m"),
-            param(
-                "at",
-                T::Point2,
-                "Puts the base on the ground at [x, z]; an error where there is no ground. Give \
-                 this or `position`, not both.",
-            )
-            .unit("m"),
+            position_param(),
+            at_param(),
+            offset_param(),
             param(
                 "rotation_y_deg",
                 T::Number,
@@ -346,6 +344,14 @@ fn spawn_spec() -> CommandSpec {
             )
             .unit("deg")
             .default(json!(0)),
+            param(
+                "scale",
+                T::Number,
+                "Uniform scale of the instance, 0.001 to 1000. Its children follow it: each \
+                 stands at its offset times the scale, at that scale.",
+            )
+            .default(json!(1)),
+            span_param(),
             param(
                 "name",
                 T::String,
@@ -360,22 +366,50 @@ fn spawn_spec() -> CommandSpec {
             )
             .default(json!([])),
         ],
-        "{id, children: [ids], position}",
+        "{id, children: [ids], position, span?}: with `span`, what it placed, as entity.add \
+         says",
         json!({"prefab": "marker", "at": [4, 4], "name": "Marker 1", "overrides": [{"type": "tags", "tags": ["marker", "first"]}]}),
     )
 }
 
 fn spawn(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
     let id = prefab_id(p, "prefab")?;
-    if edit.world.prefab(id).is_none() {
-        return Err(unknown(edit, id));
-    }
-    let position =
-        placement(edit, p)?.ok_or_else(|| bad("missing `position` or `at`; give one of them"))?;
+    let prefab = edit
+        .world
+        .prefab(id)
+        .ok_or_else(|| unknown(edit, id))?
+        .clone();
+    let (position, rotation_y_deg, scale, span) = if p.has("span") {
+        span_alone(&p, "instance")?;
+        let measured = edit.world.prefab_box(&prefab).map(Measured::of_box);
+        let crate::span::Span {
+            position,
+            rotation_y_deg,
+            scale,
+            report,
+        } = crate::span::span(
+            edit,
+            &p,
+            measured,
+            &format!("prefab \"{id}\""),
+            "has nothing to measure its length from (no shape, and no model whose asset has \
+             bounds)",
+        )?;
+        (position, rotation_y_deg, scale, Some(report))
+    } else {
+        (
+            placement(edit, &p)?
+                .ok_or_else(|| bad("missing `position` or `at` (or `span`, a deck between two ground points); give one of them"))?,
+            p.f64("rotation_y_deg")?.unwrap_or(0.0),
+            crate::entity_cmds::scale_of(&p)?.unwrap_or(1.0),
+            None,
+        )
+    };
     let spawn = Spawn {
         name: p.str("name")?.map(str::to_string),
         position,
-        rotation_y_deg: p.f64("rotation_y_deg")?.unwrap_or(0.0),
+        rotation_y_deg,
+        scale,
         overrides: components(p, "overrides")?.unwrap_or_default(),
         layer: crate::entity_cmds::layer_of(p)?.flatten(),
     };
@@ -383,11 +417,17 @@ fn spawn(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
         .world
         .spawn_prefab(id, spawn)
         .map_err(|e| bad(e.to_string()))?;
-    Ok(json!({
-        "id": spawned.id.0,
-        "children": spawned.children.iter().map(|c| c.0).collect::<Vec<_>>(),
-        "position": position,
-    }))
+    let mut out = Map::new();
+    out.insert("id".into(), json!(spawned.id.0));
+    out.insert(
+        "children".into(),
+        json!(spawned.children.iter().map(|c| c.0).collect::<Vec<_>>()),
+    );
+    out.insert("position".into(), json!(position));
+    if let Some(report) = span {
+        out.insert("span".into(), report);
+    }
+    Ok(Value::Object(out))
 }
 
 fn list_spec() -> CommandSpec {

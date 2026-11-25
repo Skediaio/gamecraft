@@ -188,6 +188,7 @@ pub(crate) fn derive(
     let (position, rotation_y_deg) = place_child(
         parent.position,
         parent.rotation_y_deg,
+        parent.scale,
         def.offset,
         def.rotation_y_deg,
     );
@@ -205,7 +206,9 @@ pub(crate) fn derive(
         name,
         position,
         rotation_y_deg,
-        scale: 1.0,
+        // The instance's scale: a child of its own has none (a scale given to a child is an
+        // edit of the instance, `ChildEdit::scale`).
+        scale: parent.scale,
         prefab: def.prefab.clone(),
         parent: Some(parent.id),
         layer: parent.layer.clone(),
@@ -841,7 +844,7 @@ impl crate::World {
                     e.validate()?;
                     self.entities.insert(c, e);
                     if !same3(position, actual.position) || !same(yaw, actual.rotation_y_deg) {
-                        self.place_tree(c, position, yaw, &below)?;
+                        self.place_tree(c, position, yaw, actual.scale, &below)?;
                     }
                     continue;
                 }

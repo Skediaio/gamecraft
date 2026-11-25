@@ -16,10 +16,17 @@ JSON lines (`gamecraft-cli serve`). The protocol, every command and its paramete
 - **Turning.** `rotation_y_deg` turns an entity about +Y, counter-clockwise seen from above. At 0
   it faces north (-Z); at 90 it faces west (-X); at -90 (or 270) east.
 - **Points.** `[x, y, z]` is a point in space (`position`); `[x, z]` a point on the ground
-  (`at`, `face`). `at` puts an entity's base on the ground there; it is an error where there is
-  no ground.
+  (`at`, `face`). `at` puts an entity's base on the ground there (`offset_m`: that high above
+  it); it is an error where there is no ground. `query.ground {points: [[x, z], ...]}` gives
+  the ground (height, normal, slope) at thousands of points in one call, before anything is
+  simulated: ask it for every pier and every end of a bridge, then place from its answers.
 - **The base of an entity.** An entity's `position` is its base: the point it stands on. A box
   of height 2 at `y = 3` spans from 3 to 5. `entity.snap_to_ground` puts bases on the ground.
+- **Spans.** `entity.add` and `prefab.spawn` take `span {from: [x, z], to: [x, z],
+  length_m?}` instead of a position: a deck between two ground points, level with its base on
+  the higher end's ground, facing `from` to `to`, scaled so that its length spans the ends. The
+  answer says where each end stands and how far above its ground (`ends`): place an abutment or
+  a pier where `gap_m` is not 0.
 - **Ids and names.** Every entity has a numeric id, handed out in order and never reused (not
   after removal, save and load, or undo). Commands take an entity as its id (a number) or its
   name (a string, any case). Names need not be unique; an ambiguous name is an error that lists
@@ -168,8 +175,9 @@ each command an `intent`. Everything you send is in the journal and replays to t
 ## Prefabs
 
 Describe an entity once and place it many times. `prefab.add {id, name?, components,
-children?}` keeps a prefab in the world; `prefab.spawn {prefab, at | position,
-rotation_y_deg?, name?, overrides?}` places one and answers `{id, children}`. The instance's
+children?}` keeps a prefab in the world; `prefab.spawn {prefab, at | position | span,
+rotation_y_deg?, scale?, name?, overrides?}` places one and answers `{id, children}`. A
+`scale` is the instance's and its children's. The instance's
 components are the prefab's, with each component of `overrides` replacing the prefab's of the
 same type (or adding a type it lacks): `"overrides": [{"type": "health", "max": 250, "current":
 250}]` makes a tougher soldier of the same prefab. `children` (`[{name?, offset: [x, y, z],
