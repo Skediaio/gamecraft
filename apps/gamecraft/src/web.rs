@@ -153,7 +153,8 @@ fn assets_base() -> Option<String> {
     })
 }
 
-/// Fetches the files of every model `world` shows (a `.gltf` with the files it refers to) from
+/// Fetches the files of every model `world` shows (a `.gltf` with the files it refers to, and
+/// the textures of the pack's store a `.glb` or a `.gltf` refers to by `../textures/...`) from
 /// [`assets_base`], measures each model and gives `world` their bounding boxes, as a native
 /// host does from a project (so solid models collide in the browser too). A model that cannot
 /// be fetched or read is told on the console and left out: the renderer draws its stand-in.
@@ -172,12 +173,13 @@ pub async fn load_assets(world: &mut World) -> Vec<(String, Vec<u8>)> {
             let bytes = fetch_bytes(&format!("{base}{asset}")).await?;
             let folder = gamecraft_project::model::folder_of(&asset);
             let mut parts = Vec::new();
-            if asset.ends_with(".gltf") {
-                for r in gamecraft_project::model::references(&bytes)? {
-                    let path = format!("{folder}{r}");
-                    let data = fetch_bytes(&format!("{base}{path}")).await?;
-                    parts.push((r, path, data));
-                }
+            // The glTF document: a .gltf as it is, a .glb's JSON chunk. Each file it refers
+            // to is fetched under its path inside assets/ (`..` resolved).
+            let json = gamecraft_project::model::split_glb(&bytes)?.0;
+            for r in gamecraft_project::model::references(json)? {
+                let inside = gamecraft_project::model::resolve_uri(&folder, &r)?;
+                let data = fetch_bytes(&format!("{base}{inside}")).await?;
+                parts.push((r, inside, data));
             }
             let summary = gamecraft_project::inspect(&bytes, &|r: &str| {
                 parts
