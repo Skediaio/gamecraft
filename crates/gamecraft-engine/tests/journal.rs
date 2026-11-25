@@ -12,7 +12,7 @@ mod common;
 
 use common::{example, playing};
 use gamecraft_engine::Session;
-use gamecraft_engine::journal::Journal;
+use gamecraft_engine::journal::{Journal, JournalEntry};
 use serde_json::{Value, json};
 
 fn run(s: &mut Session, command: &str, params: Value) -> Value {
@@ -267,4 +267,32 @@ fn a_journal_file_names_what_is_wrong() {
     let d = journal.replay(None).unwrap().divergence.unwrap();
     assert_eq!(d.entry, Some(0));
     assert!(d.message.contains("failed in the replay"), "{}", d.message);
+}
+
+#[test]
+fn a_journal_of_a_world_whose_heightmap_has_no_samples_cannot_replay() {
+    // A world that names a heightmap it has no samples for (a file never keeps them): the
+    // replay cannot start its simulation, and says why.
+    let mut s = Session::new(gamecraft_world::World::new("Survey", 3));
+    s.run(
+        "terrain.set",
+        &json!({"kind": "heightmap", "cols": 3, "rows": 2, "content": "0123456789abcdef"}),
+    )
+    .unwrap();
+    let mut journal = Journal::new(s.document().clone());
+    journal.entries.push(JournalEntry {
+        tick: 0,
+        command: "sim.step".into(),
+        params: json!({"ticks": 1}),
+        end_tick: Some(1),
+        hash: Some("0000000000000000".into()),
+    });
+    let e = journal.replay(None).err().expect("the replay cannot start");
+    let msg = e.to_string();
+    assert!(msg.starts_with("sim.start: "), "{msg}");
+    assert!(msg.contains("heightmap has no samples"), "{msg}");
+    assert!(
+        msg.contains("terrain.import") && msg.contains("project.open"),
+        "{msg}"
+    );
 }

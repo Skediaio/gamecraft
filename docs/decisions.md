@@ -73,7 +73,9 @@ with the sculpt edits, the paint and the rules on top as before.
   does not have (open, roadmap item 5).
 - **Until the samples arrive there is no ground**, and whatever needs it says so (`terrain.set`
   with kind `heightmap` names one; `terrain.import` names it and hands the samples over in one
-  step). A running world takes the samples between ticks as any change.
+  step). A running world takes the samples between ticks as any change. `sim.start` and
+  `sim.step` refuse meanwhile, with that sentence: without ground every character falls
+  forever, silently (a review fix of the same day).
 - **Nothing is lifted for edits**: what the survey already holds belongs in the file (bake it
   there), the 1 024 edits are for what a game master changes over it. Open: a command that bakes
   a world's edits into its heightmap.

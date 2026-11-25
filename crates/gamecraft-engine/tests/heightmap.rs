@@ -236,6 +236,45 @@ fn a_running_world_gets_the_samples_too() {
 }
 
 #[test]
+fn a_simulation_needs_the_ground_a_heightmap_names() {
+    // Starting: refused while the samples have not been handed over, or every character
+    // would fall forever.
+    let mut s = empty();
+    name(&mut s);
+    refuse(
+        &mut s,
+        "sim.start",
+        json!({}),
+        &[
+            "heightmap has no samples",
+            "no ground",
+            "terrain.import",
+            "project.open",
+        ],
+    );
+    assert!(!s.is_playing());
+    // A running world that comes to name a heightmap takes the change between ticks, but
+    // does not step until the samples arrive.
+    let mut s = empty();
+    s.run("sim.start", &Value::Null).unwrap();
+    name(&mut s);
+    refuse(
+        &mut s,
+        "sim.step",
+        json!({"ticks": 1}),
+        &["heightmap has no samples", "terrain.import", "project.open"],
+    );
+    assert_eq!(s.live().unwrap().tick(), 0);
+    // A query needs the ground too, as before.
+    assert!(ground(&mut s, x(1), z(1)).is_err());
+    // With the samples the simulation runs on them.
+    s.set_heightmap(map()).unwrap();
+    s.run("sim.step", &json!({"ticks": 5})).unwrap();
+    assert_eq!(s.live().unwrap().tick(), 5);
+    assert_eq!(ground(&mut s, x(1), z(1)).unwrap(), sample(1, 1));
+}
+
+#[test]
 fn the_samples_stay_out_of_the_state_hash_and_other_samples_are_refused() {
     let mut a = empty();
     let mut b = empty();

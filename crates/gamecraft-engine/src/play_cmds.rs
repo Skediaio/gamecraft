@@ -9,6 +9,7 @@ use crate::session::{Handler, Registration, Session};
 use crate::spec::{CommandSpec, ParamType as T, param, spec};
 use crate::triggers::{self, Happening};
 use gamecraft_sim::{Face, Input, MAX_PITCH_DEG, MAX_STEP_TICKS, Sim, TICK_HZ};
+use gamecraft_world::{Terrain, World};
 use serde_json::{Map, Value, json};
 
 /// The commands of this module.
@@ -80,6 +81,20 @@ fn running(session: &mut Session) -> Result<&mut Sim, CommandError> {
     session.live_mut().ok_or_else(not_playing)
 }
 
+/// Refuses while the world's terrain names a heightmap whose samples the host has not handed
+/// over: there is no ground to stand on, and every character would fall forever, silently.
+/// `then` says what cannot happen until the samples come.
+fn needs_ground(world: &World, then: &str) -> Result<(), CommandError> {
+    if world.terrain.as_ref().is_some_and(Terrain::needs_samples) {
+        return Err(failed(format!(
+            "the terrain's heightmap has no samples yet, so there is no ground to stand on; \
+             the host hands them over (terrain.import over gamecraft-cli, or project.open for a \
+             project) before {then}"
+        )));
+    }
+    Ok(())
+}
+
 fn start_spec() -> CommandSpec {
     spec(
         "sim.start",
@@ -87,7 +102,8 @@ fn start_spec() -> CommandSpec {
         "Starts a simulation on a copy of the document. World commands then change the running \
          world, not the document, until sim.stop. The triggers waiting for `start` run. A new \
          journal starts (journal.get): every command that changes the running world is \
-         recorded with its tick.",
+         recorded with its tick. Refused while the terrain names a heightmap that has no \
+         samples yet: there is no ground to stand on.",
         vec![],
         "{tick: 0, hash, characters: [ids], events: [{tick, event: \"start\"}], fired: \
          [{trigger, tick, event, ok, error?}]}",
@@ -102,6 +118,7 @@ fn start(session: &mut Session, _p: Params<'_>) -> Result<Value, CommandError> {
             "a simulation is already running; stop it first with sim.stop",
         ));
     }
+    needs_ground(session.document(), "a simulation can start")?;
     let world = session.document().clone();
     let sim =
         Sim::with_heights(world.clone(), session.document_heights_shared()).map_err(failed)?;
@@ -164,7 +181,8 @@ fn step_spec() -> CommandSpec {
          since the last step fire their triggers first. The answer lists the events and the \
          triggers that fired (at most 1000 of each; `events_omitted` and `fired_omitted` count \
          the rest). Projectiles fly, hit (`hit` events), take health (`down` at 0) and are \
-         heard (`heard`); behaviours decide.",
+         heard (`heard`); behaviours decide. Refused while the terrain names a heightmap that \
+         has no samples yet: there is no ground to stand on.",
         vec![
             param("ticks", T::Integer, "Ticks to advance, 0 to 36000.").default(json!(1)),
             param("seconds", T::Number, "Simulated time to advance, 0 to 600.").unit("s"),
@@ -209,7 +227,9 @@ fn step(session: &mut Session, p: Params<'_>) -> Result<Value, CommandError> {
         (None, None) => 1,
     };
     let ticks = u32::try_from(ticks).unwrap_or(MAX_STEP_TICKS);
-    let start = running(session)?.tick();
+    let sim = running(session)?;
+    needs_ground(sim.world(), "the simulation can step")?;
+    let start = sim.tick();
     triggers::begin_report(session);
     triggers::run_pending(session, start);
     for _ in 0..ticks {
