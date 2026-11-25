@@ -197,6 +197,21 @@ What the files are, where it differs from the method above or adds to it:
   index polls again with a no-op waker until the future is ready (`native::block_on`, capped)
   rather than use `pollster`, which parks the thread until a wake-up.
 
+- **A bake** (2026-11-25): `gamecraft-cli project bake SCRIPT --into DIR` runs a script of
+  commands (the steps of `run --script`, read one at a time) and saves the result as a project
+  of cells in one step; a new project is written once every step has succeeded. In an existing
+  project the bake replaces only what the script owns: the entities of the layers its steps name,
+  of the default layer and of the layers the previous bake owned, and the terrain edits the
+  previous bake added. What a bake owns is in `worlds/<world>/bake.json`
+  (`gamecraft_project::BakeRecord`): `{gamecraft_bake: 1, layers: [names], terrain_edits:
+  [before, after]}`, a file of the project like any other. The same script gives the same
+  files: the id of an entity of the root pack that is gone is free again, so entities removed
+  and added again by a bake take their old ids and their cells are not rewritten. The guideline
+  is `guide/generated-worlds.md`; `decisions.md`, *A bake replaces what the script owns*.
+- **`entity.remove_many {ids}`** removes a set with its children in one pass, checked once:
+  per entity `entity.remove` walks the world once, which a layer of a hundred thousand cannot
+  afford.
+
 ### Terrain
 
 Built 2026-11-19 (M3): sculpting and painting as edits over the terrain's recipe

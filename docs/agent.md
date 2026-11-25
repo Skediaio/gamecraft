@@ -135,6 +135,12 @@ built, saved and changed with commands like everything else.
   names the first tick where the hash differs (`--to-tick N` stops there to bisect). The journal
   of the last simulation stays readable after `sim.stop`, until the next `sim.start`.
 
+## Generated worlds
+
+A world built by a program is kept in git as the project a bake writes, never as the
+program's script; the guideline, with what a re-run replaces, is
+[`guide/generated-worlds.md`](guide/generated-worlds.md).
+
 ## The game master
 
 A person or an agent directs a running game with the same commands that build it (rule 6), and

@@ -425,3 +425,78 @@ fn snap_to_ground_moves_one_or_all_and_counts_the_skipped() {
         &["Nobody"],
     );
 }
+
+#[test]
+fn remove_many_removes_a_set_with_its_children_once_checked() {
+    let mut s = example();
+    let before = s.document().entity_count();
+    // A prefab of two children, placed twice: the instance and its children go together.
+    s.run(
+        "prefab.add",
+        &json!({"id": "camp", "name": "Camp", "children": [
+            {"name": "Tent", "offset": [2, 0, 0], "components": [{"type": "shape", "kind": "box", "size": [2, 1, 2]}]},
+            {"name": "Fire", "offset": [0, 0, 2]}
+        ]}),
+    )
+    .unwrap();
+    let a = s
+        .run("prefab.spawn", &json!({"prefab": "camp", "at": [20, 20]}))
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let b = s
+        .run("prefab.spawn", &json!({"prefab": "camp", "at": [30, 30]}))
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(s.document().entity_count(), before + 6);
+    // The example world's Oak and Crate by name, the first camp by id, an id that is not
+    // there, and the second camp by id: eight go (each camp takes its two children along).
+    assert_eq!(
+        s.run(
+            "entity.remove_many",
+            &json!({"ids": ["Oak", "Crate", a, 999_999, b]})
+        )
+        .unwrap(),
+        json!({"removed": 8})
+    );
+    assert_eq!(s.document().entity_count(), before + 6 - 8);
+    assert!(s.document().entity(EntityId(a)).is_none());
+    assert!(s.document().entity(EntityId(b)).is_none());
+    assert!(s.document().entity(EntityId(2)).is_none(), "the Oak");
+    // One undo step gives all eight back.
+    s.undo().unwrap();
+    assert_eq!(s.document().entity_count(), before + 6);
+    assert!(s.document().entity(EntityId(a)).is_some());
+    // Bad parameters name `ids`, and change nothing.
+    refuse(
+        &mut s,
+        "entity.remove_many",
+        json!({"ids": []}),
+        &["`ids` holds 0 entities"],
+    );
+    refuse(
+        &mut s,
+        "entity.remove_many",
+        json!({"ids": vec![1; 1_000_001]}),
+        &["`ids` holds 1000001 entities"],
+    );
+    refuse(
+        &mut s,
+        "entity.remove_many",
+        json!({"ids": [1, "Nobody"]}),
+        &["`ids`", "Nobody"],
+    );
+    refuse(
+        &mut s,
+        "entity.remove_many",
+        json!({"ids": [1, true]}),
+        &["`ids` must be a list of entities", "a boolean"],
+    );
+    refuse(
+        &mut s,
+        "entity.remove_many",
+        json!({"ids": "Oak"}),
+        &["`ids` must be array"],
+    );
+}

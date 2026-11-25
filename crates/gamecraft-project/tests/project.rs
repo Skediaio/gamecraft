@@ -634,3 +634,41 @@ fn health_override_round_trip_keeps_bits() {
         })
     );
 }
+
+#[test]
+fn the_id_of_a_removed_entity_of_the_root_pack_is_free_again() {
+    // A bake replaces a layer's entities: removed and added again, they must get the ids they
+    // had, so that the same script writes the same files.
+    let (source, _, _) = game();
+    let (project, mut world) = load_one("game", &source);
+    let sign = world.find("Sign").unwrap();
+    let removed = world.remove_entity(sign).unwrap();
+    let again = gamecraft_world::EntityDraft {
+        name: removed.name.clone(),
+        position: removed.position,
+        rotation_y_deg: removed.rotation_y_deg,
+        scale: removed.scale,
+        layer: removed.layer.clone(),
+        components: removed.components.clone(),
+    };
+    world.add_entity(again).unwrap();
+    let saving = project.plan_save(&world).unwrap();
+    assert!(
+        saving.plan.is_empty(),
+        "the new Sign took the old one's id and place: {:?}",
+        saving.plan
+    );
+    // A second entity of that name is numbered, as always.
+    world
+        .add_entity(gamecraft_world::EntityDraft {
+            name: "Sign".into(),
+            ..gamecraft_world::EntityDraft::default()
+        })
+        .unwrap();
+    let saving = project.plan_save(&world).unwrap();
+    let main = &saving.plan.writes["worlds/village/layers/main.json"];
+    assert!(
+        main.contains("\"sign-2\"") && main.contains("\"sign\""),
+        "{main}"
+    );
+}

@@ -213,10 +213,11 @@ A game built an 8 km map at 4 m from a DEM and an OpenStreetMap extract (about 6
 295 000 with prefab children, 288 000 instances and 38 M triangles in a wide view). What it needs
 from the engine, as mechanisms with no game in them, in the order they are scheduled:
 
-1. **Generated worlds are stored as cells, not as scripts.** A guideline (commit the generator
-   and its sources, and the cells `project.save` writes; a generated build script is a build
-   artefact) and a `gamecraft-cli` command that runs a script and saves the result as a celled
-   project in one step.
+1. ~~**Generated worlds are stored as cells, not as scripts.**~~ Done 2026-11-25: the guideline
+   `guide/generated-worlds.md` (commit the generator and its sources, and the cells; the
+   generated build script is a build artefact) and `gamecraft-cli project bake`, which runs a
+   script and saves the result as a celled project in one step, replacing only what the script
+   owns on a re-run (`decisions.md`).
 2. **Far levels of detail for groups (HLOD):** a cell, or a block within it, merged into one
    simplified mesh or impostor for distance, built from the cell's content and rebuilt when the
    cell changes. Per-model levels still draw every instance.

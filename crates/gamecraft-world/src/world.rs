@@ -10,7 +10,7 @@ use crate::{
     Prefab, Spawn, Spawned, Terrain, Trigger, VarValue, WorldError,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The version of the `.gamecraft` file format this crate reads and writes.
 pub const FORMAT_VERSION: u32 = 1;
@@ -347,6 +347,37 @@ impl World {
             self.entities.remove(child);
         }
         Some(removed)
+    }
+
+    /// Removes every entity of `ids` and the entities that belong to them (their children,
+    /// theirs, ...), and says how many went. An id that does not exist is skipped; the ids
+    /// are never handed out again. One pass over the entities per level of the deepest chain,
+    /// whatever the number of `ids`: for removing many at once (a layer, a selection), where
+    /// [`World::remove_entity`] one by one would walk the world once per entity.
+    pub fn remove_entities(&mut self, ids: &[EntityId]) -> usize {
+        let mut doomed: BTreeSet<EntityId> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.entities.contains_key(*id))
+            .collect();
+        for _ in 0..MAX_HIERARCHY_DEPTH {
+            let next: Vec<EntityId> = self
+                .entities
+                .values()
+                .filter(|e| e.parent.is_some_and(|p| doomed.contains(&p)))
+                .map(|e| e.id)
+                .filter(|c| !doomed.contains(c))
+                .collect();
+            if next.is_empty() {
+                break;
+            }
+            doomed.extend(next);
+        }
+        let count = doomed.len();
+        for id in doomed {
+            self.entities.remove(id);
+        }
+        count
     }
 
     /// The entities whose parent is `id`, in id order.

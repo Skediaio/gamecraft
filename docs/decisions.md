@@ -8,6 +8,39 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-25: A bake replaces what the script owns, and the result is kept, not the script
+
+A game that generates a large world (62 000 entities from an OpenStreetMap extract, 295 000
+with prefab children) kept its script: one file, unreadable diffs, a full rebuild on every
+change. `gamecraft-cli project bake SCRIPT --into DIR` now runs such a script and saves the
+result as a project of cells in one step. The script is a build artefact (`.gitignore`); the
+generator and its sources and the cells are committed (`guide/generated-worlds.md`).
+
+- **What a re-run replaces: the layers the script writes, and its own terrain edits.** Chosen
+  over replacing the whole world (hand edits in other layers, prefabs and assets would be lost
+  every time) and over tracking every entity a script made by an id of its own (a new id scheme
+  for one command). The bake writes what it owns in `worlds/<world>/bake.json`: the layers
+  (every layer a step names, the default layer, the layers of the previous bake) and the places
+  of the terrain edits it added. A re-run removes those entities and those edits, then runs the
+  script; when the terrain was sculpted by hand after the last bake it refuses, since a re-run
+  would stack its edits.
+- **The same script gives the same files.** That needed one change in the project's save: the
+  string id of an entity of the root pack that is gone is free again (the ids of dependencies'
+  entities stay taken, for their removal lines). Before, a re-bake moved every entity to a new
+  id (`box-0` became `box-0-2`) and rewrote every cell. In cells the runtime ids follow the
+  order of the cells, so a script run directly hashes the same as its bake only with one file
+  per layer.
+- **Nothing is written while a step can still fail.** A new project is made after the whole
+  script ran; an existing one is saved after. A failing step names the script line, the step
+  and the command.
+- **The script is read one step at a time** (a reader over the bytes between the brackets of
+  the JSON list, with the line of every step), so a hundred thousand steps cost no more than
+  one: 100 000 entities bake in about 14 s and 580 MB.
+- **`entity.remove_many {ids}`** (one pass, checked once) because `entity.remove` per entity
+  walks the world once (a removal makes the session validate every entity, and
+  `World::remove_entity` scans for children): removing a layer of a hundred thousand one by one
+  took over an hour; in one command it takes seconds.
+
 ### 2026-11-25: Models change level per ground cell, at distances from the file, the component or their size
 
 One 100 x 100 m block drew 360-430 k triangles per view; a district must not scale linearly.

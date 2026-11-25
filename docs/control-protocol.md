@@ -128,6 +128,7 @@ degrees, times seconds; an entity is its id or its name.
 | `entity.add` | `{name? = "", position?, at?, rotation_y_deg? = 0, scale? = 1, layer?, components? = []}` | `{id, position}`; give `position` (`[x, y, z]`) or `at` (`[x, z]`, the base on the ground); `layer` is a plain name (1 to 64 letters, digits, `-`, `_`; in a project the file `layers/<layer>.json`), `""` or left out the world's default layer |
 | `entity.set` | `{id, name?, position?, at?, rotation_y_deg?, scale?, layer?}` | `{id, position}`; only the fields given change; the entities that belong to it (a prefab's children) move and turn with it, and go to the same `layer` (`""`: the default layer) |
 | `entity.remove` | `{id}` | `null`; removes the entities that belong to it too (a prefab's children); the ids are never handed out again |
+| `entity.remove_many` | `{ids}` | `{removed}`; every entity of `ids` and the entities that belong to them go: an id that does not exist is skipped, a name that does not exist is an error; one undo step, checked once, for a layer, a selection or a generated set (1 to 1000000 of them) |
 | `entity.set_component` | `{id, component}` | `null`; adds a component or replaces the one of its type |
 | `entity.remove_component` | `{id, type}` | `null`; `type` is a component type (`component.list`) |
 | `entity.snap_to_ground` | `{id?}` | `{moved, skipped}`; one entity, or all when `id` is left out |

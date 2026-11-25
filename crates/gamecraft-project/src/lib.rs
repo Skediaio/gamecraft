@@ -34,6 +34,7 @@
 //! Pure: no files, no clock. The host reads and writes the files (`gamecraft-automation`).
 
 pub mod assets;
+pub mod bake;
 pub mod cells;
 mod error;
 mod fields;
@@ -52,6 +53,7 @@ pub mod textures;
 pub use assets::{
     ASSETS_DIR, AssetRecord, License, PackAsset, RECORD_SUFFIX, check_assets, credits, record_path,
 };
+pub use bake::{BAKE_FILE, BAKE_FORMAT, BakeRecord};
 pub use cells::{Cell, DEFAULT_CELL_SIZE_M, cells_in_area};
 pub use error::ProjectError;
 pub use fields::WORLD_FORMAT;

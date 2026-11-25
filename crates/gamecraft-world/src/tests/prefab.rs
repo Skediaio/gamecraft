@@ -1,8 +1,8 @@
 //! Prefabs: an entity described once and placed many times, with overrides and children.
 
 use crate::{
-    Character, Component, EntityId, Health, Prefab, PrefabChild, Shape, ShapeKind, Spawn, Tags,
-    World, WorldError, Zone, ZoneShape,
+    Character, Component, EntityDraft, EntityId, Health, Prefab, PrefabChild, Shape, ShapeKind,
+    Spawn, Tags, World, WorldError, Zone, ZoneShape,
 };
 
 fn soldier() -> Prefab {
@@ -396,4 +396,58 @@ fn a_world_without_prefabs_is_written_as_before() {
     assert!(!text.contains("prefab"), "{text}");
     assert!(!text.contains("parent"), "{text}");
     assert!(!text.contains("overrides"), "{text}");
+}
+
+#[test]
+fn remove_entities_takes_children_along_in_one_pass() {
+    let mut w = World::new("camp", 3);
+    let mut ids = Vec::new();
+    for i in 0..5 {
+        ids.push(
+            w.add_entity(EntityDraft {
+                name: format!("Camp {i}"),
+                position: [i as f64 * 10.0, 0.0, 0.0],
+                components: vec![Component::Shape(Shape {
+                    kind: ShapeKind::Box,
+                    size: [2.0, 1.0, 2.0],
+                    color: [0.5; 3],
+                    solid: false,
+                })],
+                ..EntityDraft::default()
+            })
+            .unwrap(),
+        );
+        for c in 0..3 {
+            let tent = w
+                .add_entity(EntityDraft {
+                    name: format!("Tent {c}"),
+                    position: [i as f64 * 10.0 + c as f64, 0.0, 2.0],
+                    ..EntityDraft::default()
+                })
+                .unwrap();
+            w.entity_mut(tent).unwrap().parent = Some(ids[i as usize]);
+        }
+    }
+    assert_eq!(w.entity_count(), 20);
+    let first = ids[0];
+    let last = ids[4];
+    // Two camps by id, an id that is not there and one given twice: two camps and their six
+    // children go.
+    assert_eq!(w.remove_entities(&[first, first, last, EntityId(9999)]), 8);
+    assert_eq!(w.entity_count(), 12);
+    assert!(w.entity(first).is_none() && w.entity(last).is_none());
+    // Every child of the first camp is gone, the others keep theirs.
+    assert!(
+        w.entities()
+            .all(|e| e.parent.is_none_or(|p| w.entity(p).is_some()))
+    );
+    assert_eq!(w.children(ids[1]).len(), 3);
+    // The ids are never handed out again.
+    let fresh = w
+        .add_entity(EntityDraft {
+            name: "New".into(),
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    assert!(fresh.0 > 20);
 }

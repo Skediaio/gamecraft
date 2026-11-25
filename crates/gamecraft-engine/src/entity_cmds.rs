@@ -1,5 +1,5 @@
-//! Entities: `entity.add`, `entity.set`, `entity.remove`, `entity.set_component`,
-//! `entity.remove_component`, `entity.snap_to_ground`.
+//! Entities: `entity.add`, `entity.set`, `entity.remove`, `entity.remove_many`,
+//! `entity.set_component`, `entity.remove_component`, `entity.snap_to_ground`.
 
 use crate::error::{CommandError, bad, failed};
 use crate::params::{Params, component};
@@ -23,6 +23,10 @@ pub(crate) const SPECS: &[Registration] = &[
         handler: Handler::World(remove),
     },
     Registration {
+        spec: remove_many_spec,
+        handler: Handler::World(remove_many),
+    },
+    Registration {
         spec: set_component_spec,
         handler: Handler::World(set_component),
     },
@@ -37,6 +41,8 @@ pub(crate) const SPECS: &[Registration] = &[
 ];
 
 const ID_DOC: &str = "The entity: its id as a number, or its name as a string (any case).";
+/// Most entities `entity.remove_many` takes at once: as many as a world holds.
+const MAX_REMOVED: usize = gamecraft_world::limits::MAX_ENTITIES;
 
 fn position_param() -> crate::spec::ParamSpec {
     param(
@@ -238,6 +244,75 @@ fn remove(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
     let id = p.required_entity("id", &edit.world)?;
     edit.world.remove_entity(id);
     Ok(Value::Null)
+}
+
+fn remove_many_spec() -> CommandSpec {
+    spec(
+        "entity.remove_many",
+        "Remove Entities",
+        "Removes every entity of `ids`, and the entities that belong to them (a prefab's \
+         children); an id that does not exist is skipped, a name that does not exist is an \
+         error. One undo step, checked once, whatever the number: for a layer, a selection, a \
+         generated set, where entity.remove one by one walks the world once per entity.",
+        vec![
+            param(
+                "ids",
+                T::Array,
+                "[entity, ...]: each an entity's id as a number, or its name as a string; 1 to \
+             1000000 of them.",
+            )
+            .required(),
+        ],
+        "{removed}",
+        json!({"ids": [1, "Oak"]}),
+    )
+}
+
+fn remove_many(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
+    let items = p
+        .value("ids")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad("`ids` must be a list of entities: [3, 4, \"Gate\"]"))?;
+    if items.is_empty() || items.len() > MAX_REMOVED {
+        return Err(bad(format!(
+            "`ids` holds {} entities; give 1 to {MAX_REMOVED}",
+            items.len()
+        )));
+    }
+    let mut ids = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            Value::Number(n) => {
+                if let Some(id) = n.as_u64()
+                    && edit.world.entity(EntityId(id)).is_some()
+                {
+                    ids.push(EntityId(id));
+                }
+            }
+            Value::String(name) => {
+                ids.push(
+                    edit.world
+                        .find(name)
+                        .map_err(|e| bad(format!("`ids`: {e}")))?,
+                );
+            }
+            other => {
+                let kind = match other {
+                    Value::Null => "null",
+                    Value::Bool(_) => "a boolean",
+                    Value::Array(_) => "a list",
+                    Value::Object(_) => "an object",
+                    _ => "something else",
+                };
+                return Err(bad(format!(
+                    "`ids` must be a list of entities: each an id (a number) or a name (a \
+                     string), got {kind}"
+                )));
+            }
+        }
+    }
+    let removed = edit.world.remove_entities(&ids);
+    Ok(json!({"removed": removed}))
 }
 
 fn set_component_spec() -> CommandSpec {

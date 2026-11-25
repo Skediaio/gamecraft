@@ -478,11 +478,40 @@ impl Project {
         let mut own = self.own.clone();
         let saved_fields = world_fields(world)?;
 
-        // String ids for entities that have none yet.
+        // String ids for entities that have none yet. Taken are the ids the dependencies
+        // define (a removed one still gets its removal line) and those of the entities that
+        // exist, in the provenance and in the root pack's files as they are. The id of an
+        // entity of the root pack that is gone is free again: its line leaves the file and
+        // nothing refers to it, so a script that replaces a layer gives its entities the same
+        // ids as before (a bake of the same script writes the same files).
+        let root_keys: BTreeMap<&str, EntityId> = provenance
+            .entities
+            .iter()
+            .filter(|(_, s)| s.pack == self.root)
+            .map(|(id, s)| (s.key.as_str(), *id))
+            .collect();
+        let gone = |key: &str| {
+            root_keys
+                .get(key)
+                .is_some_and(|id| world.entity(*id).is_none())
+        };
         let mut used: BTreeSet<String> = self.base.entities.keys().cloned().collect();
-        used.extend(provenance.entities.values().map(|s| s.key.clone()));
+        used.extend(
+            provenance
+                .entities
+                .iter()
+                .filter(|(id, _)| world.entity(**id).is_some())
+                .map(|(_, s)| s.key.clone()),
+        );
         for layer in own.layers.values() {
-            used.extend(layer.entries.iter().map(|e| e.key().to_string()));
+            used.extend(
+                layer
+                    .entries
+                    .iter()
+                    .map(|e| e.key())
+                    .filter(|key| !gone(key))
+                    .map(str::to_string),
+            );
         }
         let mut numbered: BTreeMap<String, u64> = BTreeMap::new();
         for e in world.entities() {

@@ -17,7 +17,7 @@ lists the subcommands, `gamecraft-cli <subcommand> --help` explains one.
 | `play` | Plays a world file (or a project) for a while and prints the state hash |
 | `replay` | Runs a journal of a play session again and compares its state hashes |
 | `new` | Writes an empty world file |
-| `project` | Makes, opens, describes, exports and queries a project folder (packs, layers, mods) |
+| `project` | Makes, opens, describes, exports and queries a project folder (packs, layers, mods), and bakes a script into one as cells |
 | `serve` | The JSON-lines protocol on stdin and stdout |
 | `mcp` | The MCP server on stdin and stdout |
 
@@ -168,6 +168,36 @@ gamecraft-cli project query examples/skirmish/project \
     "SELECT e.name, e.x, e.z FROM entities e JOIN entity_tags t ON t.entity_id = e.id
      WHERE t.tag = 'enemy' AND (e.x - 4) * (e.x - 4) + (e.z + 54) * (e.z + 54) <= 100 * 100"
 ```
+
+A **generated** world (an importer's output, a script of thousands of commands) is kept in
+git as the cells `project bake` writes, never as the script: see
+[`generated-worlds.md`](generated-worlds.md).
+
+```sh gamecraft-example
+mkdir -p build
+cat > build/gen.json <<'EOF'
+[["terrain.set", {"kind": "flat", "size_m": 256, "cell_m": 4}],
+ ["entity.add", {"name": "Well", "layer": "main", "position": [0, 0, 0],
+   "components": [{"type": "shape", "kind": "cylinder", "size": [2, 1, 2], "color": [0.5, 0.5, 0.5]}]}]]
+EOF
+
+gamecraft-cli project bake build/gen.json --into village --id village --cell-size-m 128
+
+gamecraft-cli project bake build/gen.json --into village
+```
+
+`project bake SCRIPT --into DIR [--cell-size-m M] [--id ID --name NAME --world W]` runs the
+script (the JSON list of steps `run --script` takes, read one step at a time, so a hundred
+thousand steps cost no more than one) and saves the result as the project DIR in one step, its
+layers in cells of M metres (16 to 16384, 512 by default; 0 for one file per layer). A project
+that does not exist yet needs `--id` and is written once every step succeeded; in an existing
+one the bake replaces only what the script owns (the layers its steps add entities to, and the
+terrain edits it added), so a layer edited by hand survives. The same script gives the same
+files, so a re-run shows only real changes in `git diff`; a failing step names its line, the
+command and what is wrong, and writes nothing. Progress goes to stderr every 5 000 steps; the
+answer on stdout says the steps, the entities, the layers, the files written and the seconds.
+The folder that holds the project is the read root and the write root of the commands the
+script runs.
 
 `run`, `play`, `info` and `render` take a project folder wherever they take a `.gamecraft` file
 (`gamecraft-cli play examples/skirmish/project --script examples/skirmish/playthrough.json`); the

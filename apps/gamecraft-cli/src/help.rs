@@ -160,6 +160,8 @@ Usage: gamecraft-cli project new DIR --id ID [--name NAME] [--world W] [--from F
        gamecraft-cli project info DIR [--world W]
        gamecraft-cli project export DIR --out FILE
        gamecraft-cli project query DIR \"SELECT ...\" [--limit N]
+       gamecraft-cli project bake SCRIPT --into DIR [--cell-size-m M] [--id ID --name NAME]
+                                                           [--world W]
 
 A project is a folder of text files: pack.json, prefabs/<id>.json and
 worlds/<world>/{world.json, layers/<layer>.json}, layered over the packs it depends on
@@ -175,4 +177,11 @@ Actions:
   info     Print project.info: packs, worlds, layers with their entity counts, prefabs, warnings
   export   Write the project's world as one .gamecraft file
   query    Run one read-only SQL SELECT on the project's index (kept in DIR/.gamecraft-index):
-           tables entities, entity_tags, entity_components, prefabs; at most 1000 rows";
+           tables entities, entity_tags, entity_components, prefabs; at most 1000 rows
+  bake     Run the script SCRIPT (the JSON list of steps run --script takes, read one step at a
+           time) and save the result as the project DIR in one step, its layers in cells of M
+           metres (default 512). A new project needs --id and is written once every step
+           succeeded; in an existing one the bake replaces only what the script owns (the layers
+           its steps add entities to and the terrain edits it added, recorded in
+           worlds/<world>/bake.json), so hand edits in other layers survive. The same script
+           gives the same files; a failing step names its line and writes nothing.";

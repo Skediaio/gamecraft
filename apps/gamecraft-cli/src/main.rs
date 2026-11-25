@@ -23,6 +23,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 /// Why a subcommand stopped.
+#[derive(Debug)]
 pub enum CliError {
     /// A mistake in the command line: exit code 2.
     Usage(String),
