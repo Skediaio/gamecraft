@@ -11,6 +11,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# The content hash of a texture of a pack's texture store (`textures.rs`).
+gamecraft-math = { workspace = true }
 gamecraft-world = { workspace = true }
 gltf = { workspace = true }
 serde = { workspace = true }

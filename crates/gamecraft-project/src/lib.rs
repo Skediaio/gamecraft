@@ -25,7 +25,9 @@
 //! A pack's **assets** live under `assets/`, each with a licence record beside it
 //! ([`assets`]: CC0 or CC-BY only); [`Project::assets`] gives the assets of all packs, a later
 //! pack's asset replacing an earlier one's of the same path. [`model::inspect`] reads a glTF
-//! model's triangle count and bounding box from its bytes.
+//! model's triangle count and bounding box from its bytes, and [`model::resolve_uri`] names the
+//! file a model refers to inside `assets/`. The images the models share are the pack's
+//! **texture store** ([`textures`]): an import extracts them into `assets/textures/<hash>.<ext>`.
 //!
 //! Pure: no files, no clock. The host reads and writes the files (`gamecraft-automation`).
 
@@ -42,6 +44,7 @@ mod project;
 mod resolve;
 mod terrain;
 mod text;
+pub mod textures;
 
 pub use assets::{
     ASSETS_DIR, AssetRecord, License, PackAsset, RECORD_SUFFIX, check_assets, credits, record_path,
@@ -62,3 +65,4 @@ pub use project::{
     manifests,
 };
 pub use terrain::TERRAIN_EDITS_FORMAT;
+pub use textures::{TEXTURES_DIR, content_hash, is_texture};

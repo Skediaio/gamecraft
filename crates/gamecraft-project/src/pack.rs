@@ -22,8 +22,9 @@ pub struct PackSource {
     pub location: String,
     /// Path to text: `pack.json`, `prefabs/<id>.json`, `worlds/<world>/world.json`,
     /// `worlds/<world>/layers/<layer>.json`, `worlds/<world>/terrain/edits.json`. Other paths
-    /// are not read. Also the licence records (`assets/**.license.json`) and the `.gltf`
-    /// documents under `assets/`, which [`crate::check_assets`] reads.
+    /// are not read. Also the licence records (`assets/**.license.json`) and the glTF documents
+    /// of the models under `assets/` (a `.gltf` as it is, a `.glb`'s JSON chunk), which
+    /// [`crate::check_assets`] reads.
     pub files: BTreeMap<String, String>,
     /// Every file under `assets/` (pack-relative path, `assets/...`) with its size in bytes:
     /// the assets, the files `.gltf` models refer to and the licence records.

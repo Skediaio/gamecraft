@@ -6,7 +6,7 @@
 //! file gives, so it is the same bits on every platform: the simulation's state hash depends on
 //! it.
 
-use gamecraft_world::ModelBounds;
+use gamecraft_world::{ModelBounds, is_asset_path};
 
 /// Deepest chain of nodes followed below a scene's roots.
 pub const MAX_NODE_DEPTH: usize = 64;
@@ -31,8 +31,10 @@ pub struct ModelSummary {
 }
 
 /// The files a glTF document refers to by relative URI (its buffers and images), in order, as
-/// paths relative to the document's folder; `data:` URIs are left out. An error when the text
-/// is not a glTF document or a URI is absolute, has a scheme, or leaves the folder.
+/// the document writes them: paths relative to the document's folder, which may climb with `..`
+/// (a model refers to the pack's texture store that way; [`resolve_uri`] turns them into paths
+/// inside `assets/`). `data:` URIs are left out. An error when the text is not a glTF document or
+/// a URI is absolute, has a scheme, or is not a plain relative path.
 pub fn references(gltf_json: &[u8]) -> Result<Vec<String>, String> {
     let root = gltf::json::Root::from_slice(gltf_json)
         .map_err(|e| format!("not a valid glTF document: {e}"))?;
@@ -54,12 +56,13 @@ pub fn references(gltf_json: &[u8]) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// A relative URI as a path: percent escapes decoded, no scheme, no `..`, no leading `/`.
+/// A relative URI as a path: percent escapes decoded, no scheme, no leading `/`, no `\`, no
+/// empty part. `.` and `..` parts are kept for [`resolve_uri`] to resolve.
 pub fn decode_uri(uri: &str) -> Result<String, String> {
     let bad = || {
         format!(
             "the URI {uri:?} is not a plain relative path; a model refers to files beside it \
-             (\"crate.bin\", \"textures/wood.png\")"
+             (\"crate.bin\", \"textures/wood.png\", \"../textures/wood.png\")"
         )
     };
     let mut bytes = Vec::with_capacity(uri.len());
@@ -78,10 +81,40 @@ pub fn decode_uri(uri: &str) -> Result<String, String> {
         && !path.contains(':')
         && !path.starts_with('/')
         && !path.contains('\\')
-        && path
-            .split('/')
-            .all(|p| !p.is_empty() && p != "." && p != "..");
+        && path.split('/').all(|p| !p.is_empty());
     if plain { Ok(path) } else { Err(bad()) }
+}
+
+/// The file a glTF document in the folder `folder` of a pack's `assets/` (`models/`, empty at
+/// the top) names by `uri`: the URI decoded, `.` and `..` parts resolved against the folder, as a
+/// plain path inside `assets/` (`models/crate.glb` + `../textures/0abc.png` gives
+/// `textures/0abc.png`). An error, never a path, for a URI that is not plain or that climbs out
+/// of `assets/`.
+pub fn resolve_uri(folder: &str, uri: &str) -> Result<String, String> {
+    let path = decode_uri(uri)?;
+    let mut parts: Vec<&str> = Vec::new();
+    for part in folder.split('/').chain(path.split('/')) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    return Err(format!(
+                        "the URI {uri:?} of a model in `{folder}` leads outside the pack's assets/ \
+                         folder; a model refers to files inside it"
+                    ));
+                }
+            }
+            part => parts.push(part),
+        }
+    }
+    let inside = parts.join("/");
+    if !is_asset_path(&inside) {
+        return Err(format!(
+            "the URI {uri:?} of a model in `{folder}` does not name a plain file inside assets/ \
+             (ASCII letters, digits, `-`, `_`, `.` and `/`); rename the file"
+        ));
+    }
+    Ok(inside)
 }
 
 /// The folder part of an asset path (`models/crate.gltf` -> `models/`), empty at the top.
@@ -223,6 +256,55 @@ pub fn inspect(
         materials: doc.materials().len(),
         images: doc.images().len(),
     })
+}
+
+/// The URI a model in the folder `folder` of a pack's `assets/` writes for the file `path`
+/// inside `assets/`: `../` for every folder of its own, then the path (`models/` +
+/// `textures/0abc.png` gives `../textures/0abc.png`). [`resolve_uri`] turns it back into `path`.
+pub fn relative_uri(folder: &str, path: &str) -> String {
+    let mut out = String::with_capacity(folder.len() + path.len() + 3);
+    for _ in 0..folder.matches('/').count() {
+        out.push_str("../");
+    }
+    out.push_str(path);
+    out
+}
+
+/// The length of the JSON chunk of a GLB file from its first 20 bytes and the file's length:
+/// a reader reads only that chunk ([`split_glb`] reads the whole file). The same checks as
+/// [`split_glb`] on the header, and the chunk must lie inside the file.
+pub fn glb_json_len(head: &[u8], file_len: u64) -> Result<usize, String> {
+    let word = |at: usize| -> Option<u32> {
+        let b = head.get(at..at.checked_add(4)?)?;
+        Some(u32::from_le_bytes([
+            *b.first()?,
+            *b.get(1)?,
+            *b.get(2)?,
+            *b.get(3)?,
+        ]))
+    };
+    if head.get(..4) != Some(b"glTF".as_slice()) {
+        return Err("the file is not a GLB model (it does not start with glTF)".into());
+    }
+    if word(4) != Some(2) {
+        return Err("the GLB file is not glTF version 2".into());
+    }
+    let total = word(8).ok_or("the GLB file is cut short")? as u64;
+    if total > file_len {
+        return Err("the GLB file is cut short or its length is wrong".into());
+    }
+    let json_len = word(12).ok_or("the GLB file is cut short")? as u64;
+    if head.get(16..20) != Some(b"JSON".as_slice()) {
+        return Err("the GLB file's first chunk is not JSON".into());
+    }
+    let end = 20u64
+        .checked_add(json_len)
+        .ok_or("the GLB file is cut short or its lengths are wrong")?;
+    if end > total {
+        return Err("the GLB file is cut short or its lengths are wrong".into());
+    }
+    usize::try_from(json_len)
+        .map_err(|_| "the GLB file's JSON chunk is too large for this platform".into())
 }
 
 /// The JSON chunk and the binary chunk of a GLB file, or the whole of a `.gltf` document (no
@@ -420,19 +502,67 @@ mod tests {
     fn uris_are_plain_relative_paths() {
         assert_eq!(decode_uri("a%20b.bin").unwrap(), "a b.bin");
         assert_eq!(decode_uri("tex/wood.png").unwrap(), "tex/wood.png");
-        for bad in [
-            "../x.bin",
-            "/x.bin",
-            "http://x/y.bin",
-            "a//b",
-            "%zz",
-            "%2",
-            "c:\\x",
-        ] {
+        for bad in ["/x.bin", "http://x/y.bin", "a//b", "%zz", "%2", "c:\\x", ""] {
             assert!(decode_uri(bad).is_err(), "{bad}");
         }
+        // `.` and `..` are kept for `resolve_uri`.
+        assert_eq!(decode_uri("../x.bin").unwrap(), "../x.bin");
         assert_eq!(folder_of("models/a.gltf"), "models/");
         assert_eq!(folder_of("a.gltf"), "");
+    }
+
+    #[test]
+    fn uris_resolve_against_the_model_s_folder_and_stay_inside_assets() {
+        assert_eq!(
+            resolve_uri("models/", "crate.bin").unwrap(),
+            "models/crate.bin"
+        );
+        assert_eq!(
+            resolve_uri("models/", "../textures/0abc.png").unwrap(),
+            "textures/0abc.png"
+        );
+        assert_eq!(
+            resolve_uri("models/houses/", "../../textures/0abc.png").unwrap(),
+            "textures/0abc.png"
+        );
+        assert_eq!(
+            resolve_uri("", "textures/0abc.png").unwrap(),
+            "textures/0abc.png"
+        );
+        assert_eq!(
+            resolve_uri("models/", "a/../b/c.bin").unwrap(),
+            "models/b/c.bin"
+        );
+        for (folder, uri) in [
+            ("", "../x.png"),
+            ("models/", "../../x.png"),
+            ("models/", ".."),
+            ("models/", "/x.png"),
+            ("models/", "my crate.bin"),
+        ] {
+            assert!(resolve_uri(folder, uri).is_err(), "{folder} {uri}");
+        }
+        // The URI a model writes for a texture of the store comes back as its path.
+        for (folder, path) in [
+            ("models/", "textures/0abc.png"),
+            ("models/houses/", "textures/0abc.jpg"),
+            ("", "textures/0abc.jpg"),
+        ] {
+            assert_eq!(
+                resolve_uri(folder, &relative_uri(folder, path)).unwrap(),
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn the_json_chunk_length_is_read_from_the_header() {
+        let crate_: &[u8] = include_bytes!("../../../examples/assets-demo/assets/models/crate.glb");
+        let head = &crate_[..20];
+        assert_eq!(glb_json_len(head, crate_.len() as u64).unwrap(), 1240);
+        assert!(glb_json_len(head, 100).is_err());
+        assert!(glb_json_len(&crate_[..19], crate_.len() as u64).is_err());
+        assert!(glb_json_len(b"not a glb file at all!", 30).is_err());
     }
 
     #[test]

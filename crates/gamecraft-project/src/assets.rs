@@ -4,13 +4,16 @@
 //! An asset is a file under the pack's `assets/` folder. Each one has a record beside it,
 //! `assets/<path>.license.json`: `{"license": "CC0-1.0" | "CC-BY-4.0", "author", "source_url",
 //! "title"?, "changes"?}`. The files a `.gltf` model refers to (its buffers and images) belong to
-//! the model and are covered by its record. Loading a pack refuses an asset without a record, a
-//! record with another licence, a record whose file does not exist and an asset path that is
-//! not a plain path, each with a sentence that names the file.
+//! the model and are covered by its record, except the textures of the pack's texture store
+//! (`assets/textures/`, [`crate::textures`]): those are assets of their own with a record each.
+//! Loading a pack refuses an asset without a record, a record with another licence, a record
+//! whose file does not exist, an asset path that is not a plain path and a model that refers to
+//! a file that is missing, each with a sentence that names the file.
 
 use crate::ProjectError;
-use crate::model::{folder_of, references};
+use crate::model::{folder_of, references, resolve_uri};
 use crate::pack::PackSource;
+use crate::textures::is_texture;
 use gamecraft_world::{is_asset_path, is_model_path};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -195,12 +198,24 @@ impl PackAsset {
     pub fn is_model(&self) -> bool {
         is_model_path(&self.path)
     }
+
+    /// `model`, `texture` (a file of the pack's texture store) or `file`, as listings say it.
+    pub fn kind(&self) -> &'static str {
+        if self.is_model() {
+            "model"
+        } else if is_texture(&self.path) {
+            "texture"
+        } else {
+            "file"
+        }
+    }
 }
 
 /// The assets of a pack, checked: every file under `assets/` is an asset with a record or a
-/// file a `.gltf` model refers to, every record has its file, every record is valid. Sorted by
-/// path. `source.assets` lists the files with their sizes; the records' and the `.gltf`
-/// documents' texts are in `source.files`.
+/// file a model refers to, every record has its file, every record is valid, every file a model
+/// refers to exists. Sorted by path. `source.assets` lists the files with their sizes; the
+/// records' and the model documents' texts (a `.gltf` as it is, a `.glb`'s JSON chunk) are in
+/// `source.files`.
 pub fn check_assets(source: &PackSource) -> Result<Vec<PackAsset>, ProjectError> {
     let file = |path: &str| format!("{}/{path}", source.location);
     let prefix = format!("{ASSETS_DIR}/");
@@ -226,28 +241,34 @@ pub fn check_assets(source: &PackSource) -> Result<Vec<PackAsset>, ProjectError>
             plain.insert(inside.to_string(), *size);
         }
     }
-    // The files the .gltf models refer to belong to them.
+    // The files the model documents refer to belong to the models (their paths inside assets/,
+    // `..` resolved), unless they are textures of the store: those have records of their own.
     let mut parts: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut covered = BTreeSet::new();
-    for asset in plain.keys().filter(|p| p.ends_with(".gltf")) {
+    let mut referred = BTreeSet::new();
+    for asset in plain.keys().filter(|p| is_model_path(p)) {
         let path = format!("{prefix}{asset}");
         let text = source.files.get(&path).ok_or_else(|| {
-            ProjectError::in_file(&file(&path), "was not read; the host reads every .gltf")
+            ProjectError::in_file(
+                &file(&path),
+                "was not read; the host reads every model document (a .gltf's text, a .glb's \
+                 JSON chunk)",
+            )
         })?;
         let refs =
             references(text.as_bytes()).map_err(|e| ProjectError::in_file(&file(&path), e))?;
         let folder = folder_of(asset);
         let mut list = Vec::new();
         for r in refs {
-            let target = format!("{folder}{r}");
-            if !plain.contains_key(&target) {
+            let inside =
+                resolve_uri(folder, &r).map_err(|e| ProjectError::in_file(&file(&path), e))?;
+            if !plain.contains_key(&inside) {
                 return Err(ProjectError::in_file(
                     &file(&path),
-                    format!("refers to `{prefix}{target}`, which does not exist in the pack"),
+                    format!("refers to `{prefix}{inside}`, which does not exist in the pack"),
                 ));
             }
-            covered.insert(target.clone());
-            list.push(target);
+            referred.insert(inside.clone());
+            list.push(inside);
         }
         parts.insert(asset.clone(), list);
     }
@@ -266,13 +287,18 @@ pub fn check_assets(source: &PackSource) -> Result<Vec<PackAsset>, ProjectError>
     for (asset, size) in &plain {
         let record_file = record_path(asset);
         let Some(text) = source.files.get(&record_file) else {
-            if covered.contains(asset) && !is_model_path(asset) {
+            if referred.contains(asset) && !is_model_path(asset) && !is_texture(asset) {
                 continue;
             }
+            let what = if is_texture(asset) {
+                "a texture of the pack's texture store (textures/) has a record of its own"
+            } else {
+                "every asset needs"
+            };
             return Err(ProjectError::in_file(
                 &file(&format!("{prefix}{asset}")),
                 format!(
-                    "has no licence record; every asset needs `{record_file}` with \
+                    "has no licence record; {what} `{record_file}` with \
                      {{\"license\": \"CC0-1.0\" | \"CC-BY-4.0\", \"author\": ..., \
                      \"source_url\": ...}} (asset.import writes it)"
                 ),
