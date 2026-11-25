@@ -18,7 +18,7 @@ use crate::params::{Params, component};
 use crate::session::{Edit, Handler, Registration, Session};
 use crate::span::Measured;
 use crate::spec::{CommandSpec, ParamType as T, kind_of, nearest, param, spec};
-use gamecraft_world::{Component, Prefab, PrefabChild, Spawn};
+use gamecraft_world::{Component, Prefab, PrefabChild, Scale, Spawn};
 use serde_json::{Map, Value, json};
 
 /// The commands of this module.
@@ -344,13 +344,7 @@ fn spawn_spec() -> CommandSpec {
             )
             .unit("deg")
             .default(json!(0)),
-            param(
-                "scale",
-                T::Number,
-                "Uniform scale of the instance, 0.001 to 1000. Its children follow it: each \
-                 stands at its offset times the scale, at that scale.",
-            )
-            .default(json!(1)),
+            param("scale", T::Scale, &crate::entity_cmds::scale_param_doc()).default(json!(1)),
             span_param(),
             param(
                 "name",
@@ -401,7 +395,7 @@ fn spawn(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
             placement(edit, &p)?
                 .ok_or_else(|| bad("missing `position` or `at` (or `span`, a deck between two ground points); give one of them"))?,
             p.f64("rotation_y_deg")?.unwrap_or(0.0),
-            crate::entity_cmds::scale_of(&p)?.unwrap_or(1.0),
+            crate::entity_cmds::scale_of(&p)?.unwrap_or(Scale::ONE),
             None,
         )
     };

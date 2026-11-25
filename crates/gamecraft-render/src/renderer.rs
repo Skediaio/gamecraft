@@ -16,8 +16,8 @@ use gamecraft_math::{DQuat, DVec3, deg_to_rad};
 use gamecraft_project::lod::{Levels, LodDistances, LodOverride, follows_scale};
 use gamecraft_project::model::resolve_uri;
 use gamecraft_world::{
-    Character, Entity, EntityId, Environment, HeightField, Model, Plant, Road, Shape, ShapeKind,
-    Terrain, TerrainLayer, World,
+    Character, Entity, EntityId, Environment, HeightField, Model, Plant, Road, Scale, Shape,
+    ShapeKind, Terrain, TerrainLayer, World,
 };
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
@@ -199,7 +199,7 @@ impl HlodPlan {
                     draw_m: m.draw_distance_m,
                     coverage: None,
                 };
-                let scale = scale_bucket(m.scale * e.scale);
+                let scale = scale_bucket(m.scale * e.scale.largest());
                 let key = (
                     m.asset.clone(),
                     scale.to_bits(),
@@ -408,7 +408,7 @@ fn character_pose(e: &Entity, body: Body) -> Mat4 {
     let (scale, radius_m) = match body {
         Body::Capsule { radius_m } => (1.0, radius_m),
         Body::Model { size } => (
-            size * e.model().map_or(1.0, |m| m.scale) * e.scale,
+            size * e.model().map_or(1.0, |m| m.scale) * e.scale.middle(),
             e.character().map_or(0.0, |c| c.radius_m),
         ),
     };
@@ -426,7 +426,7 @@ fn character_pose(e: &Entity, body: Body) -> Mat4 {
 struct DrawnEntity {
     id: EntityId,
     pose: Option<([f64; 3], f64)>,
-    scale: f64,
+    scale: Scale,
     shape: Option<Shape>,
     plant: Option<Plant>,
     character: Option<Character>,
@@ -1774,9 +1774,28 @@ fn border_mean(h: &HeightField) -> f64 {
     if n == 0 { 0.0 } else { sum / n as f64 }
 }
 
+/// What a shape draws as along the entity's own axes: a box by its size times the entity's
+/// scale, axis by axis; a sphere or a cylinder, which has one width, by the middle of the three
+/// scales for its width (and the y scale for a cylinder's height), as the simulation collides
+/// with it.
+pub(crate) fn shape_size(e: &Entity, shape: &Shape) -> [f64; 3] {
+    let round = e.scale.middle() * shape.size[0];
+    match shape.kind {
+        ShapeKind::Box => e.scale.times(shape.size),
+        ShapeKind::Cylinder => [round, shape.size[1] * e.scale.y, round],
+        ShapeKind::Sphere => [round; 3],
+    }
+}
+
+/// What a model draws as along the entity's own axes: the model's own scale times the entity's,
+/// axis by axis.
+pub(crate) fn model_size(e: &Entity, model: &Model) -> [f64; 3] {
+    e.scale.times([model.scale; 3])
+}
+
 /// A model-to-world transform: scale, then a turn of `yaw_deg` about +Y, then a move to the
 /// base `position`.
-fn placement(position: [f64; 3], yaw_deg: f64, scale: [f64; 3]) -> Mat4 {
+pub(crate) fn placement(position: [f64; 3], yaw_deg: f64, scale: [f64; 3]) -> Mat4 {
     glam::DMat4::from_scale_rotation_translation(
         DVec3::from_array(scale),
         DQuat::from_rotation_y(deg_to_rad(yaw_deg)),
@@ -1951,11 +1970,9 @@ impl Scene<'_> {
                         },
                     )
                 });
-            group.1.push(placement(
-                e.position,
-                e.rotation_y_deg,
-                s.size.map(|v| v * e.scale),
-            ));
+            group
+                .1
+                .push(placement(e.position, e.rotation_y_deg, shape_size(e, s)));
         }
         for ((_, color, _), (kind, instances, until)) in groups {
             let material = self.color(color.map(f32::from_bits));
@@ -2021,11 +2038,7 @@ impl Scene<'_> {
                         ShapeKind::Sphere => mesh::unit_sphere(),
                         ShapeKind::Cylinder => mesh::unit_cylinder(),
                     };
-                    let scaled = placement(
-                        e.position,
-                        e.rotation_y_deg,
-                        shape.size.map(|v| v * e.scale),
-                    );
+                    let scaled = placement(e.position, e.rotation_y_deg, shape_size(e, shape));
                     over |= !colours
                         .entry(shape.color.map(f32::to_bits))
                         .or_default()
@@ -2033,8 +2046,7 @@ impl Scene<'_> {
                 } else if let Some(m) = e.model()
                     && let Some(Ok(model)) = resident.get(&m.asset)
                 {
-                    let s = m.scale * e.scale;
-                    let placed = placement(e.position, e.rotation_y_deg, [s; 3]);
+                    let placed = placement(e.position, e.rotation_y_deg, model_size(e, m));
                     for part in &model.coarsest {
                         let at = match materials.iter().position(|(id, _)| *id == part.material) {
                             Some(at) => at,
@@ -2176,8 +2188,8 @@ impl Scene<'_> {
                         .iter()
                         .filter(|e| e.character().is_none())
                         .map(|e| {
-                            let s = e.model().map_or(1.0, |m| m.scale) * e.scale;
-                            placement(e.position, e.rotation_y_deg, [MISSING_MODEL_SIZE_M * s; 3])
+                            let size = e.model().map_or(1.0, |m| MISSING_MODEL_SIZE_M * m.scale);
+                            placement(e.position, e.rotation_y_deg, e.scale.times([size; 3]))
                         }),
                 );
                 missing_characters
@@ -2200,7 +2212,7 @@ impl Scene<'_> {
                     draw_m: model.draw_distance_m,
                     coverage: None,
                 };
-                let scale = model.scale * e.scale;
+                let scale = model.scale * e.scale.largest();
                 let key = ModelKey {
                     lod_distances_m: component
                         .switch_m
@@ -2290,8 +2302,8 @@ impl Scene<'_> {
                     let instances: Vec<Mat4> = statics
                         .iter()
                         .filter_map(|e| {
-                            let s = e.model()?.scale * e.scale;
-                            Some(placement(e.position, e.rotation_y_deg, [s; 3]))
+                            let m = e.model()?;
+                            Some(placement(e.position, e.rotation_y_deg, model_size(e, m)))
                         })
                         .collect();
                     self.add_model_item(
@@ -2446,7 +2458,11 @@ impl Scene<'_> {
             groups
                 .entry((p.species.clone(), p.seed, p.growth.to_bits()))
                 .or_default()
-                .push(placement(e.position, e.rotation_y_deg, [e.scale; 3]));
+                .push(placement(
+                    e.position,
+                    e.rotation_y_deg,
+                    [e.scale.middle(); 3],
+                ));
         }
         let mut textures: BTreeMap<String, Option<PlantTextures>> = BTreeMap::new();
         let mut materials: BTreeMap<(String, PartKind, [u32; 3]), vc::MaterialId> = BTreeMap::new();
@@ -2607,7 +2623,7 @@ mod tests {
         let id = world
             .add_entity(EntityDraft {
                 name: "Subject".into(),
-                scale: 2.0,
+                scale: Scale::uniform(2.0),
                 components,
                 ..EntityDraft::default()
             })

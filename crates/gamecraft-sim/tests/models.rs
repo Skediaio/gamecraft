@@ -38,7 +38,7 @@ fn with_model(
             name: "Crate".into(),
             position: at,
             rotation_y_deg: yaw,
-            scale: 1.0,
+            scale: gamecraft_world::Scale::ONE,
             components: vec![Component::Model(Model {
                 asset: "models/crate.glb".into(),
                 scale: 2.0,

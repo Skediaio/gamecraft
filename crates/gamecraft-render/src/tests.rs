@@ -246,6 +246,100 @@ fn shape_meshes_are_closed_outward_and_unit_sized_on_the_ground() {
 }
 
 #[test]
+fn a_shape_draws_to_its_scaled_size_on_every_axis() {
+    use crate::hlod::Merged;
+    use crate::renderer::{model_size, placement, shape_size};
+    use gamecraft_world::{Model, Scale};
+    let close = |got: [f64; 3], want: [f64; 3], what: &str| {
+        assert!(
+            got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-9),
+            "{what}: {got:?} is not {want:?}"
+        );
+    };
+    let mut world = World::new("s", 1);
+    let add = |world: &mut World, kind: ShapeKind, size: [f64; 3], scale: Scale| {
+        world
+            .add_entity(EntityDraft {
+                position: [10.0, 0.0, 5.0],
+                rotation_y_deg: 90.0,
+                scale,
+                components: vec![Component::Shape(Shape {
+                    kind,
+                    size,
+                    ..Shape::default()
+                })],
+                ..EntityDraft::default()
+            })
+            .unwrap()
+    };
+    // A box takes the scale along each of its own axes.
+    let id = add(
+        &mut world,
+        ShapeKind::Box,
+        [2.0, 1.0, 10.0],
+        Scale::per_axis(3.0, 2.0, 0.5),
+    );
+    let e = world.entity(id).unwrap();
+    close(shape_size(e, e.shape().unwrap()), [6.0, 2.0, 5.0], "box");
+    // A cylinder and a sphere have one width: the middle of the three scales.
+    let id = add(
+        &mut world,
+        ShapeKind::Cylinder,
+        [1.0, 2.0, 1.0],
+        Scale::per_axis(1.0, 3.0, 10.0),
+    );
+    let e = world.entity(id).unwrap();
+    close(
+        shape_size(e, e.shape().unwrap()),
+        [3.0, 6.0, 3.0],
+        "cylinder",
+    );
+    let id = add(
+        &mut world,
+        ShapeKind::Sphere,
+        [2.0, 2.0, 2.0],
+        Scale::per_axis(1.0, 1.0, 10.0),
+    );
+    let e = world.entity(id).unwrap();
+    close(shape_size(e, e.shape().unwrap()), [2.0, 2.0, 2.0], "sphere");
+    // A model takes it along each axis, with the model's own scale.
+    let id = world
+        .add_entity(EntityDraft {
+            position: [0.0; 3],
+            scale: Scale::per_axis(2.0, 1.0, 4.0),
+            components: vec![Component::Model(Model {
+                scale: 0.5,
+                ..Model::of("models/crate.glb")
+            })],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    let e = world.entity(id).unwrap();
+    close(model_size(e, e.model().unwrap()), [1.0, 0.5, 2.0], "model");
+    // And that is where the vertices go: the box above, turned 90 degrees at (10, 0, 5),
+    // covers 5 m along x, 2 m in height and 6 m along z (inside the merged copy's inset).
+    let e = world.entities().next().unwrap();
+    let m = placement(
+        e.position,
+        e.rotation_y_deg,
+        shape_size(e, e.shape().unwrap()),
+    );
+    let mut merged = Merged::default();
+    assert!(merged.push_mesh(&mesh::unit_box(), m));
+    let (lo, hi) = merged.bounds().unwrap();
+    let within = |got: f32, want: f64| (f64::from(got) - want).abs() <= 0.025;
+    assert!(
+        within(lo.x, 7.5) && within(hi.x, 12.5) && lo.x > 7.5 && hi.x < 12.5,
+        "{lo:?} {hi:?}"
+    );
+    assert!(within(lo.y, 0.0) && within(hi.y, 2.0), "{lo:?} {hi:?}");
+    assert!(
+        within(lo.z, 2.0) && within(hi.z, 8.0) && lo.z > 2.0 && hi.z < 8.0,
+        "{lo:?} {hi:?}"
+    );
+}
+
+#[test]
 fn a_character_is_as_tall_as_its_component_and_faces_north() {
     let c = Character::default();
     let m = mesh::character(&c);
@@ -769,7 +863,7 @@ fn every_light_that_is_on_becomes_a_spot_at_a_sensible_height() {
     // On a box: over its top (base 1, 3 m tall).
     assert_eq!(beacon.position[0], 0.0);
     assert_eq!(beacon.position[2], 5.0);
-    let top = 1.0 + 3.0 * world.entities().nth(1).unwrap().scale;
+    let top = 1.0 + 3.0 * world.entities().nth(1).unwrap().scale.y;
     assert!(
         beacon.position[1] > top && beacon.position[1] < top + 0.5,
         "{:?} over the top {top}",

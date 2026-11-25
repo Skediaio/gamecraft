@@ -288,11 +288,14 @@ pub fn ray_capsule(
     finish(t, normal)
 }
 
-/// A ray against one entity's shape: sized by `size * scale`, standing on the entity's
-/// position, a box turned by its `rotation_y_deg`.
+/// A ray against one entity's shape: sized by `size` times the entity's scale along its own
+/// axes, standing on the entity's position, a box turned by its `rotation_y_deg`. A sphere or a
+/// cylinder, which has one width, takes the middle of the three scales for it (and the y scale
+/// for a cylinder's height).
 pub fn ray_shape(origin: [f64; 3], dir: [f64; 3], e: &Entity, shape: &Shape) -> Option<RayHit> {
     let [px, py, pz] = e.position;
-    let [sx, sy, sz] = shape.size.map(|v| v * e.scale);
+    let [sx, sy, sz] = e.scale.times(shape.size);
+    let round = e.scale.middle() * shape.size[0];
     match shape.kind {
         ShapeKind::Box => ray_box(
             origin,
@@ -301,8 +304,8 @@ pub fn ray_shape(origin: [f64; 3], dir: [f64; 3], e: &Entity, shape: &Shape) -> 
             [sx / 2.0, sy / 2.0, sz / 2.0],
             e.rotation_y_deg,
         ),
-        ShapeKind::Sphere => ray_sphere(origin, dir, [px, py + sy / 2.0, pz], sx / 2.0),
-        ShapeKind::Cylinder => ray_cylinder(origin, dir, e.position, sx / 2.0, sy),
+        ShapeKind::Sphere => ray_sphere(origin, dir, [px, py + sy / 2.0, pz], round / 2.0),
+        ShapeKind::Cylinder => ray_cylinder(origin, dir, e.position, round / 2.0, sy),
     }
 }
 

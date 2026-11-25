@@ -28,6 +28,8 @@ pub enum ParamType {
     Point3,
     /// `[r, g, b]`, linear, 0 to 1.
     Color,
+    /// An entity's scale: one number, or `[x, y, z]` for one along each of its own axes.
+    Scale,
     /// An entity: its id as a number, or its name as a string (matched without regard to case).
     Entity,
     /// A JSON object.
@@ -49,6 +51,7 @@ impl ParamType {
             Self::Point2 => "[x, z]",
             Self::Point3 => "[x, y, z]",
             Self::Color => "[r, g, b]",
+            Self::Scale => "number | [x, y, z]",
             Self::Entity => "id or name",
             Self::Object => "object",
             Self::Array => "array",
@@ -66,6 +69,7 @@ impl ParamType {
             Self::Point2 => "point2",
             Self::Point3 => "point3",
             Self::Color => "color",
+            Self::Scale => "scale",
             Self::Entity => "entity",
             Self::Object => "object",
             Self::Array => "array",
@@ -87,6 +91,14 @@ impl ParamType {
             Self::Point2 => numbers(v, 2),
             Self::Point3 => numbers(v, 3),
             Self::Color => numbers(v, 3),
+            // A number or three, finite (a number too large for a double is not JSON).
+            Self::Scale => {
+                v.as_f64().is_some_and(|n| n.is_finite())
+                    || (numbers(v, 3)
+                        && v.as_array().is_some_and(|a| {
+                            a.iter().all(|x| x.as_f64().is_some_and(|n| n.is_finite()))
+                        }))
+            }
             Self::Entity => v.is_u64() || v.is_string(),
             Self::Object => v.is_object(),
             Self::Array => v.is_array(),
@@ -522,6 +534,9 @@ mod tests {
         assert!(T::Point2.accepts(&json!([1, 2])) && !T::Point2.accepts(&json!([1, 2, 3])));
         assert!(T::Color.accepts(&json!([1, 0.5, 0])) && !T::Color.accepts(&json!([1, 0, 0, 1])));
         assert!(!T::Point3.accepts(&json!([1, "a", 3])));
+        assert!(T::Scale.accepts(&json!(2)) && T::Scale.accepts(&json!([1, 2.0, 3])));
+        assert!(!T::Scale.accepts(&json!([1, 2])) && !T::Scale.accepts(&json!([1, "a", 3])));
+        assert!(!T::Scale.accepts(&json!("2")) && !T::Scale.accepts(&Value::Null));
         assert!(T::Any.accepts(&Value::Null));
         assert!(T::Object.accepts(&json!({})) && !T::Object.accepts(&json!([])));
         assert!(T::Array.accepts(&json!([])) && T::Boolean.accepts(&json!(false)));

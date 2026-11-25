@@ -191,17 +191,19 @@ pub(crate) fn inside(who: &Entity, height_m: f64, zone: &Entity) -> bool {
     let Some(z) = zone.zone() else {
         return false;
     };
+    // The zone takes the entity's scale along its own axes; a round one, which has one
+    // radius, the middle of the three.
     let s = zone.scale;
     let [px, py, pz] = zone.position;
     let [x, y, cz] = who.position;
-    let top = py + z.height_m * s;
+    let top = py + z.height_m * s.y;
     if !(y <= top && y + height_m >= py) {
         return false;
     }
     let (dx, dz) = (x - px, cz - pz);
     match z.shape {
         ZoneShape::Circle => {
-            let r = z.radius_m * s;
+            let r = z.radius_m * s.middle();
             dx * dx + dz * dz <= r * r
         }
         ZoneShape::Box => {
@@ -210,7 +212,7 @@ pub(crate) fn inside(who: &Entity, height_m: f64, zone: &Entity) -> bool {
             let lx = dx * cos - dz * sin;
             let lz = dx * sin + dz * cos;
             let [sx, sz] = z.size;
-            lx.abs() <= sx * s / 2.0 && lz.abs() <= sz * s / 2.0
+            lx.abs() <= sx * s.x / 2.0 && lz.abs() <= sz * s.z / 2.0
         }
     }
 }
@@ -244,7 +246,7 @@ pub(crate) fn reached(
             continue;
         };
         let [tx, ty, tz] = target.position;
-        let top = ty + target.shape().map_or(0.0, |s| s.size[1] * target.scale);
+        let top = ty + target.shape().map_or(0.0, |s| s.size[1] * target.scale.y);
         let nearest_y = eye.clamp(ty.min(top), ty.max(top));
         let (dx, dy, dz) = (tx - x, nearest_y - eye, tz - z);
         let horizontal = (dx * dx + dz * dz).sqrt();

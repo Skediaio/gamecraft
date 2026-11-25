@@ -161,7 +161,7 @@ fn road_set_changes_only_what_it_is_given_and_keeps_the_entity_in_place() {
     let e = s.document().entity(EntityId(4)).unwrap();
     assert_eq!(
         (e.position, e.rotation_y_deg, e.scale),
-        (before.position, 90.0, 2.0)
+        (before.position, 90.0, gamecraft_world::Scale::uniform(2.0))
     );
     let line = e.road().unwrap().centre_line(e);
     for (got, want) in line.iter().zip([[0.0, 0.0], [0.0, -30.0], [10.0, -40.0]]) {

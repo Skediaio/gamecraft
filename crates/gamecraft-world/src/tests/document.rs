@@ -88,7 +88,7 @@ fn optional_fields_take_their_defaults() {
     assert_eq!(w.environment, crate::Environment::default());
     assert_eq!(w.next_entity_id(), EntityId(3));
     let e = w.entity(EntityId(1)).unwrap();
-    assert_eq!(e.scale, 1.0);
+    assert_eq!(e.scale, crate::Scale::ONE);
     assert_eq!(e.position, [0.0; 3]);
     assert_eq!(e.character(), Some(&Character::default()));
     let s = e.shape().unwrap();
@@ -264,7 +264,7 @@ fn ids_are_never_reused() {
 fn add_entity_validates_and_keeps_the_id_on_failure() {
     let mut w = World::new("V", 0);
     let bad = EntityDraft {
-        scale: -1.0,
+        scale: crate::Scale::uniform(-1.0),
         ..EntityDraft::default()
     };
     let e = w.add_entity(bad).unwrap_err().to_string();

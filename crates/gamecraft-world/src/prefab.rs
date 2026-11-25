@@ -12,7 +12,7 @@
 
 use crate::error::Ctx;
 use crate::limits::{MAX_COORDINATE_M, MAX_PREFAB_CHILDREN, MAX_PREFAB_NESTING};
-use crate::{Component, EntityId, ModelBounds, ShapeKind, WorldError};
+use crate::{Component, EntityId, ModelBounds, Scale, ShapeKind, WorldError};
 use gamecraft_math::{Portable, deg_to_rad};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -72,9 +72,10 @@ pub struct Spawn {
     pub position: [f64; 3],
     /// The instance's turn about +Y, degrees.
     pub rotation_y_deg: f64,
-    /// The instance's scale, 0.001 to 1000. Its children follow it: each stands at its offset
-    /// times the scale, at the same scale. Default 1.
-    pub scale: f64,
+    /// The instance's scale along its own axes, 0.001 to 1000 each. Its children follow it in
+    /// the instance's frame: each stands at its offset times it, and takes it along its own
+    /// axes (a child turned a right angle has the instance's x and z swapped). Default 1.
+    pub scale: Scale,
     /// Components that replace the prefab's components of the same type (or add a type the
     /// prefab lacks), at most one of each type.
     pub overrides: Vec<Component>,
@@ -89,7 +90,7 @@ impl Default for Spawn {
             name: None,
             position: [0.0; 3],
             rotation_y_deg: 0.0,
-            scale: 1.0,
+            scale: Scale::ONE,
             overrides: Vec::new(),
             layer: None,
         }
@@ -228,17 +229,16 @@ pub(crate) fn turn(offset: [f64; 3], yaw_deg: f64) -> [f64; 3] {
 
 /// The world placement of a child at `offset` and `rotation_y_deg` relative to a parent at
 /// `position` turned by `yaw_deg` and of scale `scale`: the offset is scaled in the parent's
-/// own frame, then turned, so an instance's children follow its scale. A scale of 1 leaves
-/// the offset as it is, to the bit.
+/// own frame, axis by axis, then turned, so an instance's children follow its scale. A scale
+/// of 1 on every axis leaves the offset as it is, to the bit.
 pub(crate) fn place_child(
     position: [f64; 3],
     yaw_deg: f64,
-    scale: f64,
+    scale: Scale,
     offset: [f64; 3],
     rotation_y_deg: f64,
 ) -> ([f64; 3], f64) {
-    let [x, y, z] = offset;
-    let [dx, dy, dz] = turn([x * scale, y * scale, z * scale], yaw_deg);
+    let [dx, dy, dz] = turn(scale.times(offset), yaw_deg);
     let [px, py, pz] = position;
     ([px + dx, py + dy, pz + dz], yaw_deg + rotation_y_deg)
 }

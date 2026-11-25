@@ -6,7 +6,7 @@
 
 use crate::error::{CommandError, bad, failed};
 use crate::spec::kind_of;
-use gamecraft_world::{Component, EntityId, World};
+use gamecraft_world::{Component, EntityId, Scale, World};
 use serde_json::{Map, Value};
 
 /// The parameters of one call: an object, possibly empty. A null value is a parameter left
@@ -101,6 +101,36 @@ impl<'a> Params<'a> {
                     .ok_or_else(|| bad(format!("`{name}` must be a string, got {}", kind_of(v))))
             })
             .transpose()
+    }
+
+    /// An entity's scale: a number (the same on every axis) or `[x, y, z]` of finite numbers.
+    /// What the spec cannot say (the range on each axis) the world checks.
+    pub fn scale(&self, name: &str) -> Result<Option<Scale>, CommandError> {
+        let Some(v) = self.value(name) else {
+            return Ok(None);
+        };
+        let wrong = || {
+            bad(format!(
+                "`{name}` must be a number or [x, y, z], got {}",
+                kind_of(v)
+            ))
+        };
+        if let Some(n) = v.as_f64() {
+            return if n.is_finite() {
+                Ok(Some(Scale::uniform(n)))
+            } else {
+                Err(wrong())
+            };
+        }
+        let items = v.as_array().ok_or_else(wrong)?;
+        if items.len() != 3 {
+            return Err(wrong());
+        }
+        let mut axes = [0.0; 3];
+        for (slot, item) in axes.iter_mut().zip(items) {
+            *slot = item.as_f64().filter(|n| n.is_finite()).ok_or_else(wrong)?;
+        }
+        Ok(Some(Scale::per_axis(axes[0], axes[1], axes[2])))
     }
 
     /// `N` finite numbers in an array.

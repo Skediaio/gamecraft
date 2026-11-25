@@ -8,6 +8,41 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-25: A scale per axis, one number in the file when the three are equal
+
+One deck prefab for every span length (roadmap item 7) needs an instance stretched along its
+length and nothing else: with a uniform scale a 10 m deck made 40 m long is four times as wide
+and thick, and its posts four times as tall.
+
+- **`Scale`** (`gamecraft_world::scale`): `x`, `y` and `z` along the entity's own axes, each
+  0.001 to 1000. In a file, and in every answer, one number when the three are equal to the bit,
+  else `[x, y, z]`; three equal numbers read as one scale and are written back as one. So every
+  world made before has the text it had, and the state hash it had, since the hash covers the
+  text: the pinned examples did not move. The cooked form keeps an enum (format 3: older caches
+  are ignored and built again).
+- **Shapes, models and children take it along their own axes.** A box stays a box: the renderer's
+  placement takes a size per axis, and so do the collider box, the rays and the solids. A
+  prefab's children take the instance's scale **in the instance's frame**, as most engines do:
+  each offset is scaled axis by axis before it is turned, and a child's own scale is the
+  instance's turned into the child's frame. A child turned by a right angle (or any multiple of
+  it) has the instance's x and z swapped; turned by any other angle it keeps the scale along its
+  own axes as it is, since a box scaled across a skew turn is not a box. Full orientation is M3
+  work and replaces this rule. `entity.set {scale}` rescales what is below the entity the same
+  way: a derived child to the bit, an entity with a scale of its own by the ratio in its own
+  frame. A span stretches the length only now (`[1, 1, scale]` along its own z).
+- **What has one size takes the middle of the three** (`Scale::middle`): the width of a cylinder
+  or a sphere (a cylinder's height is the y scale), a plant, a character's model body, a road's
+  width (its points follow x and z), the height of a light's spot over a box and of a framed
+  camera. Stretching something along one axis leaves those as they were; scaling it on two or
+  three takes them along. The simulation and the renderer use the one rule, so what is drawn is
+  what is collided with; a sphere is never drawn as an ellipsoid.
+- **Level of detail and the index take the largest of the three**: a model's extent across grew
+  most, and `WHERE scale > 1` in the project index should find a stretched deck.
+- Chosen over scaling the children only at spawn (`entity.set {scale}` would leave them), a full
+  matrix per entity (there is no rotation but yaw yet), refusing a per-axis scale on round shapes
+  (a deck's posts are cylinders, and the middle rule is what a modeller expects), and always
+  writing `[x, y, z]` (every file and every hash would change).
+
 ### 2026-11-25: The ground is asked for while building, and a span is placed from two ground points
 
 A generator of a large map had to copy the engine's sculpt maths to put bridge ends and pier

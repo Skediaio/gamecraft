@@ -49,7 +49,8 @@ A world is one JSON document (`.gamecraft`, format version 1, `gamecraft-world`)
 - **`environment`.** Time of day, day of the year, latitude (they give the sun), wind, clouds,
   mist, rain.
 - **`entities`.** Each has a numeric id that is never reused, a name, a position (its base: the
-  point it stands on), a rotation about the vertical axis, a uniform scale, and components, at
+  point it stands on), a rotation about the vertical axis, a scale (one number when it is the
+  same on every axis, else one along each of its own axes; `design/journal.md`), and components, at
   most one of each type. Component types today: `shape` (a box, sphere or cylinder to block out
   a world with, optionally solid), `plant` (a species of the plant library, a seed and a growth
   stage) and `character` (a body that an input can move).

@@ -23,7 +23,7 @@ fn world_with(m: Model, yaw: f64, scale: f64) -> World {
         name: "Crate".into(),
         position: [10.0, 2.0, -4.0],
         rotation_y_deg: yaw,
-        scale,
+        scale: crate::Scale::uniform(scale),
         components: vec![Component::Model(m)],
         layer: None,
     })

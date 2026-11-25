@@ -76,7 +76,7 @@ pub fn aim_point(entity: &Entity) -> [f64; 3] {
     let [x, y, z] = entity.position;
     let up = match (entity.character(), entity.shape()) {
         (Some(c), _) => c.height_m * CHEST_SHARE,
-        (None, Some(shape)) => shape.size[1] * entity.scale * 0.5,
+        (None, Some(shape)) => shape.size[1] * entity.scale.y * 0.5,
         (None, None) => 0.0,
     };
     [x, y + up, z]

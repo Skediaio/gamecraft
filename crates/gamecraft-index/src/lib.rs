@@ -15,7 +15,8 @@
 //!
 //! - `entities(id, key, name, layer, pack, prefab, parent, x, y, z, rotation_y_deg, scale,
 //!   tags, components)`: `id` the runtime id, `key` the string id in its pack (null until
-//!   saved), `tags` and `components` JSON arrays of the tags and the component types.
+//!   saved), `tags` and `components` JSON arrays of the tags and the component types, and
+//!   `scale` the largest of an entity's scales along its axes (one number when they are equal).
 //! - `entity_tags(entity_id, tag)`: one row per tag of an entity.
 //! - `entity_components(entity_id, type, data)`: one row per component, `data` its JSON.
 //! - `prefabs(id, name, pack, components, instances)`.

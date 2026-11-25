@@ -37,6 +37,7 @@ pub mod limits;
 mod model;
 mod prefab;
 pub mod road;
+mod scale;
 mod scenario;
 pub mod sculpt;
 mod store;
@@ -67,6 +68,7 @@ pub use road::{
     DrapeStats, DrapedPolygon, Retiered, Road, RoadEnds, RoadMesh, free_road_tier, raycast_roads,
     retier_roads,
 };
+pub use scale::Scale;
 pub use scenario::{
     CompareOp, Condition, EntityRef, Objective, ObjectiveStatus, Step, TAG_PREFIX, Trigger,
     VarValue, When,

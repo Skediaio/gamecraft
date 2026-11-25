@@ -195,12 +195,12 @@ fn cases() -> Vec<(&'static str, Mutation, &'static [&'static str])> {
         ),
         (
             "scale small",
-            |w| entity(w, 1).scale = 0.0,
+            |w| entity(w, 1).scale = crate::Scale::uniform(0.0),
             &["entity 1", "scale", "0.001"],
         ),
         (
             "scale large",
-            |w| entity(w, 1).scale = 1001.0,
+            |w| entity(w, 1).scale = crate::Scale::uniform(1001.0),
             &["entity 1", "scale", "1000"],
         ),
         (

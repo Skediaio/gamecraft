@@ -394,7 +394,7 @@ fn scatter(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
         name: String::new(),
         position: [0.0; 3],
         rotation_y_deg: 0.0,
-        scale: 1.0,
+        scale: gamecraft_world::Scale::ONE,
         prefab: None,
         parent: None,
         layer: None,
@@ -451,7 +451,7 @@ fn scatter(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
             },
             position: [x, y, z],
             rotation_y_deg,
-            scale,
+            scale: gamecraft_world::Scale::uniform(scale),
             components,
             layer: None,
         };

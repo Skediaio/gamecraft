@@ -336,7 +336,7 @@ fn into_frame(e: &Entity, points: &[[f64; 2]]) -> Vec<[f64; 2]> {
         .iter()
         .map(|&[x, z]| {
             let (dx, dz) = (x - px, z - pz);
-            [(dx * c - dz * s) / e.scale, (dx * s + dz * c) / e.scale]
+            [(dx * c - dz * s) / e.scale.x, (dx * s + dz * c) / e.scale.z]
         })
         .collect()
 }

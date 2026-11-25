@@ -12,8 +12,8 @@ use crate::error::{CommandError, bad, failed};
 use crate::params::Params;
 use crate::session::Edit;
 use gamecraft_math::yaw_of;
-use gamecraft_world::GroundBox;
 use gamecraft_world::limits::{MAX_COORDINATE_M, SCALE_MAX, SCALE_MIN};
+use gamecraft_world::{GroundBox, Scale};
 use serde_json::{Value, json};
 
 /// The keys of the `span` object, for the nearest-name hint.
@@ -28,8 +28,9 @@ pub(crate) struct Span {
     pub position: [f64; 3],
     /// Its turn: it faces from `from` to `to`.
     pub rotation_y_deg: f64,
-    /// Its uniform scale, so that its length spans the ends.
-    pub scale: f64,
+    /// Its scale: 1 across and 1 high, so that only its length (along its own z) grows to
+    /// span the ends.
+    pub scale: Scale,
     /// The `span` object of the answer.
     pub report: Value,
 }
@@ -182,22 +183,22 @@ pub(crate) fn span(
             }
         },
     };
-    let scale = length_between / length.length_m;
-    if !(SCALE_MIN..=SCALE_MAX).contains(&scale) {
+    let length_scale = length_between / length.length_m;
+    if !(SCALE_MIN..=SCALE_MAX).contains(&length_scale) {
         return Err(bad(format!(
             "`span` is {} m between its ends and {what} is {} m long, which would scale it by \
              {}; an entity's scale is from {SCALE_MIN} to {SCALE_MAX}. Give `length_m`, or \
              place something else",
             metres(length_between),
             metres(length.length_m),
-            metres(scale)
+            metres(length_scale)
         )));
     }
     // Level, on the higher end's ground: a deck never sinks into the ground it spans.
     let y = ground_from.max(ground_to) + offset;
     // Its centre lies `centre_m` behind its origin (towards `from`); so the origin goes that
     // much past the midpoint, towards `to`, and the thing covers exactly the two ends.
-    let centre = length.centre_m * scale;
+    let centre = length.centre_m * length_scale;
     let (mx, mz) = ((from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0);
     let (fx, fz) = (dx / length_between, dz / length_between);
     let position = [mx + fx * centre, y, mz + fz * centre];
@@ -211,7 +212,7 @@ pub(crate) fn span(
         "from": from,
         "to": to,
         "length_m": length.length_m,
-        "scale": scale,
+        "scale": Scale::per_axis(1.0, 1.0, length_scale),
         "ends": [
             end(from[0], from[1], ground_from),
             end(to[0], to[1], ground_to)
@@ -220,7 +221,7 @@ pub(crate) fn span(
     Ok(Span {
         position,
         rotation_y_deg,
-        scale,
+        scale: Scale::per_axis(1.0, 1.0, length_scale),
         report,
     })
 }

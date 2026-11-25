@@ -80,7 +80,7 @@ fn names_scale_rotation_and_seeds() {
     assert_eq!(es.len(), 30);
     for (i, e) in es.iter().enumerate() {
         assert_eq!(e.name, format!("Oak {}", i + 1));
-        assert!((0.5..=1.5).contains(&e.scale), "{}", e.scale);
+        assert!((0.5..=1.5).contains(&e.scale.x), "{:?}", e.scale);
         assert!((0.0..360.0).contains(&e.rotation_y_deg));
         let p = e.plant().unwrap();
         assert_eq!((p.species.as_str(), p.growth), (EXAMPLE_SPECIES, 0.7));
@@ -99,7 +99,10 @@ fn names_scale_rotation_and_seeds() {
     );
     for e in placed(&s, &r) {
         assert_eq!(e.name, "");
-        assert_eq!((e.scale, e.rotation_y_deg), (1.0, 0.0));
+        assert_eq!(
+            (e.scale, e.rotation_y_deg),
+            (gamecraft_world::Scale::ONE, 0.0)
+        );
         assert_eq!(e.plant().unwrap().seed, 5);
     }
 }

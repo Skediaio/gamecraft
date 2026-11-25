@@ -136,7 +136,9 @@ impl Content {
             self.hasher.write_f64(v);
         }
         self.hasher.write_f64(e.rotation_y_deg);
-        self.hasher.write_f64(e.scale);
+        for axis in e.scale.get() {
+            self.hasher.write_f64(axis);
+        }
     }
 
     /// A shape entity.

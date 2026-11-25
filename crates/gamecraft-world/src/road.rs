@@ -235,10 +235,12 @@ impl Road {
             .iter()
             .enumerate()
             .map(|(i, &[x, z])| {
-                let (lx, lz) = (x * e.scale, z * e.scale);
+                // The points follow the scale along x and z; the width, which lies across
+                // the road whichever way it runs, the middle of the three.
+                let (lx, lz) = (x * e.scale.x, z * e.scale.z);
                 Node {
                     at: [px + lx * c + lz * s, pz - lx * s + lz * c],
-                    half: self.width_at(i) * e.scale / 2.0,
+                    half: self.width_at(i) * e.scale.middle() / 2.0,
                 }
             })
             .collect()

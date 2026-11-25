@@ -92,11 +92,15 @@ placed by the instance's position and turn (`offset` is in the parent's frame: -
 its right), with `parent` set to the instance. Removing an entity removes everything below it;
 `entity.set` (through `World::place_entity`) moves and turns everything below it rigidly.
 
-**An instance's scale is its children's** (2026-11-25): each stands at its offset times the
-instance's scale, at that scale (`World::set_scale` rescales what is below an entity). An
-unedited child is still derived data, to the bit, so nothing more is written for it; a child
-given a scale of its own keeps it when the instance's changes, multiplied by the ratio. Before
-this a scaled instance's children stayed where the prefab put them, at scale 1.
+**An instance's scale is its children's, in the instance's frame** (2026-11-25): each stands
+at its offset times the instance's scale, axis by axis, then turned, and its own scale is the
+instance's turned into its own frame (a right angle swaps x and z; any other turn keeps the
+scale along the child's own axes: `Scale::in_turned_frame`). `World::set_scale` rescales what is
+below an entity the same way. An unedited child is still derived data, to the bit, so nothing
+more is written for it; a child given a scale of its own keeps it when the instance's changes,
+multiplied by the ratio in its own frame. Before this a scaled instance's children stayed where
+the prefab put them, at scale 1. A scale is `x`, `y`, `z` along the entity's own axes
+(`gamecraft_world::Scale`): one number in a file when the three are equal, else `[x, y, z]`.
 
 **Spans** (`span` on `prefab.spawn` and `entity.add`; `decisions.md`, *The ground is asked for
 while building*): the prefab's extent is measured from its children when the span needs a

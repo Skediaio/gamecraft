@@ -133,7 +133,7 @@ What the files are, where it differs from the method above or adds to it:
   same name, and `{"gamecraft_layer": 1, "replace": true, "entities": [...]}` first drops what
   earlier packs put in that layer. An entity's layer is the file it was last defined in.
 - **Layer files** are `{"gamecraft_layer": 1, "entities": [...]}`, one compact entity per line:
-  `{"id", "name", "position", "rotation_y_deg", "scale", "prefab"?, "parent"?, "components" |
+  `{"id", "name", "position", "rotation_y_deg", "scale" (one number, or `[x, y, z]`), "prefab"?, "parent"?, "components" |
   "overrides"}`, the `.gamecraft` entity with a string `id` (1 to 200 ASCII letters, digits,
   `-_./:`, no `..`) and the parent by string id. A prefab's children are lines of their own (a
   layer file does not spawn children). Ids are unique within a pack for each world (checked
@@ -177,7 +177,8 @@ What the files are, where it differs from the method above or adds to it:
   it, `entity.get` and `world.inspect` show it, and the `.gamecraft` format keeps it. A loaded
   entity carries its layer's name.
 - **The index** has the tables `entities(id, key, name, layer, pack, prefab, parent, x, y, z,
-  rotation_y_deg, scale, tags, components)`, `entity_tags(entity_id, tag)`,
+  rotation_y_deg, scale, tags, components)` (`scale`: the largest of an entity's scales along its
+  axes), `entity_tags(entity_id, tag)`,
   `entity_components(entity_id, type, data)` and `prefabs(id, name, pack, components,
   instances)` (assets later). It is built when a project opens, after `project.save`, and
   before a `project.query` when the world shown changed since (the world's view revision),

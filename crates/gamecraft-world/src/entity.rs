@@ -1,10 +1,10 @@
 //! Entities: named things in the world, each with a stable id and a set of components.
 
 use crate::error::Ctx;
-use crate::limits::{MAX_COORDINATE_M, SCALE_MAX, SCALE_MIN};
+use crate::limits::MAX_COORDINATE_M;
 use crate::{
     Behaviour, Character, Component, Health, Interactable, Launcher, Light, Model, Plant, Road,
-    Shape, WorldError, Zone,
+    Scale, Shape, WorldError, Zone,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -21,8 +21,8 @@ impl fmt::Display for EntityId {
     }
 }
 
-fn default_scale() -> f64 {
-    1.0
+fn default_scale() -> Scale {
+    Scale::ONE
 }
 
 /// Most characters in a layer name.
@@ -70,9 +70,11 @@ pub struct Entity {
     /// Rotation about +Y in degrees, counter-clockwise seen from above. Default 0.
     #[serde(default)]
     pub rotation_y_deg: f64,
-    /// Uniform scale, 0.001 to 1000. Default 1.
+    /// Scale along its own x, y and z axes, 0.001 to 1000 each; a prefab's child has the
+    /// instance's scale, in its own frame. In a file one number when the three are equal.
+    /// Default 1.
     #[serde(default = "default_scale")]
-    pub scale: f64,
+    pub scale: Scale,
     /// The prefab this entity was placed from, by id; `None` for an entity of its own. Its
     /// `components` are then the prefab's with its overrides replacing those of the same type
     /// ([`crate::Prefab::effective`]); the file keeps only the overrides. Default none.
@@ -108,8 +110,8 @@ pub struct EntityDraft {
     pub position: [f64; 3],
     /// Rotation about +Y in degrees.
     pub rotation_y_deg: f64,
-    /// Uniform scale.
-    pub scale: f64,
+    /// Scale along its own axes.
+    pub scale: Scale,
     /// Components, at most one of each type.
     pub components: Vec<Component>,
     /// The layer it belongs to; `None` is the world's default layer.
@@ -124,7 +126,7 @@ impl Default for EntityDraft {
             name: String::new(),
             position: [0.0; 3],
             rotation_y_deg: 0.0,
-            scale: 1.0,
+            scale: Scale::ONE,
             components: Vec::new(),
             layer: None,
         }
@@ -291,7 +293,8 @@ impl Entity {
     }
 
     /// Checks every rule of the entity on its own: name length, finite position within
-    /// 1e6 m per axis, finite rotation, scale range, at most one component of each type, and
+    /// 1e6 m per axis, finite rotation, the range of the scale on every axis, at most one
+    /// component of each type, and
     /// each component's rules. The error names the entity id and the field.
     pub fn validate(&self) -> Result<(), WorldError> {
         let ctx = Ctx::entity(self.id);
@@ -306,7 +309,7 @@ impl Entity {
             )?;
         }
         ctx.finite("rotation_y_deg", self.rotation_y_deg)?;
-        ctx.range("scale", self.scale, SCALE_MIN, SCALE_MAX, "")?;
+        self.scale.validate(ctx)?;
         if let Some(layer) = &self.layer {
             check_layer(ctx, layer)?;
         }

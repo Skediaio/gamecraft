@@ -385,7 +385,7 @@ fn beyond_the_terrain_nothing_is_drawn_and_hostile_roads_do_not_panic() {
         (vec![[1e300, -1e300], [-1e300, 1e300]], 1e300, f64::INFINITY),
         (vec![], 1.0, 0.0),
     ] {
-        e.scale = scale;
+        e.scale = crate::Scale::uniform(scale);
         e.rotation_y_deg = yaw;
         let bad = Road::new(points);
         let _ = bad.mesh(&e, &field);
@@ -410,7 +410,7 @@ fn the_entity_places_turns_and_scales_the_road() {
         .add_entity(EntityDraft {
             position: [5.0, 0.0, 5.0],
             rotation_y_deg: 90.0,
-            scale: 2.0,
+            scale: crate::Scale::uniform(2.0),
             components: vec![Component::Road(road)],
             ..EntityDraft::default()
         })

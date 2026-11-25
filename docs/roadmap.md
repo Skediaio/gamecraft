@@ -241,7 +241,13 @@ from the engine, as mechanisms with no game in them, in the order they are sched
    which places a deck level on the higher end's ground, facing `from` to `to`, scaled to span
    the ends, and says in `ends` how far each end is above its ground (`decisions.md`). Open: a
    span scales uniformly until item 7, and cannot tilt (full orientation, M3).
-7. **Non-uniform scale for prefab instances** (one deck prefab for every span length).
+7. ~~**Non-uniform scale for prefab instances**~~ done 2026-11-25: `scale` is a number or
+   `[x, y, z]` along an entity's own axes (`entity.add`, `entity.set`, `prefab.spawn`); shapes,
+   models and a prefab's children take it in the instance's frame, a child turned a right angle
+   included; what has one size takes the middle of the three; one number in a file when the
+   three are equal, so no file or hash moved. A span stretches the length only (`decisions.md`).
+   Open: a child turned by another angle keeps the scale along its own axes (until full
+   orientation, M3).
 8. **Raycasts and simulation at scale:** a spatial index for rays, lines of sight and solids, so a
    world of about 300 000 entities (prefab children included) raycasts in well under a
    millisecond and simulates faster than real time.

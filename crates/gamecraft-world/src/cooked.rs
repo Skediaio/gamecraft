@@ -20,14 +20,14 @@
 use crate::instance::{Lookup, derive, diff};
 use crate::limits::MAX_ENTITIES;
 use crate::store::EntityMap;
-use crate::{Component, Entity, EntityId, World, WorldError};
+use crate::{Component, Entity, EntityId, Scale, World, WorldError};
 use gamecraft_math::StateHasher;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The version of the cooked format; a cooked world of another version is not read. 2: the
-/// `road` component.
-pub const COOKED_FORMAT: u32 = 2;
+/// `road` component. 3: a scale per axis.
+pub const COOKED_FORMAT: u32 = 3;
 
 /// The first bytes of a cooked world.
 const MAGIC: [u8; 8] = *b"GCCOOKED";
@@ -71,12 +71,39 @@ struct OwnEntity {
     name: u32,
     position: [f64; 3],
     rotation_y_deg: f64,
-    scale: f64,
+    scale: CookedScale,
     prefab: Option<u32>,
     parent: Option<u64>,
     layer: Option<u32>,
     prefab_child: Option<u32>,
     components: Vec<u32>,
+}
+
+/// An entity's scale in the cooked form: one number, or one per axis (a format that does not
+/// describe itself cannot tell them apart by itself).
+#[derive(Clone, Copy, Serialize, Deserialize)]
+enum CookedScale {
+    Uniform(f64),
+    PerAxis([f64; 3]),
+}
+
+impl From<Scale> for CookedScale {
+    fn from(scale: Scale) -> CookedScale {
+        if scale.is_uniform() {
+            CookedScale::Uniform(scale.x)
+        } else {
+            CookedScale::PerAxis(scale.get())
+        }
+    }
+}
+
+impl From<CookedScale> for Scale {
+    fn from(scale: CookedScale) -> Scale {
+        match scale {
+            CookedScale::Uniform(s) => Scale::uniform(s),
+            CookedScale::PerAxis([x, y, z]) => Scale::per_axis(x, y, z),
+        }
+    }
 }
 
 /// Values kept once, by index.
@@ -153,7 +180,7 @@ impl World {
                 name: strings.of(&e.name)?,
                 position: e.position,
                 rotation_y_deg: e.rotation_y_deg,
-                scale: e.scale,
+                scale: e.scale.into(),
                 prefab: e.prefab.as_deref().map(|p| strings.of(p)).transpose()?,
                 parent: e.parent.map(|p| p.0),
                 layer: e.layer.as_deref().map(|l| strings.of(l)).transpose()?,
@@ -248,7 +275,7 @@ impl World {
                 name: string(e.name)?,
                 position: e.position,
                 rotation_y_deg: e.rotation_y_deg,
-                scale: e.scale,
+                scale: e.scale.into(),
                 prefab: e.prefab.map(string).transpose()?,
                 parent: e.parent.map(EntityId),
                 layer: e.layer.map(string).transpose()?,

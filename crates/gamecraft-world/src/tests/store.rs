@@ -10,7 +10,7 @@ fn entity(id: u64) -> Entity {
         name: format!("e{id}"),
         position: [id as f64, 0.0, 0.0],
         rotation_y_deg: 0.0,
-        scale: 1.0,
+        scale: crate::Scale::ONE,
         prefab: None,
         parent: None,
         layer: None,
@@ -86,10 +86,10 @@ fn the_map_behaves_as_an_ordered_map_for_any_keys() {
             2 => assert_eq!(map.remove(id), model.remove(&id)),
             _ => {
                 if let Some(e) = map.get_mut(id) {
-                    e.scale = 2.0;
+                    e.scale = crate::Scale::uniform(2.0);
                 }
                 if let Some(e) = model.get_mut(&id) {
-                    e.scale = 2.0;
+                    e.scale = crate::Scale::uniform(2.0);
                 }
             }
         }
@@ -199,7 +199,7 @@ fn checking_a_change_finds_the_same_first_error_as_a_whole_check() {
     // Two bad entities: the first by id is the one reported.
     let mut w = before.clone();
     w.entity_mut(EntityId(40)).unwrap().position[0] = f64::NAN;
-    w.entity_mut(EntityId(7)).unwrap().scale = 0.0;
+    w.entity_mut(EntityId(7)).unwrap().scale = crate::Scale::uniform(0.0);
     assert_checks_agree(&before, &w);
     assert!(w.validate().is_err());
 
@@ -255,7 +255,7 @@ fn changes_are_found_when_the_map_grew_a_level() {
     let mut after = before.clone();
     after.insert(EntityId(5000), entity(5000));
     after.insert(EntityId(32), entity(32));
-    after.get_mut(EntityId(3)).unwrap().scale = 2.0;
+    after.get_mut(EntityId(3)).unwrap().scale = crate::Scale::uniform(2.0);
     let changes = after.changes(&before).unwrap();
     assert_eq!(
         changes.changed,

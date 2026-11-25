@@ -15,6 +15,10 @@ JSON lines (`gamecraft-cli serve`). The protocol, every command and its paramete
   west is -X). A house "north of the pond" has a smaller z.
 - **Turning.** `rotation_y_deg` turns an entity about +Y, counter-clockwise seen from above. At 0
   it faces north (-Z); at 90 it faces west (-X); at -90 (or 270) east.
+- **Scale.** `scale` is one number, or `[x, y, z]` along the entity's own axes. A prefab's
+  children take the instance's scale in the instance's frame: a deck stretched along its length
+  keeps its rails thin and its posts short. What has one size (a cylinder's width, a plant)
+  takes the middle of the three.
 - **Points.** `[x, y, z]` is a point in space (`position`); `[x, z]` a point on the ground
   (`at`, `face`). `at` puts an entity's base on the ground there (`offset_m`: that high above
   it); it is an error where there is no ground. `query.ground {points: [[x, z], ...]}` gives

@@ -9,8 +9,8 @@ use crate::params::{Params, component};
 use crate::session::{Edit, Handler, Registration};
 use crate::span::{Measured, Span};
 use crate::spec::{CommandSpec, ParamType as T, kind_of, param, spec};
-use gamecraft_world::limits::{MAX_COORDINATE_M, SCALE_MAX, SCALE_MIN};
-use gamecraft_world::{Component, Entity, EntityDraft, EntityId};
+use gamecraft_world::limits::MAX_COORDINATE_M;
+use gamecraft_world::{Component, Entity, EntityDraft, EntityId, Scale};
 use serde_json::{Map, Value, json};
 
 /// The commands of this module.
@@ -206,7 +206,7 @@ fn add_spec() -> CommandSpec {
             )
             .unit("deg")
             .default(json!(0)),
-            param("scale", T::Number, "Uniform scale, 0.001 to 1000.").default(json!(1)),
+            param("scale", T::Scale, &scale_param_doc()).default(json!(1)),
             span_param(),
             layer_param("The layer it belongs to."),
             param(
@@ -242,16 +242,19 @@ fn components_of(p: &Params<'_>) -> Result<Vec<Component>, CommandError> {
     Ok(components)
 }
 
-/// The `scale` parameter: `None` when left out, else within an entity's limits (the sentence
-/// names the parameter, where the world's would name the entity).
-pub(crate) fn scale_of(p: &Params<'_>) -> Result<Option<f64>, CommandError> {
-    match p.f64("scale")? {
-        None => Ok(None),
-        Some(scale) if (SCALE_MIN..=SCALE_MAX).contains(&scale) => Ok(Some(scale)),
-        Some(scale) => Err(bad(format!(
-            "`scale` is {scale:?}; it must be a number from {SCALE_MIN} to {SCALE_MAX}"
-        ))),
-    }
+/// The `scale` parameter: `None` when left out. Its range on each axis is the world's to
+/// check, and the world's sentence names the axis.
+pub(crate) fn scale_of(p: &Params<'_>) -> Result<Option<Scale>, CommandError> {
+    p.scale("scale")
+}
+
+/// The doc of the `scale` parameter on the commands that place or edit one entity.
+pub(crate) fn scale_param_doc() -> String {
+    "Scale along the entity's own x, y and z axes: one number for all, or [x, y, z]; each \
+     0.001 to 1000. A prefab's children follow it in the instance's frame: each stands at its \
+     offset times it, and takes it along its own axes (a child turned a right angle has x and z \
+     swapped). What has one size, like the width of a cylinder, takes the middle of the three."
+        .to_string()
 }
 
 fn add(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
@@ -278,7 +281,7 @@ fn add(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
             placement(edit, &p)?
                 .ok_or_else(|| bad("missing `position` or `at` (or `span`, a deck between two ground points); give one of them"))?,
             p.f64("rotation_y_deg")?.unwrap_or(0.0),
-            scale_of(&p)?.unwrap_or(1.0),
+            scale_of(&p)?.unwrap_or(Scale::ONE),
             None,
         )
     };
@@ -322,12 +325,7 @@ fn set_spec() -> CommandSpec {
                 "Turn about +Y, counter-clockwise seen from above; 0 faces north (-Z).",
             )
             .unit("deg"),
-            param(
-                "scale",
-                T::Number,
-                "Uniform scale, 0.001 to 1000. A prefab's children follow it: each stands at \
-                 its offset times the scale, at that scale.",
-            ),
+            param("scale", T::Scale, &scale_param_doc()),
             layer_param("The layer it goes to, with the entities that belong to it."),
         ],
         "{id, position}",

@@ -56,33 +56,36 @@ impl Solid {
         if !shape.solid || entity.character().is_some() {
             return None;
         }
+        // Scaled along the entity's own axes; a round shape, which has one width, takes the
+        // middle of the three scales for it, and the y scale for its height.
         let s = entity.scale;
-        let [sx, sy, sz] = shape.size;
+        let [sx, sy, sz] = s.times(shape.size);
+        let round = s.middle() * shape.size[0];
         let [px, py, pz] = entity.position;
         let (footprint, height) = match shape.kind {
             ShapeKind::Box => {
                 let (sin, cos) = deg_to_rad(entity.rotation_y_deg).psin_cos();
                 (
                     Footprint::Rect {
-                        half_x: sx * s / 2.0,
-                        half_z: sz * s / 2.0,
+                        half_x: sx / 2.0,
+                        half_z: sz / 2.0,
                         sin,
                         cos,
                     },
-                    sy * s,
+                    sy,
                 )
             }
             ShapeKind::Cylinder => (
                 Footprint::Circle {
-                    radius: sx * s / 2.0,
+                    radius: round / 2.0,
                 },
-                sy * s,
+                sy,
             ),
             ShapeKind::Sphere => (
                 Footprint::Ball {
-                    radius: sx * s / 2.0,
+                    radius: round / 2.0,
                 },
-                sx * s,
+                round,
             ),
         };
         let solid = Solid {

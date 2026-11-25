@@ -224,25 +224,26 @@ pub struct ModelBox {
 
 impl ModelBox {
     /// The collider box of `entity`'s model with the asset's `bounds`: the bounds times
-    /// `model.scale * entity.scale`, turned by the entity's yaw about its position. `None`
-    /// when the entity has no model, its collider is `none` or a number is not finite.
+    /// `model.scale` and the entity's scale, axis by axis, turned by the entity's yaw about its
+    /// position. `None` when the entity has no model, its collider is `none` or a number is not
+    /// finite.
     pub fn of(entity: &Entity, bounds: &ModelBounds) -> Option<ModelBox> {
         let model = entity.model()?;
         if model.collider == ModelCollider::None || !bounds.is_valid() {
             return None;
         }
-        let s = model.scale * entity.scale;
+        let [sx, sy, sz] = entity.scale.times([model.scale; 3]);
         let [x0, y0, z0] = bounds.min;
         let [x1, y1, z1] = bounds.max;
         let (lx, ly, lz) = (
-            (x0 + x1) / 2.0 * s,
-            (y0 + y1) / 2.0 * s,
-            (z0 + z1) / 2.0 * s,
+            (x0 + x1) / 2.0 * sx,
+            (y0 + y1) / 2.0 * sy,
+            (z0 + z1) / 2.0 * sz,
         );
         let half = [
-            (x1 - x0) / 2.0 * s,
-            (y1 - y0) / 2.0 * s,
-            (z1 - z0) / 2.0 * s,
+            (x1 - x0) / 2.0 * sx,
+            (y1 - y0) / 2.0 * sy,
+            (z1 - z0) / 2.0 * sz,
         ];
         let (sin, cos) = deg_to_rad(entity.rotation_y_deg).psin_cos();
         // Local to world: counter-clockwise seen from above, as the simulation's solids turn.

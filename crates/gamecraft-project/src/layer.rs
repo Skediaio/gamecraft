@@ -3,15 +3,15 @@
 
 use crate::ProjectError;
 use crate::paths::{MAX_ENTITY_KEY_CHARS, is_entity_key};
-use gamecraft_world::{Component, Entity, World};
+use gamecraft_world::{Component, Entity, Scale, World};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// The version of the layer file format (`gamecraft_layer`).
 pub const LAYER_FORMAT: u32 = 1;
 
-fn default_scale() -> f64 {
-    1.0
+fn default_scale() -> Scale {
+    Scale::ONE
 }
 
 /// An entity as a layer file holds it: like an entity of the `.gamecraft` format, with a
@@ -27,7 +27,7 @@ pub(crate) struct LayerEntity {
     #[serde(default)]
     pub rotation_y_deg: f64,
     #[serde(default = "default_scale")]
-    pub scale: f64,
+    pub scale: Scale,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefab: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

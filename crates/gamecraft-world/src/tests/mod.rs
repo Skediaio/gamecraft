@@ -9,6 +9,7 @@ mod layer;
 mod model;
 mod prefab;
 mod road;
+mod scale;
 mod scenario;
 mod sculpt;
 mod store;
@@ -137,7 +138,7 @@ pub(crate) fn example_world() -> World {
             name: "Crate".into(),
             position: [4.0, 12.5, -3.0],
             rotation_y_deg: 30.0,
-            scale: 1.0,
+            scale: crate::Scale::ONE,
             components: vec![Component::Shape(Shape {
                 kind: ShapeKind::Box,
                 size: [1.0, 1.0, 1.0],

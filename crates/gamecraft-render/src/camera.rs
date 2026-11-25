@@ -149,7 +149,7 @@ impl Camera {
         let focus_height = if let Some(c) = entity.character() {
             c.eye_height_m
         } else if let Some(s) = entity.shape() {
-            s.size[1] * entity.scale / 2.0
+            s.size[1] * entity.scale.y / 2.0
         } else {
             DEFAULT_FOCUS_HEIGHT_M
         };
@@ -299,10 +299,10 @@ fn world_bounds(world: &World, heights: Option<&HeightField>) -> (DVec3, DVec3) 
 
 /// How tall an entity stands, metres: its shape, its character, or its plant when mature.
 fn entity_height(e: &Entity) -> f64 {
-    let shape = e.shape().map_or(0.0, |s| s.size[1] * e.scale);
+    let shape = e.shape().map_or(0.0, |s| s.size[1] * e.scale.y);
     let character = e.character().map_or(0.0, |c| c.height_m);
     let plant = e.plant().map_or(0.0, |p| {
-        plants::mature_height_m(&p.species).unwrap_or(0.0) * p.growth * e.scale
+        plants::mature_height_m(&p.species).unwrap_or(0.0) * p.growth * e.scale.middle()
     });
     shape.max(character).max(plant)
 }

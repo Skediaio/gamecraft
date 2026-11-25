@@ -118,7 +118,7 @@ fn a_box_zone_is_turned_by_its_entity_and_scaled() {
         .add_entity(EntityDraft {
             position: [0.0, 0.0, 0.0],
             rotation_y_deg: 90.0,
-            scale: 2.0,
+            scale: gamecraft_world::Scale::uniform(2.0),
             components: vec![Component::Zone(Zone {
                 shape: ZoneShape::Box,
                 size: [10.0, 1.0],

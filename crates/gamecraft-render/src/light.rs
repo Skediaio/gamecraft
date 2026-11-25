@@ -178,7 +178,7 @@ fn light_position(e: &Entity) -> DVec3 {
         let right = yaw_forward(e.rotation_y_deg - 90.0);
         base + DVec3::Y * (c.height_m * HAND_HEIGHT_SHARE) + right * (c.radius_m + HAND_REACH_M)
     } else if let Some(s) = e.shape() {
-        base + DVec3::Y * (s.size[1] * e.scale + OVER_TOP_M)
+        base + DVec3::Y * (s.size[1] * e.scale.y + OVER_TOP_M)
     } else {
         base + DVec3::Y * BARE_LIGHT_HEIGHT_M
     }

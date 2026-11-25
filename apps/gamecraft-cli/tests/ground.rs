@@ -65,7 +65,7 @@ fn a_script_queries_the_ground_and_spans_a_deck_over_a_valley() {
     let span = &lines[5]["span"];
     assert_eq!(lines[5]["position"], json!([0.0, 8.0, 0.0]));
     assert_eq!(span["length_m"], json!(10.0));
-    assert_eq!(span["scale"], json!(16.0));
+    assert_eq!(span["scale"], json!([1.0, 1.0, 16.0]), "the length only");
     assert_eq!(num(&span["ends"][0]["point"][1]), 8.0);
     assert_eq!(num(&span["ends"][1]["point"][1]), 8.0);
     assert_eq!(num(&span["ends"][0]["gap_m"]), 0.0);
@@ -87,7 +87,7 @@ fn a_script_queries_the_ground_and_spans_a_deck_over_a_valley() {
     let post: Value = server.ok("entity.get", json!({"id": children[1]}));
     let p = post["position"].as_array().unwrap();
     assert_eq!(num(&p[0]), -72.0, "{post}");
-    assert_eq!(num(&p[1]), 8.0 - 3.0 * 16.0, "{post}");
+    assert_eq!(num(&p[1]), 8.0 - 3.0, "{post}: the post keeps its 3 m");
     let below = server.ok(
         "query.raycast",
         json!({"origin": [0, 60, 0], "direction": [0, -1, 0]}),
@@ -98,7 +98,7 @@ fn a_script_queries_the_ground_and_spans_a_deck_over_a_valley() {
         "the board over the valley"
     );
     assert!(
-        (num(&below["point"][1]) - (8.0 + 0.3 * 16.0)).abs() < 1e-9,
+        (num(&below["point"][1]) - (8.0 + 0.3)).abs() < 1e-9,
         "{}",
         below["point"]
     );

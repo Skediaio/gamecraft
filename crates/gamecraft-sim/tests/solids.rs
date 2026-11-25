@@ -293,7 +293,7 @@ fn a_scaled_box_blocks_at_its_scaled_size() {
         0.0,
         true,
     );
-    world.entity_mut(id).unwrap().scale = 2.0;
+    world.entity_mut(id).unwrap().scale = gamecraft_world::Scale::uniform(2.0);
     let end = walk_north(world, [0.0, 0.0, 0.0], 0.0, 600, |_, _, _| {});
     assert!((end[2] - (-2.0 + radius())).abs() < TOL, "{end:?}");
 }

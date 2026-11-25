@@ -161,7 +161,7 @@ impl Store {
                     turso::Value::Real(y),
                     turso::Value::Real(z),
                     turso::Value::Real(e.rotation_y_deg),
-                    turso::Value::Real(e.scale),
+                    turso::Value::Real(e.scale.largest()),
                     text(&json!(e.tags()).to_string()),
                     text(&json!(kinds).to_string()),
                 ]),

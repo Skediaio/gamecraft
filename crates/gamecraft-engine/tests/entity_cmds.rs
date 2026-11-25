@@ -43,7 +43,7 @@ fn add_with_position_and_components_with_defaults() {
     let e = s.document().entity(EntityId(4)).unwrap();
     assert_eq!(
         (e.name.as_str(), e.rotation_y_deg, e.scale),
-        ("Tower", 30.0, 2.0)
+        ("Tower", 30.0, gamecraft_world::Scale::uniform(2.0))
     );
     assert_eq!(
         e.components,
@@ -198,7 +198,7 @@ fn set_changes_only_the_fields_given_by_id_or_name() {
     let e = s.document().entity(EntityId(1)).unwrap();
     assert_eq!(
         (e.name.as_str(), e.rotation_y_deg, e.scale),
-        ("Box", 45.0, 1.0)
+        ("Box", 45.0, gamecraft_world::Scale::ONE)
     );
     let r = s
         .run("entity.set", &json!({"id": 1, "at": [4, -6]}))
@@ -210,7 +210,10 @@ fn set_changes_only_the_fields_given_by_id_or_name() {
     )
     .unwrap();
     let e = s.document().entity(EntityId(1)).unwrap();
-    assert_eq!((e.position, e.scale), ([1.0, 1.0, 1.0], 3.0));
+    assert_eq!(
+        (e.position, e.scale),
+        ([1.0, 1.0, 1.0], gamecraft_world::Scale::uniform(3.0))
+    );
 }
 
 #[test]

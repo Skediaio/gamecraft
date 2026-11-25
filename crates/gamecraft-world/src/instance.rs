@@ -22,7 +22,7 @@ use crate::error::Ctx;
 use crate::limits::{MAX_ENTITIES, MAX_HIERARCHY_DEPTH, MAX_INSTANCE_ENTITIES, MAX_PREFAB_NESTING};
 use crate::prefab::place_child;
 use crate::store::EntityMap;
-use crate::{Component, Entity, EntityId, Prefab, PrefabChild, WorldError};
+use crate::{Component, Entity, EntityId, Prefab, PrefabChild, Scale, WorldError};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -206,9 +206,10 @@ pub(crate) fn derive(
         name,
         position,
         rotation_y_deg,
-        // The instance's scale: a child of its own has none (a scale given to a child is an
-        // edit of the instance, `ChildEdit::scale`).
-        scale: parent.scale,
+        // The instance's scale, in the child's own frame (its turn relative to the instance
+        // swaps x and z at a right angle): a child of its own has none (a scale given to a
+        // child is an edit of the instance, `ChildEdit::scale`).
+        scale: parent.scale.in_turned_frame(def.rotation_y_deg),
         prefab: def.prefab.clone(),
         parent: Some(parent.id),
         layer: parent.layer.clone(),
@@ -270,7 +271,7 @@ pub(crate) struct ChildEdit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_y_deg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scale: Option<f64>,
+    pub scale: Option<Scale>,
     /// The child's layer; `null` is the world's default layer.
     #[serde(
         default,
@@ -345,7 +346,7 @@ pub(crate) fn diff(index: u32, derived: &Entity, actual: &Entity) -> ChildEdit {
         position: (!same3(derived.position, actual.position)).then_some(actual.position),
         rotation_y_deg: (!same(derived.rotation_y_deg, actual.rotation_y_deg))
             .then_some(actual.rotation_y_deg),
-        scale: (!same(derived.scale, actual.scale)).then_some(actual.scale),
+        scale: (derived.scale != actual.scale).then_some(actual.scale),
         layer: (derived.layer != actual.layer).then(|| actual.layer.clone()),
         overrides: (!overrides.is_empty()).then_some(overrides),
         removed_components: (!removed.is_empty()).then_some(removed),

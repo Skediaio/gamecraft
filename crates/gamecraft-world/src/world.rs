@@ -7,7 +7,7 @@ use crate::prefab::{check_components, place_child, relative};
 use crate::store::EntityMap;
 use crate::{
     Component, Entity, EntityDraft, EntityId, Environment, Heightmap, ModelBounds, ModelBox,
-    Objective, Prefab, Spawn, Spawned, Terrain, Trigger, VarValue, WorldError,
+    Objective, Prefab, Scale, Spawn, Spawned, Terrain, Trigger, VarValue, WorldError,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -93,8 +93,8 @@ struct WorldFile {
     triggers: Vec<Trigger>,
 }
 
-fn default_scale() -> f64 {
-    1.0
+fn default_scale() -> Scale {
+    Scale::ONE
 }
 
 /// An entity as the file holds it: an instance of a prefab keeps its prefab and overrides
@@ -110,7 +110,7 @@ struct EntityFile {
     #[serde(default)]
     rotation_y_deg: f64,
     #[serde(default = "default_scale")]
-    scale: f64,
+    scale: Scale,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     prefab: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -252,7 +252,7 @@ struct VersionProbe {
 }
 
 /// An entity's placement: its base position, its turn about +Y in degrees and its scale.
-type Pose = ([f64; 3], f64, f64);
+type Pose = ([f64; 3], f64, Scale);
 
 /// Where an entity stood before a move of its tree and where it stands after it.
 #[derive(Clone, Copy)]
@@ -460,14 +460,14 @@ impl World {
         self.place_tree(id, position, rotation_y_deg, scale, &below)
     }
 
-    /// Sets the scale of entity `id` (0.001 to 1000), where it stands: everything below it
-    /// scales with it. A prefab's child that is as its prefab places it stands at its offset
-    /// times the new scale, to the bit; any other entity below keeps its place relative to
-    /// `id` in world metres, grown by the ratio of the scales. A child at the scale the entity
-    /// had (a prefab's, unedited) takes the new scale; one with a scale of its own keeps it,
-    /// multiplied by the ratio. Nothing changes when the result would be invalid; the error
-    /// names it.
-    pub fn set_scale(&mut self, id: EntityId, scale: f64) -> Result<(), WorldError> {
+    /// Sets the scale of entity `id` (0.001 to 1000 on every axis), where it stands:
+    /// everything below it scales with it. A prefab's child that is as its prefab places it
+    /// stands at its offset times the new scale, in the instance's frame, to the bit; any other
+    /// entity below keeps its place relative to `id` in world metres, grown by the ratio of the
+    /// scales axis by axis. A child at the scale the entity had (a prefab's, unedited) takes the
+    /// new scale; one with a scale of its own keeps it, multiplied by the ratio in its own
+    /// frame. Nothing changes when the result would be invalid; the error names it.
+    pub fn set_scale(&mut self, id: EntityId, scale: Scale) -> Result<(), WorldError> {
         let below = self.descendants(id);
         let (position, rotation_y_deg, _) = self.placement_of(id)?;
         self.place_tree(id, position, rotation_y_deg, scale, &below)
@@ -491,7 +491,7 @@ impl World {
         id: EntityId,
         position: [f64; 3],
         rotation_y_deg: f64,
-        scale: f64,
+        scale: Scale,
         below: &[EntityId],
     ) -> Result<(), WorldError> {
         let entity = self.entities.get(id).ok_or_else(|| WorldError::NotFound {
@@ -501,8 +501,8 @@ impl World {
         let lookup = Lookup::new(&self.prefabs)?;
         let from = (entity.position, entity.rotation_y_deg, entity.scale);
         let (from_pos, from_yaw, from_scale) = from;
-        // How much everything below grows: 1 (exact) when the scale stays.
-        let ratio = scale / from_scale;
+        // How much everything below grows, axis by axis: 1 (exact) when the scale stays.
+        let ratio = scale.over(from_scale);
         let mut moved = Vec::new();
         // Old and new placement of every moved entity, for the children below it.
         let mut placements: BTreeMap<EntityId, Moved> = BTreeMap::new();
@@ -531,23 +531,30 @@ impl World {
                     .of(self.entities.get(parent)?)?
                     .children
                     .get(slot as usize)?;
+                // What the prefab gives this child, at the old and at the new placement.
                 let (was, was_yaw) = place_child(p0, y0, s0, def.offset, def.rotation_y_deg);
                 let untouched = was
                     .iter()
                     .zip(&e.position)
                     .all(|(a, b)| a.to_bits() == b.to_bits())
                     && was_yaw.to_bits() == e.rotation_y_deg.to_bits()
-                    && e.scale.to_bits() == s0.to_bits();
-                untouched.then(|| (place_child(p1, y1, s1, def.offset, def.rotation_y_deg), s1))
+                    && e.scale == s0.in_turned_frame(def.rotation_y_deg);
+                untouched.then(|| {
+                    (
+                        place_child(p1, y1, s1, def.offset, def.rotation_y_deg),
+                        s1.in_turned_frame(def.rotation_y_deg),
+                    )
+                })
             });
             let ((p, yaw), child_scale) = exact.unwrap_or_else(|| {
-                // Relative to `id` as it stood, in world metres of its frame, as before
-                // scales reached children; the ratio is 1 unless the scale changed.
+                // Relative to `id` as it stood, in metres of its frame: the offset grows by the
+                // ratio as it is. The entity's own scale is in its own frame, turned by `turn`,
+                // so there the ratio is turned too.
                 let (offset, turn) = relative(from_pos, from_yaw, e.position, e.rotation_y_deg);
-                let own = if e.scale.to_bits() == from_scale.to_bits() {
+                let own = if e.scale == from_scale {
                     scale
                 } else {
-                    e.scale * ratio
+                    e.scale.by(ratio.in_turned_frame(turn))
                 };
                 (
                     place_child(position, rotation_y_deg, ratio, offset, turn),

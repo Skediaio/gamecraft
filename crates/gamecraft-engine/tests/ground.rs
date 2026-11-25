@@ -16,7 +16,7 @@ mod common;
 use common::{example, refuse, snapshot, undo_depth};
 use gamecraft_engine::Session;
 use gamecraft_math::Portable;
-use gamecraft_world::{EntityId, Heightmap, ModelBounds, Terrain, TerrainSource, World};
+use gamecraft_world::{EntityId, Heightmap, ModelBounds, Scale, Terrain, TerrainSource, World};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -120,7 +120,7 @@ fn position(s: &Session, id: u64) -> [f64; 3] {
     s.document().entity(EntityId(id)).unwrap().position
 }
 
-fn scale_of(s: &Session, id: u64) -> f64 {
+fn scale_of(s: &Session, id: u64) -> Scale {
     s.document().entity(EntityId(id)).unwrap().scale
 }
 
@@ -525,7 +525,7 @@ fn a_span_lays_an_entity_between_two_ground_points() {
         out["position"]
     );
     assert_eq!(out["span"]["length_m"], json!(10.0));
-    assert_eq!(out["span"]["scale"], json!(3.0));
+    assert_eq!(out["span"]["scale"], json!([1.0, 1.0, 3.0]));
     let ends = out["span"]["ends"].as_array().unwrap();
     assert_eq!(ends.len(), 2);
     assert!(is_at(&ends[0]["point"], [0.0, 0.0, 0.0]));
@@ -539,15 +539,15 @@ fn a_span_lays_an_entity_between_two_ground_points() {
         "it faces `to`: {}",
         e.rotation_y_deg
     );
-    assert_eq!(e.scale, 3.0);
-    // A uniform scale scales everything: 30 m long, 6 m wide, 1.5 m high, its ends on the
+    assert_eq!(e.scale, Scale::per_axis(1.0, 1.0, 3.0));
+    // Only the length follows the span: 30 m long, 2 m wide, 0.5 m thick, its ends on the
     // ground and nothing beyond them.
     assert_eq!(hit_down(&mut s, 0.2, 0.0), Some(id));
-    assert_eq!(hit_down(&mut s, 29.8, 2.9), Some(id));
+    assert_eq!(hit_down(&mut s, 29.8, 0.9), Some(id));
     assert_eq!(hit_down(&mut s, -0.2, 0.0), None, "beyond `from`");
     assert_eq!(hit_down(&mut s, 30.2, 0.0), None, "beyond `to`");
-    assert_eq!(hit_down(&mut s, 15.0, 3.1), None, "beside the deck");
-    assert!(close(num(&down(&mut s, 15.0, 0.0)["point"][1]), 1.5));
+    assert_eq!(hit_down(&mut s, 15.0, 1.1), None, "beside the deck");
+    assert!(close(num(&down(&mut s, 15.0, 0.0)["point"][1]), 0.5));
     let ends = ground(&mut s, vec![[0.0, 0.0], [30.0, 0.0]]);
     assert_eq!(num(&ends[0]["height_m"]), 0.0);
     assert_eq!(num(&ends[1]["height_m"]), 0.0);
@@ -564,7 +564,7 @@ fn a_span_takes_its_length_an_offset_and_its_own_direction() {
         )
         .unwrap();
     assert!(is_at(&out["position"], [15.0, 1.0, 0.0]));
-    assert_eq!(out["span"]["scale"], json!(6.0));
+    assert_eq!(out["span"]["scale"], json!([1.0, 1.0, 6.0]));
     assert_eq!(num(&out["span"]["ends"][0]["gap_m"]), 1.0);
     assert_eq!(num(&out["span"]["ends"][1]["gap_m"]), 1.0);
     // South: the entity faces `to` (+Z), yaw 180.
@@ -581,7 +581,7 @@ fn a_span_takes_its_length_an_offset_and_its_own_direction() {
         json!(1.0),
         "a cylinder's length is its diameter"
     );
-    assert_eq!(out["span"]["scale"], json!(40.0));
+    assert_eq!(out["span"]["scale"], json!([1.0, 1.0, 40.0]));
     let e = s.document().entity(EntityId(id)).unwrap();
     assert!(close(e.rotation_y_deg, 180.0), "{}", e.rotation_y_deg);
     // A diagonal span: 30 m along x and 40 m along z is 50 m.
@@ -592,7 +592,7 @@ fn a_span_takes_its_length_an_offset_and_its_own_direction() {
         )
         .unwrap();
     assert!(is_at(&out["position"], [15.0, 0.0, 20.0]));
-    assert_eq!(out["span"]["scale"], json!(5.0));
+    assert_eq!(out["span"]["scale"], json!([1.0, 1.0, 5.0]));
     let id = out["id"].as_u64().unwrap();
     let e = s.document().entity(EntityId(id)).unwrap();
     // It faces (30, 40): yaw_forward = (-sin, -cos) is that direction, normalised.
@@ -806,30 +806,34 @@ fn a_prefab_span_scales_the_instance_and_its_children() {
         json!(10.0),
         "measured from the board"
     );
-    assert_eq!(out["span"]["scale"], json!(4.0));
+    assert_eq!(out["span"]["scale"], json!([1.0, 1.0, 4.0]));
     assert!(is_at(&out["span"]["ends"][1]["point"], [40.0, 0.0, 0.0]));
     assert!(is_at(&json!(position(&s, id)), [20.0, 0.0, 0.0]));
-    // The board stands on the instance, four times its size; the posts hang below its ends.
+    // The board stands on the instance, four times its length; the posts hang below its ends.
     assert!(is_at(&json!(position(&s, children[0])), [20.0, 0.0, 0.0]));
-    assert!(is_at(&json!(position(&s, children[3])), [2.0, -8.0, 0.0]));
-    assert!(is_at(&json!(position(&s, children[4])), [38.0, -8.0, 0.0]));
+    assert!(is_at(&json!(position(&s, children[3])), [2.0, -2.0, 0.0]));
+    assert!(is_at(&json!(position(&s, children[4])), [38.0, -2.0, 0.0]));
     for c in children.iter().chain(std::iter::once(&id)) {
-        assert_eq!(scale_of(&s, *c), 4.0, "entity {c}");
+        assert_eq!(
+            scale_of(&s, *c),
+            Scale::per_axis(1.0, 1.0, 4.0),
+            "entity {c}"
+        );
     }
     // Both ends of the deck are on the ground, and the deck reaches exactly to them.
     assert_eq!(hit_down(&mut s, 0.3, 0.0), Some(children[0]));
-    assert!(close(num(&down(&mut s, 20.0, 0.0)["point"][1]), 1.2));
+    assert!(close(num(&down(&mut s, 20.0, 0.0)["point"][1]), 0.3));
     assert_eq!(hit_down(&mut s, 39.7, 0.0), Some(children[0]));
     assert_eq!(hit_down(&mut s, -0.3, 0.0), None);
     assert_eq!(hit_down(&mut s, 40.3, 0.0), None);
     assert_eq!(
-        hit_down(&mut s, 20.0, 3.0),
+        hit_down(&mut s, 20.0, 0.5),
         Some(children[0]),
-        "2 m wide, scaled: 8 m"
+        "2 m wide, as the prefab made it"
     );
     // The rail on that side, a hand's width in from the edge.
-    assert_eq!(hit_down(&mut s, 20.0, 3.9), Some(children[2]));
-    assert_eq!(hit_down(&mut s, 20.0, 4.1), None);
+    assert_eq!(hit_down(&mut s, 20.0, 0.96), Some(children[2]));
+    assert_eq!(hit_down(&mut s, 20.0, 1.1), None);
     // The file keeps the instance and derives the children again: no edit of a child.
     assert_derived(&s, id, &children);
     let back = World::from_json(&s.document().to_json().unwrap()).unwrap();
@@ -927,7 +931,7 @@ fn a_prefab_span_measures_models_with_bounds() {
         )
         .unwrap();
     assert_eq!(out["span"]["length_m"], json!(12.0), "from z = -2 to 10");
-    assert_eq!(out["span"]["scale"], json!(5.0));
+    assert_eq!(out["span"]["scale"], json!([1.0, 1.0, 5.0]));
     // The board's centre is 4 m behind its origin: the instance stands 20 m past the midpoint.
     assert!(
         is_at(&out["position"], [50.0, 0.0, 0.0]),
@@ -985,7 +989,7 @@ fn a_prefab_span_measures_turned_and_nested_children() {
         out["span"]
     );
     assert!(
-        close(num(&out["span"]["scale"]), 32.0 / 17.0),
+        close(num(&out["span"]["scale"][2]), 32.0 / 17.0),
         "{}",
         out["span"]
     );
@@ -1052,7 +1056,7 @@ fn a_prefab_without_measurable_geometry_asks_for_its_length() {
             &json!({"prefab": "m", "span": {"from": [0, 0], "to": [30, 0], "length_m": 10}}),
         )
         .unwrap();
-    assert_eq!(out["span"]["scale"], json!(3.0));
+    assert_eq!(out["span"]["scale"], json!([1.0, 1.0, 3.0]));
 }
 
 #[test]
@@ -1111,14 +1115,14 @@ fn setting_the_scale_of_an_instance_scales_its_children_with_it() {
         &json!(position(&s, children[3])),
         [100.0, -2.0, 104.5]
     ));
-    assert_eq!(scale_of(&s, children[3]), 1.0);
+    assert_eq!(scale_of(&s, children[3]), Scale::ONE);
     s.run("entity.set", &json!({"id": id, "scale": 2})).unwrap();
     assert!(is_at(
         &json!(position(&s, children[3])),
         [100.0, -4.0, 109.0]
     ));
     for c in &children {
-        assert_eq!(scale_of(&s, *c), 2.0, "entity {c}");
+        assert_eq!(scale_of(&s, *c), Scale::uniform(2.0), "entity {c}");
     }
     // Moving and turning the instance keeps them relative.
     s.run(
@@ -1131,7 +1135,7 @@ fn setting_the_scale_of_an_instance_scales_its_children_with_it() {
         is_at(&json!(post), [9.0, -3.0, 0.0]),
         "9 m behind (east of) the instance, turned: {post:?}"
     );
-    assert_eq!(scale_of(&s, children[3]), 2.0);
+    assert_eq!(scale_of(&s, children[3]), Scale::uniform(2.0));
     // The children are still derived data: the instance is written without a word of them.
     assert_derived(&s, id, &children);
     let text = s.document().to_json().unwrap();
@@ -1174,5 +1178,5 @@ fn an_instance_scale_of_one_leaves_children_where_they_were() {
         "{}",
         e.rotation_y_deg
     );
-    assert_eq!(e.scale, 1.0);
+    assert_eq!(e.scale, Scale::ONE);
 }
