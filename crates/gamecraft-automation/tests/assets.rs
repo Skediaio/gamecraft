@@ -70,6 +70,15 @@ fn the_demo_pack_s_models_are_listed_with_triangles_and_bounds() {
     assert!((crate_["bounds"]["max"][1].as_f64().unwrap() - 0.9).abs() < 1e-6);
     assert_eq!(assets[1]["triangles"], 48);
     assert_eq!(list["missing"], json!([]));
+    // One level, drawn as far as its size asks (0.9 m on a side: about 364 m).
+    assert_eq!(crate_["lod_source"], Value::Null);
+    assert_eq!(crate_["lod_warnings"], json!([]));
+    assert_eq!(
+        crate_["lods"],
+        json!([{"level": 0, "triangles": 12, "until_m": crate_["draw_distance_m"].clone()}])
+    );
+    let draw = crate_["draw_distance_m"].as_f64().unwrap();
+    assert!((364.0..366.0).contains(&draw), "{draw}");
     // CC0 only: nothing to credit.
     let credits = ok(&mut h, "asset.credits", json!({}));
     assert_eq!(credits, json!({"text": "", "assets": []}));
@@ -822,5 +831,161 @@ fn a_buffer_outside_the_model_s_folder_is_refused_and_nothing_is_written() {
             list["textures"].as_array().unwrap().len()
         ),
         (0, 0)
+    );
+}
+
+/// A `.gltf` of unit cubes with its buffer beside it: one mesh per count in `boxes` (its
+/// cubes side by side), named `<object>_LOD<n>` by `names`, showing `roots`.
+fn write_levels(dir: &Path, object: &str, boxes: &[usize], roots: &[usize], extras: Value) {
+    let mut bin: Vec<u8> = Vec::new();
+    let mut views = Vec::new();
+    let mut accessors = Vec::new();
+    let mut meshes = Vec::new();
+    for &count in boxes {
+        let offset = bin.len();
+        let mut lo = [f32::MAX; 3];
+        let mut hi = [f32::MIN; 3];
+        for b in 0..count {
+            for face in 0..6 {
+                for corner in 0..6 {
+                    // A unit cube standing on y = 0: six corners per side.
+                    let p = cube_corner(face, corner, b);
+                    for k in 0..3 {
+                        lo[k] = lo[k].min(p[k]);
+                        hi[k] = hi[k].max(p[k]);
+                        bin.extend_from_slice(&p[k].to_le_bytes());
+                    }
+                }
+            }
+        }
+        views.push(json!({"buffer": 0, "byteOffset": offset, "byteLength": bin.len() - offset}));
+        accessors.push(json!({
+            "bufferView": views.len() - 1,
+            "componentType": 5126,
+            "count": count * 36,
+            "type": "VEC3",
+            "min": lo,
+            "max": hi
+        }));
+        meshes.push(json!({"primitives": [{"attributes": {"POSITION": accessors.len() - 1}}]}));
+    }
+    let nodes: Vec<Value> = boxes
+        .iter()
+        .enumerate()
+        .map(|(level, _)| json!({"name": format!("{object}_LOD{level}"), "mesh": level}))
+        .collect();
+    let mut doc = json!({
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": roots}],
+        "nodes": nodes,
+        "meshes": meshes,
+        "buffers": [{"uri": "thing.bin", "byteLength": bin.len()}],
+        "bufferViews": views,
+        "accessors": accessors
+    });
+    if !extras.is_null() {
+        doc["asset"]["extras"] = extras;
+    }
+    fs::create_dir_all(dir).unwrap();
+    fs::write(dir.join("thing.gltf"), serde_json::to_vec(&doc).unwrap()).unwrap();
+    fs::write(dir.join("thing.bin"), &bin).unwrap();
+    fs::write(
+        dir.join("thing.gltf.license.json"),
+        r#"{"license": "CC0-1.0", "author": "a", "source_url": "u"}"#,
+    )
+    .unwrap();
+}
+
+/// Corner `corner` (0 to 5) of side `face` of a unit cube at `x = b`, standing on y = 0.
+fn cube_corner(face: usize, corner: usize, b: usize) -> [f32; 3] {
+    let (axis, sign) = [
+        (0, 0.0f32),
+        (0, 1.0),
+        (1, 0.0),
+        (1, 1.0),
+        (2, 0.0),
+        (2, 1.0),
+    ][face];
+    let (a, c) = match axis {
+        0 => (1, 2),
+        1 => (2, 0),
+        _ => (0, 1),
+    };
+    let (u, v) = [
+        (0.0, 0.0),
+        (1.0, 0.0),
+        (1.0, 1.0),
+        (0.0, 0.0),
+        (0.0, 1.0),
+        (1.0, 1.0),
+    ][corner];
+    let mut p = [0.0; 3];
+    p[axis] = sign;
+    p[a] = u;
+    p[c] = v;
+    p[0] += b as f32;
+    p
+}
+
+#[test]
+fn a_model_with_levels_of_detail_lists_them_with_their_distances() {
+    let dir = TempDir::new("assets-lods");
+    copy(&examples().join("assets-demo"), &dir.join("demo"));
+    let models = dir.join("demo/assets/models");
+    write_levels(
+        &models,
+        "Thing",
+        &[3, 2, 1],
+        &[0, 1, 2],
+        json!({"gamecraft": {"draw_distance_m": 900}}),
+    );
+    let mut h = host_in(&dir);
+    ok(&mut h, "project.open", json!({"path": "demo"}));
+    let list = ok(&mut h, "asset.list", json!({}));
+    let thing = list["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["path"] == "models/thing.gltf")
+        .cloned()
+        .unwrap();
+    assert_eq!(thing["triangles"], 36, "{thing}");
+    assert_eq!(thing["lod_source"], "names");
+    assert_eq!(thing["lod_warnings"], json!([]));
+    let lods = thing["lods"].as_array().unwrap();
+    assert_eq!(lods.len(), 3, "{thing}");
+    assert_eq!(
+        (
+            lods[0]["level"].clone(),
+            lods[0]["triangles"].clone(),
+            lods[1]["triangles"].clone(),
+            lods[2]["triangles"].clone()
+        ),
+        (json!(0), json!(36), json!(24), json!(12))
+    );
+    // The file says how far it is drawn; from its size (sqrt(11) m across) it changes level
+    // at about 11.5 m and 46 m.
+    let until: Vec<f64> = lods
+        .iter()
+        .map(|l| l["until_m"].as_f64().unwrap())
+        .collect();
+    assert!((11.4..11.6).contains(&until[0]), "{until:?}");
+    assert!((45.8..46.1).contains(&until[1]), "{until:?}");
+    assert_eq!(thing["draw_distance_m"], 900.0);
+    assert_eq!(until[2], 900.0);
+    // A broken set says so.
+    write_levels(&models, "Thing", &[1, 3], &[0, 1], Value::Null);
+    ok(&mut h, "project.open", json!({"path": "demo"}));
+    let list = ok(&mut h, "asset.list", json!({}));
+    let thing = &list["assets"].as_array().unwrap()[2];
+    assert_eq!(thing["path"], "models/thing.gltf");
+    assert_eq!(thing["lods"].as_array().unwrap().len(), 2);
+    assert!(
+        thing["lod_warnings"].as_array().unwrap().iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .contains("level 1 has more triangles (36) than level 0 (12)")),
+        "{thing}"
     );
 }

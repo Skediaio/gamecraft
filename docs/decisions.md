@@ -8,6 +8,57 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-25: Models change level per ground cell, at distances from the file, the component or their size
+
+One 100 x 100 m block drew 360-430 k triangles per view; a district must not scale linearly.
+The mechanism was already in VisionCraft's renderer (`add_lod_item`): the parts of an item
+that end at the same distance form one level, the instances of an item are grouped in cells
+of 8 m on the ground, each cell takes the level for the distance from the eye to its box (1 m
+of hysteresis, a dissolve between two levels), a cell beyond the last distance is not drawn,
+and cells and items are culled against the six clip planes. GameCraft's adapter handed every
+model one level with an infinite distance. What was missing was the content and the distances.
+
+- **Which geometry is which level** is read from the file by two conventions: names ending in
+  `_LOD<n>` (Unity, Unreal, most exporters) and the `MSFT_lod` extension. Both are found by one
+  walk in `gamecraft-project::lod` that the host's `inspect` and the renderer's parse share,
+  so `asset.list` reports the levels the renderer draws, to the bit. Chosen over one
+  convention (files in the wild use either) and over a way of GameCraft's own to mark levels
+  (nothing should have to be added to a model by hand). Every level of a group is drawn where
+  the group's finest node in the scene stands, since that node is the one the author placed; a
+  level's own transform is ignored. What is broken (a coarser level with more triangles, a
+  missing level, an id that points nowhere) is a warning naming the asset, never an error:
+  the model is drawn as well as it can be.
+- **The distances** come from three places, each winning over the next: the `model` component
+  (`lod_distances_m`, `draw_distance_m`), the file (`asset.extras.gamecraft` with the same two
+  fields, else `MSFT_screencoverage`), and a rule from the model's size. For the file's
+  distances, glTF `extras` was chosen because it is the standard place for what an
+  application adds to a file: the artist's distances travel with the artist's model, through
+  `asset.import` and mods, and the browser build reads them from the model itself. A file of
+  its own beside the model would have needed a place in the licence gate; the licence record
+  is a licence record.
+- **The rule** is a screen-size rule at a reference view, 1080 pixels high at 60 degrees: a
+  level ends where the model's extent across (the diagonal of its box) spans a quarter of the
+  view's height for the first change, and a quarter of the previous share for each next one;
+  the model is drawn while its extent spans 4 pixels. In metres: 3.5, 14, 55, ... times its
+  extent, drawn to 234 times its extent (a crate 0.9 m on a side to 364 m, a house 15 m
+  across to 3.5 km). Chosen over distances that follow the picture's size and field of view:
+  the renderer takes one distance per level per item, a scene is not rebuilt when a window
+  resizes, and an agent's numbers should not change with the size of its pictures. Pictures
+  are always drawn at the highest quality, where the metres are as written; a live frame at a
+  lower quality switches sooner, as it does for everything in the renderer (40 % at low,
+  50 % at medium).
+- **No mesh is simplified** (it would need a new dependency): a model without levels keeps one
+  level and is still culled beyond its draw distance. Automatic levels are the next step if
+  the packs' models turn out not to carry any.
+- **What was drawn**, per model and per level, is counted again on the CPU by the renderer's
+  own rule (`gamecraft-render/src/culling.rs`) and comes with every picture (`view.render`'s
+  `stats.models`): the renderer's own statistics are frame totals. An agent cannot look at
+  pictures; numbers are how it checks. The count of a picture is exact, since a picture starts
+  settled (no hysteresis, no dissolve); a live frame differs for the few frames a hand-over
+  dissolves over.
+- **A character the camera follows is never culled by distance**: it has an item of its own
+  without an end, built again when the followed character changes.
+
 ### 2026-11-24: Shared textures are files of the pack, named by their content hash
 
 Every imported glTF model embedded its own copy of every image: a pack of 29 models sharing four

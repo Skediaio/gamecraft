@@ -53,6 +53,7 @@ impl GameView {
     ) -> Result<Vec<String>, RenderError> {
         let world = game.display_world();
         self.renderer.set_hidden_character(game.hidden_character());
+        self.renderer.set_followed_character(game.player());
         let problems = self.renderer.sync(&world, game.heights());
         let fresh: Vec<String> = problems
             .iter()

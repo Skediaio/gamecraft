@@ -328,6 +328,24 @@ const MODEL_FIELDS: &[Field] = &[
         "`box` (the asset's bounding box: rays hit it, and with `solid` characters are \
          blocked) or `none`.",
     ),
+    field(
+        "lod_distances_m",
+        "[number, ...]",
+        Some("m"),
+        "Where the asset's levels of detail give way to the next, from the camera: the first \
+         ends the finest level, each farther than the one before, and the last nearer than \
+         draw_distance_m. At most one fewer than the asset has levels; the ones left out \
+         follow the asset (asset.list shows its levels and distances), else a rule from its \
+         size. Left out: the asset's own.",
+    ),
+    field(
+        "draw_distance_m",
+        "number",
+        Some("m"),
+        "How far away the model is drawn; beyond it nothing of it is drawn. Left out: the \
+         asset's own, else from its size (about 234 times its extent: a crate vanishes \
+         sooner than a house).",
+    ),
 ];
 
 const ROAD_FIELDS: &[Field] = &[
@@ -620,11 +638,13 @@ const KINDS: &[Kind] = &[
     Kind {
         kind: "model",
         summary: "A glTF model of a pack (`assets/<asset>`), drawn with its PBR materials and \
-                  textures, standing on the entity's position. With `solid` its bounding box \
-                  (from the asset, turned by the entity's yaw) blocks characters like a box.",
+                  textures, standing on the entity's position, at the level of detail its \
+                  distance asks for and not beyond its draw distance. With `solid` its \
+                  bounding box (from the asset, turned by the entity's yaw) blocks characters \
+                  like a box.",
         fields: MODEL_FIELDS,
         minimal: || json!({"type": "model", "asset": "models/crate.glb"}),
-        example: || json!({"type": "model", "asset": "models/crate.glb", "scale": 1, "solid": true, "collider": "box"}),
+        example: || json!({"type": "model", "asset": "models/crate.glb", "scale": 1, "solid": true, "collider": "box", "lod_distances_m": [40, 150], "draw_distance_m": 800}),
     },
     Kind {
         kind: "road",
@@ -710,9 +730,33 @@ mod tests {
             keys.sort_unstable();
             let mut documented: Vec<&str> = kind.fields.iter().map(|f| f.name).collect();
             documented.sort_unstable();
+            // A field the component leaves out when it is not set is not among the
+            // defaults: it must then be in the example, which shows every field.
+            let unset: Vec<&str> = documented
+                .iter()
+                .copied()
+                .filter(|f| !keys.contains(f))
+                .collect();
+            let example = (kind.example)();
+            for field in &unset {
+                assert!(
+                    example.get(field).is_some(),
+                    "{}: `{field}` is neither written by default nor in the example",
+                    kind.kind
+                );
+                keys.push(field);
+            }
+            keys.sort_unstable();
             assert_eq!(keys, documented, "{}", kind.kind);
-            let example: Component = serde_json::from_value((kind.example)()).unwrap();
-            assert_eq!(example.kind(), kind.kind);
+            let parsed: Component = serde_json::from_value(example.clone()).unwrap();
+            assert_eq!(parsed.kind(), kind.kind);
+            // What the example sets is written back, and reads the same again.
+            let written = serde_json::to_value(&parsed).unwrap();
+            for field in &unset {
+                assert!(written.get(*field).is_some(), "{}.{}", kind.kind, field);
+            }
+            let again: Component = serde_json::from_value(written).unwrap();
+            assert_eq!(again, parsed, "{}", kind.kind);
         }
     }
 

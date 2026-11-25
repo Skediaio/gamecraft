@@ -282,7 +282,9 @@ models of a pack share stored once (`gamecraft-project/src/textures.rs`;
 `decisions.md`, *Shared textures are files of the pack*).
 
 - **The component.** `{"type": "model", "asset": "models/crate.glb", "scale"?: 1, "solid"?:
-  false, "collider"?: "box" | "none"}`: `asset` is a path inside a pack's `assets/` folder (1 to
+  false, "collider"?: "box" | "none", "lod_distances_m"?: [number, ...], "draw_distance_m"?:
+  number}` (the last two are written only when set; *Levels of detail* below): `asset` is a path
+  inside a pack's `assets/` folder (1 to
   200 ASCII letters, digits, `-_./`, no `.` or `..` parts) ending in `.glb` or `.gltf`; the
   asset's origin stands on the entity's position, turned by its yaw and sized by `scale` times
   the entity's scale. With the collider `box` rays hit the asset's bounding box (solid or not,
@@ -382,6 +384,35 @@ models of a pack share stored once (`gamecraft-project/src/textures.rs`;
   the store). A missing or broken model, or one whose buffer or texture was not handed, is a
   small magenta box (0.5 m times the scales) at each entity and one problem line naming the
   asset, the file and the entities; it is read again when a file it waited for arrives.
+- **Levels of detail** (2026-11-25; `decisions.md`, *Models change level per ground cell*). A
+  glTF model may carry lower-detail versions, read by `gamecraft_project::lod` from the file
+  itself: by names ending in `_LOD0`, `_LOD1`, ... (a node's or its mesh's, anywhere in the
+  file: the nodes of one object name are its levels by their numbers), or by the `MSFT_lod`
+  extension (the finest node carries `extensions.MSFT_lod.ids`, the indices of the coarser
+  nodes, usually left out of the scene). Every level of a group is drawn where the group's
+  finest node in the scene stands; geometry of no group is drawn at every level; a group's
+  node may hold groups of its own. A number named twice cannot be told apart: only the finest
+  level is drawn and the rest is left out, with a warning. Each level ends at a distance from
+  the camera and the last end is the draw distance: what the component says
+  (`lod_distances_m`, `draw_distance_m`), else the file (`asset.extras.gamecraft` with the
+  same two fields, else `MSFT_screencoverage`, read as shares of the view's height), else the
+  rule from the model's extent across, at a reference view 1080 pixels high at 60 degrees:
+  level `k` ends where the extent spans a quarter of the height to the power `k + 1` (3.5, 14,
+  55, ... times the extent) and the model is drawn while it spans 4 pixels (234 times: a
+  crate 0.9 m on a side to 364 m, a house 15 m across to 3.5 km). The extent counts the
+  model's scale and the entity's; the distances given are metres as written, at the quality
+  pictures are drawn at (the highest; a lower live quality switches sooner). The renderer
+  draws each cell of 8 m of instances at the level for its distance, culls cells against the
+  view, and lets a cell that crosses the draw distance dissolve rather than pop. What each
+  model drew is counted again by the same rule on the CPU and comes with every picture
+  (`view.render`'s `stats.models`: per model item `asset`, `instances`, `drawn`, `culled`,
+  `until_m` and `levels`), and from `WorldRenderer::count_models` for a live view. A broken
+  set (a coarser level with more triangles, a missing level, an id that points nowhere) is a
+  problem line naming the asset; the model is drawn all the same. `asset.list` shows a
+  model's `lods` (`level`, `triangles`, `until_m`), `draw_distance_m`, `lod_source` (`names`
+  or `MSFT_lod`) and `lod_warnings`; its `triangles` are those of the finest level, and its
+  bounding box holds every level. A character the camera follows has an item that is never
+  culled by distance. Not read: material-level `MSFT_lod`; no mesh is simplified.
 
 ## Open
 

@@ -16,6 +16,7 @@ use crate::fields::Fields;
 use crate::files::{Direction, MAX_ASSET_BYTES, resolve, write_whole};
 use crate::host::Host;
 use gamecraft_engine::{CommandSpec, ParamType as T, param};
+use gamecraft_project::lod::LodDistances;
 use gamecraft_project::model::{folder_of, references, resolve_uri, split_glb};
 use gamecraft_project::textures::{self, Imported, is_texture};
 use gamecraft_project::{
@@ -195,14 +196,16 @@ pub(crate) fn asset_specs() -> Vec<CommandSpec> {
             "List Assets",
             "Lists the assets of the open project's packs (a later pack's asset replaces an \
              earlier one's of the same path): licence, author, source, size, and for a model \
-             its triangle count and bounding box (metres, the asset's own axes), or the \
-             problem that kept it from being read; how many entities of the world shown use \
-             it. The textures of the packs' store (`textures`) are listed apart, each once, \
+             its triangle count, bounding box (metres, the asset's own axes) and levels of \
+             detail (triangles per level, where each ends and how far it is drawn as its file \
+             says, else from its size), or the problem that kept it from being read; how \
+             many entities of the world shown use it. The textures of the packs' store (`textures`) are listed apart, each once, \
              with the models that refer to it. And the model assets the world refers to that \
              no pack has.",
             vec![],
             "{assets: [{path, pack, kind, license, author, source_url, title, changes, bytes, \
-             files, triangles, bounds: {min, max} | null, problem, used_by}], textures: [{path, \
+             files, triangles, bounds: {min, max} | null, lods: [{level, triangles, until_m}], \
+             draw_distance_m, lod_source, lod_warnings, problem, used_by}], textures: [{path, \
              pack, bytes, license, author, source_url, title, changes, used_by: [models]}], \
              missing: [{asset, entities}]}",
             json!({}),
@@ -223,6 +226,34 @@ pub(crate) fn asset_specs() -> Vec<CommandSpec> {
 
 fn bounds_json(b: &ModelBounds) -> Value {
     json!({"min": b.min, "max": b.max})
+}
+
+/// The levels of detail of a model as `asset.list` shows them: the triangles of each level
+/// and where it ends (its file's distances, else the rule from its size; a component's
+/// distances are its entities' own), how far it is drawn, how the levels were found and what
+/// is broken in them.
+fn lods_json(s: &ModelSummary) -> (Value, Value, Value, Value) {
+    let (distances, notes) =
+        LodDistances::resolve(s.lod_triangles.len(), s.size_m(), s.lod.as_ref(), None);
+    let ends = distances.ends_m();
+    let lods: Vec<Value> = s
+        .lod_triangles
+        .iter()
+        .zip(&ends)
+        .enumerate()
+        .map(|(level, (&triangles, &until_m))| {
+            json!({"level": level, "triangles": triangles, "until_m": until_m})
+        })
+        .collect();
+    let mut warnings: Vec<String> = s.lod_warnings.clone();
+    warnings.extend(notes);
+    (
+        Value::from(lods),
+        json!(distances.draw_m),
+        s.lod_source
+            .map_or(Value::Null, |source| json!(source.name())),
+        Value::from(warnings),
+    )
 }
 
 impl Host {
@@ -309,6 +340,10 @@ impl Host {
                 Some(Err(e)) => (Value::Null, Value::Null, json!(e)),
                 None => (Value::Null, Value::Null, Value::Null),
             };
+            let (lods, draw_distance_m, lod_source, lod_warnings) = match &a.summary {
+                Some(Ok(s)) => lods_json(s),
+                _ => (Value::Null, Value::Null, Value::Null, Value::Null),
+            };
             assets.push(json!({
                 "path": path,
                 "pack": a.pack,
@@ -322,6 +357,10 @@ impl Host {
                 "files": a.asset.files,
                 "triangles": triangles,
                 "bounds": bounds,
+                "lods": lods,
+                "draw_distance_m": draw_distance_m,
+                "lod_source": lod_source,
+                "lod_warnings": lod_warnings,
                 "problem": problem,
                 "used_by": uses.get(path).map_or(0, Vec::len),
             }));

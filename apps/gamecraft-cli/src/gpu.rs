@@ -20,6 +20,8 @@ struct Gpu {
     renderer: WorldRenderer,
     /// The `view_revision` the renderer's scene was last synced to.
     synced: Option<u64>,
+    /// The character the last picture's camera followed.
+    followed: Option<EntityId>,
 }
 
 fn open_gpu() -> Result<Gpu, String> {
@@ -27,6 +29,7 @@ fn open_gpu() -> Result<Gpu, String> {
         Ok((device, queue)) => Ok(Gpu {
             renderer: WorldRenderer::new(device, queue),
             synced: None,
+            followed: None,
         }),
         Err(RenderError::NoGpu(why)) => Err(format!(
             "no GPU was found ({why}); pictures need a GPU adapter or a software Vulkan \
@@ -60,7 +63,17 @@ impl Pictures for GpuPictures {
         }
         let aspect = f64::from(request.width) / f64::from(request.height);
         let camera = camera_for(world, heights, &request.camera, aspect)?;
-        if gpu.synced != Some(view_revision) {
+        // A camera that follows a character: its model is never culled by distance, which
+        // is a change of the scene, not of the world.
+        let followed = match &request.camera {
+            CameraRequest::FirstPerson { entity } => Some(*entity),
+            CameraRequest::ThirdPerson { entity, .. } => Some(*entity),
+            CameraRequest::Framing | CameraRequest::LookAt { .. } => None,
+        };
+        let refollowed = gpu.followed != followed;
+        gpu.followed = followed;
+        gpu.renderer.set_followed_character(followed);
+        if gpu.synced != Some(view_revision) || refollowed {
             gpu.renderer.sync(world, heights);
             gpu.synced = Some(view_revision);
         }
@@ -88,6 +101,19 @@ impl Pictures for GpuPictures {
                     "triangles": picture.stats.triangles,
                     "draws": picture.stats.draws,
                     "instances": picture.stats.instances,
+                    "forward_triangles": picture.stats.forward_triangles,
+                    "models": picture.stats.models.iter().map(|m| {
+                        json!({
+                            "asset": m.asset,
+                            "instances": m.instances,
+                            "drawn": m.drawn,
+                            "culled": m.culled,
+                            "until_m": m.until_m,
+                            "levels": m.levels.iter().enumerate().map(|(level, l)| {
+                                json!({"level": level, "instances": l.instances, "triangles": l.triangles})
+                            }).collect::<Vec<_>>(),
+                        })
+                    }).collect::<Vec<_>>(),
                 },
                 "problems": Value::from(picture.problems),
             }),

@@ -191,8 +191,13 @@ the project's `ENGINE-WISHLIST.md`):
 - ~~**Shared textures between model assets**~~: done 2026-11-25. `asset.import` moves a model's
   images into the pack's texture store (`assets/textures/<content hash>`), each with its own
   licence record, listed once by `asset.list` and `asset.credits` (`docs/design/projects.md`).
-- **Distance LOD and culling for models** (plants have it): about 400 k triangles per view of
-  one block, so draw time scales with town size.
+- ~~**Distance LOD and culling for models**~~: done 2026-11-25. A glTF model's levels
+  (`_LOD<n>` names, `MSFT_lod`) are drawn by distance and the model is culled beyond a draw
+  distance, both from the file (`asset.extras.gamecraft`, `MSFT_screencoverage`), the
+  `model` component (`lod_distances_m`, `draw_distance_m`) or a rule from its size;
+  `asset.list` lists the levels and `view.render` reports what each model drew per level
+  (`docs/design/projects.md`; `decisions.md`). No mesh is simplified yet; plants still have
+  one level in the adapter (VisionCraft's application gives them levels and impostors).
 - **Model collision finer than the bounding box:** recessed doorways and balconies are cosmetic.
 - **Wires and cables as splines** instead of fixed-length models.
 - **Emissive windows** and a cheap interior suggestion for dusk.
