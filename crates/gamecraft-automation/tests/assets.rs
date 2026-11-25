@@ -1,8 +1,7 @@
 //! Assets through the host: the demo pack opens with its models measured, a solid crate stops a
 //! character and a fence that is not solid lets one through, `asset.import` round trips into a
 //! project, `asset.list` and `asset.credits`, the licence gate on open, the files a renderer is
-//! handed, and hostile parameters.
-
+//! handed, and hostile parameters. The texture store: models that share an image store it once.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -12,11 +11,13 @@
 
 mod common;
 
+use common::models::{embedded_image, glb_with_image, gltf_with_files};
 use common::{TempDir, err, host_in, ok};
 use gamecraft_automation::{Host, Pictures, RenderRequest, Rendered};
 use gamecraft_world::{HeightField, World};
 use serde_json::{Value, json};
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
@@ -115,9 +116,19 @@ fn import_round_trips_into_a_project_and_credits_name_cc_by() {
                "author": "Ada", "source_url": "https://example.org/fence", "title": "Fence"}),
     );
     assert_eq!(done["triangles"], 48);
+    // Its image goes into the pack's texture store, once, with the model's record.
+    let stored = done["textures"].as_array().unwrap();
+    assert_eq!(stored.len(), 1, "{done}");
+    let texture = stored[0]["path"].as_str().unwrap();
+    assert!(
+        texture.starts_with("textures/") && stored[0]["stored"] == true,
+        "{done}"
+    );
     assert_eq!(
         done["files"],
         json!([
+            format!("assets/{texture}"),
+            format!("assets/{texture}.license.json"),
             "assets/props/fence.glb",
             "assets/props/fence.glb.license.json"
         ])
@@ -271,6 +282,7 @@ fn asset_commands_take_hostile_parameters_without_panicking() {
         "source_url",
         "title",
         "changes",
+        "textures",
     ];
     for command in ["asset.import", "asset.list", "asset.credits"] {
         for key in keys {
@@ -284,4 +296,385 @@ fn asset_commands_take_hostile_parameters_without_panicking() {
             }
         }
     }
+}
+
+// ------------------------------------------------------------------------ the texture store
+
+/// A new project `game` in a temporary folder, with a `downloads/` folder beside it.
+fn project(tag: &str) -> (TempDir, Host) {
+    let dir = TempDir::new(tag);
+    let mut h = host_in(&dir);
+    ok(&mut h, "file.new", json!({"name": "Game"}));
+    ok(
+        &mut h,
+        "project.new",
+        json!({"path": "game", "id": "game", "name": "Game"}),
+    );
+    fs::create_dir_all(dir.join("downloads")).unwrap();
+    (dir, h)
+}
+
+/// The images of the two demo models: the crate's wood and the fence's.
+fn demo_images() -> (Vec<u8>, Vec<u8>) {
+    let models = examples().join("assets-demo/assets/models");
+    let crate_ = fs::read(models.join("crate.glb")).unwrap();
+    let fence = fs::read(models.join("fence.glb")).unwrap();
+    (embedded_image(&crate_), embedded_image(&fence))
+}
+
+/// The files of the project's texture store (`assets/textures/`), without the records, sorted.
+fn textures(dir: &TempDir) -> Vec<String> {
+    let mut out: Vec<String> = fs::read_dir(dir.join("game/assets/textures"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|n| !n.ends_with(".license.json"))
+        .collect();
+    out.sort();
+    out
+}
+
+/// `asset.import` of `file` to `to` as CC0 by Ada.
+fn import(h: &mut Host, file: &str, to: &str) -> Value {
+    ok(
+        h,
+        "asset.import",
+        json!({"file": file, "to": to, "license": "CC0-1.0", "author": "Ada",
+               "source_url": "https://example.org/models"}),
+    )
+}
+
+#[test]
+fn two_models_with_the_same_image_share_one_texture_file() {
+    let (dir, mut h) = project("assets-shared");
+    let (wood, _) = demo_images();
+    fs::write(dir.join("downloads/a.glb"), glb_with_image(&wood, "a")).unwrap();
+    fs::write(dir.join("downloads/b.glb"), glb_with_image(&wood, "b")).unwrap();
+    let a = import(&mut h, "downloads/a.glb", "models/a.glb");
+    let b = import(&mut h, "downloads/b.glb", "models/b.glb");
+    // One texture in the store, with one record: a stored it, b reused it.
+    let store = textures(&dir);
+    assert_eq!(store.len(), 1, "{store:?}");
+    let name = store[0].clone();
+    assert!(name.ends_with(".png"), "{name}");
+    assert_eq!(
+        fs::read(dir.path().join(format!("game/assets/textures/{name}"))).unwrap(),
+        wood
+    );
+    assert!(
+        dir.path()
+            .join(format!("game/assets/textures/{name}.license.json"))
+            .is_file()
+    );
+    let record = format!("assets/textures/{name}.license.json");
+    let path = format!("textures/{name}");
+    assert_eq!(
+        a["textures"],
+        json!([{"path": path, "bytes": wood.len(), "stored": true, "record": record}])
+    );
+    assert_eq!(
+        a["files"],
+        json!([
+            format!("assets/{path}"),
+            record,
+            "assets/models/a.glb",
+            "assets/models/a.glb.license.json"
+        ])
+    );
+    assert_eq!(b["textures"][0]["path"], path);
+    assert_eq!(b["textures"][0]["stored"], false, "{b}");
+    assert_eq!(
+        b["files"],
+        json!(["assets/models/b.glb", "assets/models/b.glb.license.json"])
+    );
+    // The stored models no longer hold the image.
+    for m in ["a", "b"] {
+        let stored = fs::metadata(dir.path().join(format!("game/assets/models/{m}.glb")))
+            .unwrap()
+            .len();
+        let source = glb_with_image(&wood, m).len() as u64;
+        assert!(
+            stored + wood.len() as u64 <= source,
+            "{m}: {stored} vs {source}"
+        );
+    }
+    // Listed once, used by both; before and after reopening the project from its files.
+    for _ in 0..2 {
+        let list = ok(&mut h, "asset.list", json!({}));
+        assert_eq!(
+            list["textures"],
+            json!([{
+                "path": path,
+                "pack": "game",
+                "bytes": wood.len(),
+                "license": "CC0-1.0",
+                "author": "Ada",
+                "source_url": "https://example.org/models",
+                "title": null,
+                "changes": null,
+                "used_by": ["models/a.glb", "models/b.glb"],
+            }]),
+            "{list}"
+        );
+        let assets = list["assets"].as_array().unwrap();
+        assert_eq!(assets.len(), 2, "{list}");
+        for (i, m) in ["a", "b"].iter().enumerate() {
+            assert_eq!(assets[i]["path"], format!("models/{m}.glb"));
+            assert_eq!(assets[i]["kind"], "model");
+            assert_eq!(assets[i]["triangles"], 1);
+            assert_eq!(assets[i]["files"][1], format!("assets/{path}"));
+        }
+        ok(&mut h, "project.open", json!({"path": "game"}));
+    }
+}
+
+#[test]
+fn a_model_with_a_new_image_adds_one_texture() {
+    let (dir, mut h) = project("assets-new-texture");
+    let (wood, plank) = demo_images();
+    for (n, image) in [("a", &wood), ("b", &wood), ("c", &plank)] {
+        fs::write(
+            dir.path().join(format!("downloads/{n}.glb")),
+            glb_with_image(image, n),
+        )
+        .unwrap();
+    }
+    import(&mut h, "downloads/a.glb", "models/a.glb");
+    import(&mut h, "downloads/b.glb", "models/b.glb");
+    let c = import(&mut h, "downloads/c.glb", "models/c.glb");
+    assert_eq!(c["textures"][0]["stored"], true, "{c}");
+    let store = textures(&dir);
+    assert_eq!(store.len(), 2, "{store:?}");
+    let held: BTreeSet<Vec<u8>> = store
+        .iter()
+        .map(|n| fs::read(dir.path().join(format!("game/assets/textures/{n}"))).unwrap())
+        .collect();
+    assert_eq!(held, BTreeSet::from([wood.clone(), plank.clone()]));
+    // A model with an image the pack has again adds nothing.
+    import(&mut h, "downloads/c.glb", "models/d.glb");
+    assert_eq!(textures(&dir).len(), 2);
+    let list = ok(&mut h, "asset.list", json!({}));
+    let t = list["textures"].as_array().unwrap();
+    assert_eq!(t.len(), 2, "{list}");
+    assert!(
+        t.iter()
+            .any(|x| x["used_by"] == json!(["models/a.glb", "models/b.glb"]))
+    );
+    assert!(
+        t.iter()
+            .any(|x| x["used_by"] == json!(["models/c.glb", "models/d.glb"]))
+    );
+}
+
+#[test]
+fn a_shared_cc_by_texture_is_credited_once() {
+    let (dir, mut h) = project("assets-texture-credit");
+    let (wood, _) = demo_images();
+    fs::write(dir.join("downloads/a.glb"), glb_with_image(&wood, "a")).unwrap();
+    fs::write(dir.join("downloads/b.glb"), glb_with_image(&wood, "b")).unwrap();
+    ok(
+        &mut h,
+        "asset.import",
+        json!({"file": "downloads/a.glb", "to": "models/a.glb", "license": "CC0-1.0",
+               "author": "Ada", "source_url": "https://example.org/a",
+               "textures": {"license": "CC-BY-4.0", "author": "Poly Haven",
+                            "source_url": "https://example.org/plaster", "title": "Plaster"}}),
+    );
+    // The texture a stored keeps its record; b's own (CC0, Bo) is not stamped on it.
+    ok(
+        &mut h,
+        "asset.import",
+        json!({"file": "downloads/b.glb", "to": "models/b.glb", "license": "CC0-1.0",
+               "author": "Bo", "source_url": "https://example.org/b"}),
+    );
+    let name = textures(&dir)[0].clone();
+    let record = fs::read_to_string(
+        dir.path()
+            .join(format!("game/assets/textures/{name}.license.json")),
+    )
+    .unwrap();
+    assert!(
+        record.contains("\"CC-BY-4.0\"")
+            && record.contains("Poly Haven")
+            && record.contains("Plaster"),
+        "{record}"
+    );
+    for _ in 0..2 {
+        let credits = ok(&mut h, "asset.credits", json!({}));
+        assert_eq!(
+            credits["assets"],
+            json!([{"path": format!("textures/{name}"), "kind": "texture",
+                    "title": "Plaster", "author": "Poly Haven", "license": "CC-BY-4.0",
+                    "source_url": "https://example.org/plaster", "changes": null}]),
+            "{credits}"
+        );
+        assert_eq!(
+            credits["text"],
+            "\"Plaster\" by Poly Haven, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/), \
+             from https://example.org/plaster.\n"
+        );
+        ok(&mut h, "project.open", json!({"path": "game"}));
+    }
+}
+
+#[test]
+fn a_gltf_with_its_image_beside_it_keeps_its_buffer_and_shares_its_image() {
+    let (dir, mut h) = project("assets-gltf");
+    let (wood, _) = demo_images();
+    fs::create_dir_all(dir.join("downloads/tex")).unwrap();
+    let (text, bin) = gltf_with_files("tex/wood.png", "house.bin", "house");
+    fs::write(dir.join("downloads/house.gltf"), text).unwrap();
+    fs::write(dir.join("downloads/house.bin"), bin).unwrap();
+    fs::write(dir.join("downloads/tex/wood.png"), &wood).unwrap();
+    let done = ok(
+        &mut h,
+        "asset.import",
+        json!({"file": "downloads/house.gltf", "to": "models/houses/house.gltf",
+               "license": "CC0-1.0", "author": "Ada", "source_url": "https://example.org/house"}),
+    );
+    let name = textures(&dir)[0].clone();
+    assert_eq!(
+        done["files"],
+        json!([
+            format!("assets/textures/{name}"),
+            format!("assets/textures/{name}.license.json"),
+            "assets/models/houses/house.bin",
+            "assets/models/houses/house.gltf",
+            "assets/models/houses/house.gltf.license.json"
+        ]),
+        "{done}"
+    );
+    let stored = fs::read_to_string(dir.join("game/assets/models/houses/house.gltf")).unwrap();
+    assert!(
+        stored.contains(&format!("\"uri\":\"../../textures/{name}\""))
+            && stored.contains("\"uri\":\"house.bin\""),
+        "{stored}"
+    );
+    assert!(dir.join("game/assets/models/houses/house.bin").is_file());
+    assert!(!dir.join("game/assets/textures/wood.png").exists());
+    ok(&mut h, "project.open", json!({"path": "game"}));
+    let list = ok(&mut h, "asset.list", json!({}));
+    assert_eq!(
+        list["textures"][0]["used_by"],
+        json!(["models/houses/house.gltf"])
+    );
+    assert_eq!(list["assets"][0]["triangles"], 1);
+    assert_eq!(
+        list["assets"][0]["files"],
+        json!([
+            "assets/models/houses/house.gltf",
+            "assets/models/houses/house.bin",
+            format!("assets/textures/{name}")
+        ])
+    );
+}
+
+#[test]
+fn a_missing_texture_file_is_a_clear_error() {
+    let (dir, mut h) = project("assets-missing-texture");
+    let (wood, _) = demo_images();
+    fs::write(dir.join("downloads/a.glb"), glb_with_image(&wood, "a")).unwrap();
+    import(&mut h, "downloads/a.glb", "models/a.glb");
+    let name = textures(&dir)[0].clone();
+    fs::remove_file(dir.path().join(format!("game/assets/textures/{name}"))).unwrap();
+    let e = err(&mut h, "project.open", json!({"path": "game"}));
+    assert!(
+        e.contains(&format!("textures/{name}"))
+            && e.contains("models/a.glb")
+            && e.contains("does not exist"),
+        "{e}"
+    );
+    // A texture of the store without its record is refused like any asset.
+    fs::write(
+        dir.path().join(format!("game/assets/textures/{name}")),
+        &wood,
+    )
+    .unwrap();
+    fs::remove_file(
+        dir.path()
+            .join(format!("game/assets/textures/{name}.license.json")),
+    )
+    .unwrap();
+    let e = err(&mut h, "project.open", json!({"path": "game"}));
+    assert!(
+        e.contains(&name) && e.contains("has no licence record"),
+        "{e}"
+    );
+}
+
+#[test]
+fn an_embedded_model_still_loads_and_imports_into_the_store() {
+    // The old way: the demo pack's models hold their images.
+    let (_dir, mut h) = demo("assets-old-way");
+    let list = ok(&mut h, "asset.list", json!({}));
+    assert_eq!(list["textures"], json!([]), "{list}");
+    assert_eq!(
+        (
+            list["assets"][0]["triangles"].clone(),
+            list["assets"][1]["triangles"].clone()
+        ),
+        (json!(12), json!(48))
+    );
+    // Imported now, the crate's image goes to the store and the model measures the same.
+    let (dir, mut h) = project("assets-old-import");
+    let crate_ = fs::read(examples().join("assets-demo/assets/models/crate.glb")).unwrap();
+    fs::write(dir.join("downloads/crate.glb"), &crate_).unwrap();
+    let done = ok(
+        &mut h,
+        "asset.import",
+        json!({"file": "downloads/crate.glb", "to": "models/crate.glb",
+               "license": "CC0-1.0", "author": "The GameCraft project",
+               "source_url": "https://example.org/crate"}),
+    );
+    assert_eq!(done["triangles"], 12);
+    assert_eq!(done["textures"].as_array().unwrap().len(), 1);
+    let bounds = done["bounds"].clone();
+    ok(&mut h, "project.open", json!({"path": "game"}));
+    let list = ok(&mut h, "asset.list", json!({}));
+    assert_eq!(list["assets"][0]["bounds"], bounds);
+    assert_eq!(list["assets"][0]["triangles"], 12);
+    assert_eq!(list["textures"][0]["used_by"], json!(["models/crate.glb"]));
+}
+
+#[test]
+fn the_renderer_is_handed_a_shared_texture_under_its_own_path() {
+    let (dir, mut h) = project("assets-provide-texture");
+    let (wood, _) = demo_images();
+    for (i, m) in ["a", "b"].iter().enumerate() {
+        fs::write(
+            dir.path().join(format!("downloads/{m}.glb")),
+            glb_with_image(&wood, m),
+        )
+        .unwrap();
+        import(
+            &mut h,
+            &format!("downloads/{m}.glb"),
+            &format!("models/{m}.glb"),
+        );
+        ok(
+            &mut h,
+            "entity.add",
+            json!({"name": m.to_uppercase(), "position": [i * 2, 0, 0],
+                   "components": [{"type": "model", "asset": format!("models/{m}.glb")}]}),
+        );
+    }
+    let name = textures(&dir)[0].clone();
+    let given = Rc::new(RefCell::new(Vec::new()));
+    let mut h = h.with_pictures(Box::new(Keeper {
+        given: given.clone(),
+    }));
+    ok(&mut h, "view.render", json!({"width": 32, "height": 32}));
+    let got = given.borrow().clone();
+    assert!(
+        got.contains(&(format!("textures/{name}"), wood.len())),
+        "{got:?}"
+    );
+    assert!(
+        got.contains(&(
+            "models/a.glb".to_string(),
+            fs::metadata(dir.join("game/assets/models/a.glb"))
+                .unwrap()
+                .len() as usize
+        )),
+        "{got:?}"
+    );
 }

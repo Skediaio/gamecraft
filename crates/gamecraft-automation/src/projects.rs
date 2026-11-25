@@ -374,16 +374,18 @@ pub(crate) fn writable(access: &Access, dir: &Path) -> bool {
 }
 
 /// Reads the files of the pack in `dir` (resolved, inside `real_root`). Only `pack.json`,
-/// `prefabs/*.json`, `worlds/*/world.json`, `worlds/*/layers/*.json` and
-/// `worlds/*/terrain/edits.json` are read (the terrain's tile cache is read when the world is
-/// built); a file or folder that is a link leading out of the pack is refused.
+/// `prefabs/*.json`, `worlds/*/world.json`, `worlds/*/layers/*.json`,
+/// `worlds/*/terrain/edits.json` and (for the licence gate) the asset records, the `.gltf`
+/// documents and the JSON chunks of the `.glb` models are read (the terrain's tile cache is
+/// read when the world is built); a file or folder that is a link leading out of the pack is
+/// refused.
 fn read_pack(dir: &Path, budget: &mut u64, cap: u64) -> Result<PackSource, String> {
     let mut source = PackSource {
         location: dir.display().to_string(),
         files: BTreeMap::new(),
         assets: BTreeMap::new(),
     };
-    let mut read = |relative: &str, source: &mut PackSource| -> Result<(), String> {
+    let read = |relative: &str, source: &mut PackSource, budget: &mut u64| -> Result<(), String> {
         let path = dir.join(relative);
         let shown = path.display().to_string();
         let real = fs::canonicalize(&path).map_err(|e| format!("cannot read `{shown}`: {e}"))?;
@@ -426,26 +428,30 @@ fn read_pack(dir: &Path, budget: &mut u64, cap: u64) -> Result<PackSource, Strin
             dir.display()
         ));
     }
-    read("pack.json", &mut source)?;
+    read("pack.json", &mut source, budget)?;
     for name in json_files(&dir.join("prefabs"))? {
-        read(&format!("prefabs/{name}"), &mut source)?;
+        read(&format!("prefabs/{name}"), &mut source, budget)?;
     }
     for world in sub_folders(&dir.join("worlds"))? {
         let base = format!("worlds/{world}");
         if dir.join(&base).join("world.json").exists() {
-            read(&format!("{base}/world.json"), &mut source)?;
+            read(&format!("{base}/world.json"), &mut source, budget)?;
         }
         for name in json_files(&dir.join(&base).join("layers"))? {
-            read(&format!("{base}/layers/{name}"), &mut source)?;
+            read(&format!("{base}/layers/{name}"), &mut source, budget)?;
         }
         // A layer split into cells: layers/<layer>/<cx>_<cz>.json.
         for layer in sub_folders(&dir.join(&base).join("layers"))? {
             for name in json_files(&dir.join(&base).join("layers").join(&layer))? {
-                read(&format!("{base}/layers/{layer}/{name}"), &mut source)?;
+                read(
+                    &format!("{base}/layers/{layer}/{name}"),
+                    &mut source,
+                    budget,
+                )?;
             }
         }
         if dir.join(&base).join("terrain").join("edits.json").exists() {
-            read(&format!("{base}/terrain/edits.json"), &mut source)?;
+            read(&format!("{base}/terrain/edits.json"), &mut source, budget)?;
         }
     }
     let mut listed = Vec::new();
@@ -457,13 +463,46 @@ fn read_pack(dir: &Path, budget: &mut u64, cap: u64) -> Result<PackSource, Strin
                 dir.display()
             ));
         }
-        // The licence records and the .gltf documents are read for the licence gate.
+        // The licence records and the .gltf documents are read for the licence gate; of a
+        // .glb only its JSON chunk (the whole file when a renderer or the measure needs it).
         if relative.ends_with(gamecraft_project::RECORD_SUFFIX) || relative.ends_with(".gltf") {
-            read(&relative, &mut source)?;
+            read(&relative, &mut source, budget)?;
+        } else if relative.ends_with(".glb") {
+            let json = glb_json(&dir.join(&relative), cap.min(*budget))?;
+            *budget -= json.len() as u64;
+            source.files.insert(relative.clone(), json);
         }
         source.assets.insert(relative, size);
     }
     Ok(source)
+}
+
+/// The JSON chunk of the GLB file `path`, at most `cap` bytes, for the licence gate: only the
+/// chunk is read, not the whole model.
+fn glb_json(path: &Path, cap: u64) -> Result<String, String> {
+    use std::io::Read;
+    let shown = path.display().to_string();
+    let mut file = fs::File::open(path).map_err(|e| format!("cannot read `{shown}`: {e}"))?;
+    let len = fs::metadata(path)
+        .map_err(|e| format!("cannot read `{shown}`: {e}"))?
+        .len();
+    let mut head = [0u8; 20];
+    file.read_exact(&mut head)
+        .map_err(|e| format!("`{shown}` is cut short: {e}"))?;
+    let json_len = gamecraft_project::model::glb_json_len(&head, len)
+        .map_err(|e| format!("`{shown}` is not a GLB model: {e}"))?;
+    if json_len as u64 > cap {
+        return Err(format!(
+            "`{shown}` has a JSON chunk of {} MB; this host reads pack files of at most {} MB",
+            mb(json_len as u64),
+            mb(cap)
+        ));
+    }
+    let mut json = vec![0u8; json_len];
+    file.read_exact(&mut json)
+        .map_err(|e| format!("`{shown}` is cut short: {e}"))?;
+    String::from_utf8(json)
+        .map_err(|_| format!("`{shown}` has a JSON chunk that is not UTF-8 text"))
 }
 
 /// Deepest folder below `assets/` that is listed.

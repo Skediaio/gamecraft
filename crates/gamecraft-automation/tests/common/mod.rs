@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+pub mod models;
+
 use gamecraft_automation::{Access, Host, Pictures, RenderRequest, Rendered, mcp, rpc};
 use gamecraft_world::{HeightField, World};
 use serde_json::{Value, json};

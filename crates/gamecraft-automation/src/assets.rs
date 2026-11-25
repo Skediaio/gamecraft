@@ -1,5 +1,8 @@
 //! The assets of an open project (not in the browser): `asset.import`, `asset.list` and
 //! `asset.credits`, the bounding boxes the simulation needs, and the bytes a renderer needs.
+//! An import takes a model's images into the pack's texture store
+//! (`gamecraft_project::textures`): each is stored once, under its content hash, with a licence
+//! record of its own.
 //!
 //! When a project opens, the host reads every model asset of its packs (each has passed the
 //! licence gate of `gamecraft-project`), measures it ([`gamecraft_project::inspect`]: triangles
@@ -13,7 +16,8 @@ use crate::fields::Fields;
 use crate::files::{Direction, MAX_ASSET_BYTES, resolve, write_whole};
 use crate::host::Host;
 use gamecraft_engine::{CommandSpec, ParamType as T, param};
-use gamecraft_project::model::{folder_of, references};
+use gamecraft_project::model::{folder_of, references, resolve_uri, split_glb};
+use gamecraft_project::textures::{self, Imported, content_hash, hash_of, is_texture};
 use gamecraft_project::{
     ASSETS_DIR, AssetRecord, License, ModelSummary, PackAsset, Project, credits, inspect,
     record_path,
@@ -24,8 +28,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Most files one imported `.gltf` may bring along.
+/// Most files one imported model may bring along.
 const MAX_IMPORT_FILES: usize = 256;
+/// The fields of `asset.import`'s `textures` object.
+const TEXTURE_FIELDS: [&str; 5] = ["license", "author", "source_url", "title", "changes"];
 
 /// An asset of the open project as the host knows it.
 pub(crate) struct HostAsset {
@@ -69,7 +75,11 @@ fn read_pack_file(dir: &Path, relative: &str) -> Result<Vec<u8>, String> {
 fn measure(dir: &Path, path: &str) -> Result<ModelSummary, String> {
     let bytes = read_pack_file(dir, &format!("{ASSETS_DIR}/{path}"))?;
     let folder = folder_of(path);
-    let resource = |r: &str| read_pack_file(dir, &format!("{ASSETS_DIR}/{folder}{r}")).ok();
+    let resource = |r: &str| {
+        resolve_uri(folder, r)
+            .ok()
+            .and_then(|inside| read_pack_file(dir, &format!("{ASSETS_DIR}/{inside}")).ok())
+    };
     inspect(&bytes, &resource)
 }
 
@@ -122,13 +132,17 @@ pub(crate) fn asset_specs() -> Vec<CommandSpec> {
         host_spec(
             "asset.import",
             "Import Asset",
-            "Copies a glTF model (`file`: a .glb, or a .gltf with the buffers and images it \
+            "Imports a glTF model (`file`: a .glb, or a .gltf with the buffers and images it \
              refers to beside it) from the read root into the open project's root pack as \
              assets/<to> and writes its licence record assets/<to>.license.json. Only CC0-1.0 \
              and CC-BY-4.0 are allowed, with the author and where it came from. The model is \
              read first: a broken file is refused and nothing is written; so is a `to` that \
-             exists. Solid models that use it collide from then on. Needs the project folder \
-             inside the write root.",
+             exists. Its images go into the pack's texture store, \
+             assets/textures/<content-hash>.<png | jpg>: an image the pack has already is \
+             reused (nothing is stored again, its record stays), a new one is written with \
+             `textures` as its record (else the model's), and the stored model refers to them, \
+             so a model draws exactly as before. Solid models that use it collide from then \
+             on. Needs the project folder inside the write root.",
             vec![
                 param(
                     "file",
@@ -140,7 +154,7 @@ pub(crate) fn asset_specs() -> Vec<CommandSpec> {
                     "to",
                     T::String,
                     "Its path inside the pack's assets/ folder, with the same extension \
-                     (`models/crate.glb`).",
+                     (`models/crate.glb`); not under textures/, the store of shared images.",
                 )
                 .required(),
                 param("license", T::String, "Its licence.")
@@ -164,9 +178,16 @@ pub(crate) fn asset_specs() -> Vec<CommandSpec> {
                     T::String,
                     "What was changed from the source (CC BY asks for it).",
                 ),
+                param(
+                    "textures",
+                    T::Object,
+                    "The licence record of the images it extracts that are new to the pack: \
+                     {license, author, source_url, title?, changes?}; its licence, author and \
+                     source left out are the model's. Only the fields named here are allowed.",
+                ),
             ],
             "{asset, pack, files: [paths written], record, license, bytes, triangles, bounds: \
-             {min, max}}",
+             {min, max}, textures: [{path, bytes, stored, record}]}",
             json!({"file": "downloads/crate.glb", "to": "models/crate.glb", "license": "CC0-1.0", "author": "Jane Doe", "source_url": "https://example.org/crate"}),
         ),
         host_spec(
@@ -176,21 +197,25 @@ pub(crate) fn asset_specs() -> Vec<CommandSpec> {
              earlier one's of the same path): licence, author, source, size, and for a model \
              its triangle count and bounding box (metres, the asset's own axes), or the \
              problem that kept it from being read; how many entities of the world shown use \
-             it; and the model assets the world refers to that no pack has.",
+             it. The textures of the packs' store (`textures`) are listed apart, each once, \
+             with the models that refer to it. And the model assets the world refers to that \
+             no pack has.",
             vec![],
-            "{assets: [{path, pack, license, author, source_url, title, changes, bytes, files, \
-             triangles, bounds: {min, max} | null, problem, used_by}], missing: [{asset, \
-             entities}]}",
+            "{assets: [{path, pack, kind, license, author, source_url, title, changes, bytes, \
+             files, triangles, bounds: {min, max} | null, problem, used_by}], textures: [{path, \
+             pack, bytes, license, author, source_url, title, changes, used_by: [models]}], \
+             missing: [{asset, entities}]}",
             json!({}),
         ),
         host_spec(
             "asset.credits",
             "Asset Credits",
             "The attribution text a game must show: one line for every CC-BY asset of the \
-             open project with its title, author, licence and source (CC0 assets need none; \
-             an empty text when there is no CC-BY asset).",
+             open project with its title, author, licence and source (CC0 assets need none; an \
+             empty text when there is no CC-BY asset). A texture of the store is one asset, \
+             credited once however many models use it.",
             vec![],
-            "{text, assets: [{path, title, author, license, source_url, changes}]}",
+            "{text, assets: [{path, kind, title, author, license, source_url, changes}]}",
             json!({}),
         ),
     ]
@@ -249,32 +274,58 @@ impl Host {
     pub(crate) fn asset_list(&mut self) -> Result<Value, String> {
         let catalog = self.catalog()?;
         let uses = used(self.session.current_world());
-        let assets: Vec<Value> = catalog
-            .iter()
-            .map(|(path, a)| {
-                let r = &a.asset.record;
-                let (triangles, bounds, problem) = match &a.summary {
-                    Some(Ok(s)) => (json!(s.triangles), bounds_json(&s.bounds), Value::Null),
-                    Some(Err(e)) => (Value::Null, Value::Null, json!(e)),
-                    None => (Value::Null, Value::Null, Value::Null),
-                };
-                json!({
+        // Which models refer to which texture of the store (their files, as the gate lists them).
+        let mut users: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        let prefix = format!("{ASSETS_DIR}/");
+        for (path, a) in catalog.iter().filter(|(_, a)| a.asset.is_model()) {
+            for file in &a.asset.files {
+                if let Some(inside) = file.strip_prefix(prefix.as_str())
+                    && is_texture(inside)
+                {
+                    users.entry(inside).or_default().push(path.as_str());
+                }
+            }
+        }
+        let mut assets: Vec<Value> = Vec::new();
+        let mut textures: Vec<Value> = Vec::new();
+        for (path, a) in catalog {
+            let r = &a.asset.record;
+            if is_texture(path) {
+                textures.push(json!({
                     "path": path,
                     "pack": a.pack,
+                    "bytes": a.asset.bytes,
                     "license": r.license.id(),
                     "author": r.author,
                     "source_url": r.source_url,
                     "title": r.title,
                     "changes": r.changes,
-                    "bytes": a.asset.bytes,
-                    "files": a.asset.files,
-                    "triangles": triangles,
-                    "bounds": bounds,
-                    "problem": problem,
-                    "used_by": uses.get(path).map_or(0, Vec::len),
-                })
-            })
-            .collect();
+                    "used_by": users.get(path.as_str()).cloned().unwrap_or_default(),
+                }));
+                continue;
+            }
+            let (triangles, bounds, problem) = match &a.summary {
+                Some(Ok(s)) => (json!(s.triangles), bounds_json(&s.bounds), Value::Null),
+                Some(Err(e)) => (Value::Null, Value::Null, json!(e)),
+                None => (Value::Null, Value::Null, Value::Null),
+            };
+            assets.push(json!({
+                "path": path,
+                "pack": a.pack,
+                "kind": a.asset.kind(),
+                "license": r.license.id(),
+                "author": r.author,
+                "source_url": r.source_url,
+                "title": r.title,
+                "changes": r.changes,
+                "bytes": a.asset.bytes,
+                "files": a.asset.files,
+                "triangles": triangles,
+                "bounds": bounds,
+                "problem": problem,
+                "used_by": uses.get(path).map_or(0, Vec::len),
+            }));
+        }
         let missing: Vec<Value> = uses
             .iter()
             .filter(|(path, _)| !catalog.contains_key(*path))
@@ -282,7 +333,7 @@ impl Host {
                 json!({"asset": path, "entities": ids.iter().map(|id| id.0).collect::<Vec<_>>()})
             })
             .collect();
-        Ok(json!({"assets": assets, "missing": missing}))
+        Ok(json!({"assets": assets, "textures": textures, "missing": missing}))
     }
 
     pub(crate) fn asset_credits(&mut self) -> Result<Value, String> {
@@ -295,6 +346,7 @@ impl Host {
                 let r = &a.asset.record;
                 json!({
                     "path": a.asset.path,
+                    "kind": a.asset.kind(),
                     "title": r.title,
                     "author": r.author,
                     "license": r.license.id(),
@@ -321,10 +373,46 @@ impl Host {
             changes: p.str("changes").map_err(strip_owner)?.map(str::to_string),
         };
         record.validate()?;
+        // The record of the textures the import stores that are new to the pack: the model's,
+        // with what `textures` gives (its licence, author and source) in place of theirs.
+        let given = p.object("textures")?;
+        let t = Fields::new(
+            "asset.import: `textures`",
+            "field",
+            Some(&given),
+            &TEXTURE_FIELDS,
+        )
+        .map_err(strip_owner)?;
+        let texture_record = AssetRecord {
+            license: match t.str("license").map_err(strip_owner)? {
+                Some(id) => License::parse(id)?,
+                None => license,
+            },
+            author: t
+                .str("author")
+                .map_err(strip_owner)?
+                .unwrap_or(record.author.as_str())
+                .to_string(),
+            source_url: t
+                .str("source_url")
+                .map_err(strip_owner)?
+                .unwrap_or(record.source_url.as_str())
+                .to_string(),
+            title: t.str("title").map_err(strip_owner)?.map(str::to_string),
+            changes: t.str("changes").map_err(strip_owner)?.map(str::to_string),
+        };
+        texture_record.validate()?;
         if !is_model_path(to) {
             return Err(format!(
                 "`to` {to:?} is not a model path inside assets/: ASCII letters, digits, `-`, \
                  `_`, `.` and `/`, without `..`, ending in .glb or .gltf, such as \
+                 \"models/crate.glb\""
+            ));
+        }
+        if is_texture(to) {
+            return Err(format!(
+                "`to` {to:?} lies in the pack's texture store (textures/), which holds the \
+                 images models share; import the model under a path of its own, such as \
                  \"models/crate.glb\""
             ));
         }
@@ -363,10 +451,14 @@ impl Host {
             fs::read(path).map_err(|e| format!("cannot read `{}`: {e}", path.display()))
         };
         let bytes = read(&source)?;
-        // A .gltf brings the files it refers to, from beside it, inside the read root.
+        // The files the model refers to (a .gltf's buffers and images, a .glb's images beside
+        // it) are read from beside it, inside the read root.
         let mut parts: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-        if extension == "gltf" {
-            let refs = references(&bytes).map_err(|e| format!("`{file}`: {e}"))?;
+        {
+            let json = split_glb(&bytes)
+                .map_err(|e| format!("`{file}` is not a model that can be used: {e}"))?
+                .0;
+            let refs = references(json).map_err(|e| format!("`{file}`: {e}"))?;
             if refs.len() > MAX_IMPORT_FILES {
                 return Err(format!(
                     "`{file}` refers to {} files; at most {MAX_IMPORT_FILES}",
@@ -392,33 +484,98 @@ impl Host {
                 parts.insert(r, read(&real)?);
             }
         }
-        let summary = inspect(&bytes, &|r: &str| parts.get(r).cloned())
+        let resource = |r: &str| parts.get(r).cloned();
+        let Imported {
+            model,
+            summary,
+            textures,
+            files: buffers,
+        } = textures::import(&bytes, &resource, to)
             .map_err(|e| format!("`{file}` is not a model that can be used: {e}"))?;
-        let folder = folder_of(to);
-        let mut targets: Vec<(String, &[u8])> = vec![(format!("{ASSETS_DIR}/{to}"), &bytes)];
-        for (r, data) in &parts {
-            targets.push((format!("{ASSETS_DIR}/{folder}{r}"), data.as_slice()));
-        }
         let record_file = record_path(to);
-        for (relative, _) in targets
-            .iter()
-            .chain([(record_file.clone(), &[][..])].iter())
-        {
+        // The texture store: an image the pack has is reused once its bytes match its name and
+        // it has its record; a new one is written with the texture's record.
+        let mut store: Vec<Value> = Vec::new();
+        let mut new_textures: Vec<(String, u64)> = Vec::new();
+        let mut targets: Vec<(String, Vec<u8>)> = Vec::new();
+        for texture in &textures {
+            let inside = texture.path.as_str();
+            let relative = format!("{ASSETS_DIR}/{inside}");
+            let texture_record_file = record_path(inside);
+            let name = inside.rsplit_once('/').map_or(inside, |(_, n)| n);
+            let stored = if dir.join(&relative).exists() {
+                let existing = read_pack_file(&dir, &relative)?;
+                if hash_of(name).is_some()
+                    && content_hash(&existing) != content_hash(&texture.bytes)
+                {
+                    return Err(format!(
+                        "`{relative}` exists already in the pack's texture store but holds other \
+                         bytes than the image it is named after; it was replaced or renamed by \
+                         hand: remove it and its record, then import again"
+                    ));
+                }
+                if !dir.join(&texture_record_file).exists() {
+                    return Err(format!(
+                        "`{relative}` exists already in the pack's texture store without its \
+                         licence record `{texture_record_file}`; add it, then import again"
+                    ));
+                }
+                false
+            } else {
+                if dir.join(&texture_record_file).exists() {
+                    return Err(format!(
+                        "`{texture_record_file}` is the record of `{relative}`, which does not \
+                         exist; remove the record, then import again"
+                    ));
+                }
+                targets.push((relative, texture.bytes.clone()));
+                targets.push((
+                    texture_record_file.clone(),
+                    texture_record.to_text().into_bytes(),
+                ));
+                new_textures.push((inside.to_string(), texture.bytes.len() as u64));
+                true
+            };
+            store.push(json!({
+                "path": inside,
+                "bytes": texture.bytes.len(),
+                "stored": stored,
+                "record": texture_record_file,
+            }));
+        }
+        // The model's other files (a .gltf's buffers), the model and its record.
+        let mut files = vec![format!("{ASSETS_DIR}/{to}")];
+        let mut total = model.len() as u64;
+        for (uri, inside) in &buffers {
+            let data = resource(uri)
+                .ok_or_else(|| format!("`{file}` refers to `{uri}`, which was not read"))?;
+            files.push(format!("{ASSETS_DIR}/{inside}"));
+            total = total.saturating_add(data.len() as u64);
+            targets.push((format!("{ASSETS_DIR}/{inside}"), data));
+        }
+        for texture in &textures {
+            files.push(format!("{ASSETS_DIR}/{}", texture.path));
+            total = total.saturating_add(texture.bytes.len() as u64);
+        }
+        targets.push((format!("{ASSETS_DIR}/{to}"), model));
+        for (relative, _) in &targets {
             if dir.join(relative).exists() {
                 return Err(format!(
-                    "`{}` exists already in the pack; choose another `to`",
-                    relative
+                    "`{relative}` exists already in the pack; choose another `to`"
                 ));
             }
         }
-        let text = record.to_text();
+        if dir.join(&record_file).exists() {
+            return Err(format!(
+                "`{record_file}` exists already in the pack; choose another `to`"
+            ));
+        }
         let mut written = Vec::new();
         for (relative, data) in targets
             .iter()
-            .map(|(r, d)| (r.clone(), *d))
-            .chain([(record_file.clone(), text.as_bytes())])
+            .chain([(record_file.clone(), record.to_text().into_bytes())].iter())
         {
-            let target = dir.join(&relative);
+            let target = dir.join(relative);
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)
                     .map_err(|e| format!("cannot create the folder `{}`: {e}", parent.display()))?;
@@ -432,14 +589,8 @@ impl Host {
                 }
             }
             write_whole(&target, data)?;
-            written.push(relative);
+            written.push(relative.clone());
         }
-        let files: Vec<String> = written
-            .iter()
-            .filter(|f| **f != record_file)
-            .cloned()
-            .collect();
-        let total: u64 = targets.iter().map(|(_, d)| d.len() as u64).sum();
         let pack = self
             .project
             .as_ref()
@@ -454,10 +605,28 @@ impl Host {
             "bytes": total,
             "triangles": summary.triangles,
             "bounds": bounds_json(&summary.bounds),
+            "textures": store,
         });
         let Some(open) = self.project.as_mut() else {
             return Ok(answer);
         };
+        for (path, bytes) in new_textures {
+            let files = vec![format!("{ASSETS_DIR}/{path}")];
+            open.assets.insert(
+                path.clone(),
+                HostAsset {
+                    pack: pack.clone(),
+                    dir: dir.clone(),
+                    asset: PackAsset {
+                        path,
+                        record: texture_record.clone(),
+                        files,
+                        bytes,
+                    },
+                    summary: None,
+                },
+            );
+        }
         open.assets.insert(
             to.to_string(),
             HostAsset {
