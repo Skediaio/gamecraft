@@ -390,8 +390,10 @@ models of a pack share stored once (`gamecraft-project/src/textures.rs`;
   file: the nodes of one object name are its levels by their numbers), or by the `MSFT_lod`
   extension (the finest node carries `extensions.MSFT_lod.ids`, the indices of the coarser
   nodes, usually left out of the scene). Every level of a group is drawn where the group's
-  finest node in the scene stands; geometry of no group is drawn at every level; a group's
-  node may hold groups of its own. A number named twice cannot be told apart: only the finest
+  finest node in the scene stands, keeping its own rotation and scale but not its
+  translation; geometry of no group is drawn at every level; a level without geometry is left
+  out (as the last one: nothing is drawn beyond where it would have started); a group's node
+  may hold groups of its own. A number named twice cannot be told apart: only the finest
   level is drawn and the rest is left out, with a warning. Each level ends at a distance from
   the camera and the last end is the draw distance: what the component says
   (`lod_distances_m`, `draw_distance_m`), else the file (`asset.extras.gamecraft` with the
@@ -399,20 +401,27 @@ models of a pack share stored once (`gamecraft-project/src/textures.rs`;
   rule from the model's extent across, at a reference view 1080 pixels high at 60 degrees:
   level `k` ends where the extent spans a quarter of the height to the power `k + 1` (3.5, 14,
   55, ... times the extent) and the model is drawn while it spans 4 pixels (234 times: a
-  crate 0.9 m on a side to 364 m, a house 15 m across to 3.5 km). The extent counts the
-  model's scale and the entity's; the distances given are metres as written, at the quality
-  pictures are drawn at (the highest; a lower live quality switches sooner). The renderer
+  crate 0.9 m on a side to 364 m, a house 15 m across to 3.5 km). The extent is the finest
+  level's, over every vertex, strips and fans included; it counts the model's scale and the
+  entity's, and the coverage follows it as the rule does. The distances given are metres as
+  written, at the quality pictures are drawn at (the highest; a lower live quality switches
+  sooner, and `count_models` counts a live view at that quality's share). Entities that
+  differ only in scale share an item per bucket of scale (steps of 1.25) where a distance
+  follows the scale, computed for the bucket's upper scale so nothing disappears early; with
+  every distance given in metres, every scale shares one item. The renderer
   draws each cell of 8 m of instances at the level for its distance, culls cells against the
   view, and lets a cell that crosses the draw distance dissolve rather than pop. What each
   model drew is counted again by the same rule on the CPU and comes with every picture
   (`view.render`'s `stats.models`: per model item `asset`, `instances`, `drawn`, `culled`,
-  `until_m` and `levels`), and from `WorldRenderer::count_models` for a live view. A broken
+  `until_m` and `levels`, each with the number of its level in the file), from
+  `WorldRenderer::count_models` for a live view and `frame_stats` for its last frame. A broken
   set (a coarser level with more triangles, a missing level, an id that points nowhere) is a
   problem line naming the asset; the model is drawn all the same. `asset.list` shows a
   model's `lods` (`level`, `triangles`, `until_m`), `draw_distance_m`, `lod_source` (`names`
-  or `MSFT_lod`) and `lod_warnings`; its `triangles` are those of the finest level, and its
-  bounding box holds every level. A character the camera follows has an item that is never
-  culled by distance. Not read: material-level `MSFT_lod`; no mesh is simplified.
+  or `MSFT_lod`) and `lod_warnings`, one row per level that draws; its `triangles` and its
+  bounding box are those of the finest level that draws, the box the simulation collides
+  with. A character the camera follows has an item that is never culled by distance. Not
+  read: material-level `MSFT_lod`; no mesh is simplified.
 
 ## Open
 

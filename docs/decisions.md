@@ -59,6 +59,35 @@ model one level with an infinite distance. What was missing was the content and 
 - **A character the camera follows is never culled by distance**: it has an item of its own
   without an end, built again when the followed character changes.
 
+The review round of the same day settled the rest:
+
+- **Scattered copies share items by buckets of scale.** A `scatter` with `scale_range` gives
+  every copy a scale of its own; one item per copy would have put a thousand draws in every
+  pass and shadow cascade. Entities that show an asset with the same component distances now
+  share one item per bucket of scale (steps of 1.25) wherever a distance follows the scale
+  (the rule's, or the file's screen coverage); an item's distances are computed for its
+  bucket's upper scale, so no copy disappears early. Distances given in metres, on the
+  component or in the file, do not follow the scale: every scale then shares one item.
+- **A live view is counted at its quality.** The renderer divides every distance by the live
+  quality's share (40 % low, 50 % medium, 100 % high); `count_models` and `frame_stats` do the
+  same, and a picture, always drawn at the highest quality, counts at 1.
+- **A level without geometry is left out.** As the last level of a file (common with
+  `MSFT_lod`, whose last id is often a node without a mesh) it means "draw nothing from
+  here": the model ends where that level would have started. In any other place the level
+  after it starts where it would have. A problem line names the asset either way; left in,
+  the empty level would have shifted the renderer's levels.
+- **A coarser level keeps its own rotation and scale** and loses only its translation, since
+  a modelling tool lays the levels out side by side.
+- **The box of a model is its finest level's**, measured over every vertex of that level,
+  strips and fans included, by the host's reader and the renderer's alike (one size for both):
+  what most engines collide with. So the collider bounds of an asset with levels differ from
+  a box over every level's vertices, and a journal recorded with such an asset before this
+  change replays to another hash. None of the pinned examples uses an asset with levels: the
+  CLI's golden hashes did not move (`cargo xtask ci`). `lod_distances_m` and `draw_distance_m`
+  change a picture, not what moves next, and are left out of the simulation's static hash.
+- `MSFT_screencoverage` is kept as the file gives it and turned into metres for the size the
+  model has in the world, as the rule is.
+
 ### 2026-11-24: Shared textures are files of the pack, named by their content hash
 
 Every imported glTF model embedded its own copy of every image: a pack of 29 models sharing four

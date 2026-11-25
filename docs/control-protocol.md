@@ -270,10 +270,11 @@ in the file format.
   level with its distance and is not drawn beyond its draw distance; `stats` says what was
   drawn: `triangles`, `draws` and `instances` over all passes, `forward_triangles` of the view
   alone, and `models`, one row per model item (an asset as entities with the same distances
-  and scale show it): `{asset, instances, drawn, culled, until_m: [where each level ends, the
-  last the draw distance], levels: [{level, instances, triangles}]}`, counted again by the
-  renderer's rule on the CPU (exact for a picture). A character that `follow` names is never
-  culled by distance. A picture with `path`
+  and scale show it, in order of asset path and then of the first entity that shows one):
+  `{asset, instances, drawn, culled, until_m: [where each level ends, the last the draw
+  distance], levels: [{level, instances, triangles}]}` (`level` is the level's number in the
+  file; a level without geometry is left out), counted again by the renderer's rule on the
+  CPU (exact for a picture). A character that `follow` names is never culled by distance. A picture with `path`
   is a `.png` inside the write root and may replace an earlier one. Without a renderer the
   answer is an error that says a renderer is needed.
 - **Dirty.** The host knows whether the document changed since it was opened, saved or
