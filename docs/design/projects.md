@@ -208,6 +208,14 @@ What the files are, where it differs from the method above or adds to it:
   files: the id of an entity of the root pack that is gone is free again, so entities removed
   and added again by a bake take their old ids and their cells are not rewritten. The guideline
   is `guide/generated-worlds.md`; `decisions.md`, *A bake replaces what the script owns*.
+- **Far levels of detail** (2026-11-25; `decisions.md`, *A cell's static geometry is merged for the
+  distance*): the static shapes and models of a cell of 128 m of the ground are merged into one
+  mesh per material (each model at its coarsest level), drawn where the cell is farther than the
+  largest draw distance of its own items, at least 300 m, until 20 km; the cell's own items draw
+  until a cell's diagonal past that. A cell's merged mesh is made again only when its content (a
+  hash over its entities and the assets revision) or its take-over distance changes. In memory
+  only: not yet in the project's cooked cache. What they drew is in `view.render`'s
+  `stats.hlod` (`{cells, drawn, triangles}`).
 - **`entity.remove_many {ids}`** removes a set with its children in one pass, checked once:
   per entity `entity.remove` walks the world once, which a layer of a hundred thousand cannot
   afford.

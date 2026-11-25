@@ -102,6 +102,11 @@ impl Pictures for GpuPictures {
                     "draws": picture.stats.draws,
                     "instances": picture.stats.instances,
                     "forward_triangles": picture.stats.forward_triangles,
+                    "hlod": {
+                        "cells": picture.stats.hlod.cells,
+                        "drawn": picture.stats.hlod.drawn,
+                        "triangles": picture.stats.hlod.triangles,
+                    },
                     "models": picture.stats.models.iter().map(|m| {
                         json!({
                             "asset": m.asset,
@@ -109,6 +114,7 @@ impl Pictures for GpuPictures {
                             "drawn": m.drawn,
                             "culled": m.culled,
                             "until_m": m.until_m,
+                            "own_until_m": m.own_until_m,
                             "levels": m.levels.iter().map(|l| {
                                 json!({"level": l.level, "instances": l.instances, "triangles": l.triangles})
                             }).collect::<Vec<_>>(),

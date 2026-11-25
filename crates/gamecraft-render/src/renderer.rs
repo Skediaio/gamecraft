@@ -4,11 +4,12 @@
 use crate::blit::Blit;
 use crate::culling;
 use crate::effects::{self, Effects, Segment};
+use crate::hlod::{self, Cell, CellPlan, Content, FAR_M, Merged, NEAR_MIN_M};
 use crate::light;
 use crate::mesh::{self, MeshData};
 use crate::model::{self, Alpha, ModelMaterial, TexRef};
 use crate::plants::{self, PartKind, PlantImage};
-use crate::{Camera, FrameStats, LevelCount, ModelStats, Quality, RenderError};
+use crate::{Camera, FrameStats, HlodStats, LevelCount, ModelStats, Quality, RenderError};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{Picture, PictureRequest, PictureStats};
 use gamecraft_math::{DQuat, DVec3, deg_to_rad};
@@ -116,6 +117,180 @@ struct Built {
     characters: Vec<CharacterGroup>,
     /// The model items, for the count of what a frame drew ([`WorldRenderer::render`]).
     models: Vec<ModelItem>,
+    /// The merged meshes of the far levels of detail, by cell: kept from one build to the
+    /// next while a cell's content, assets and take-over distance are the same, and freed
+    /// by hand (not by [`free`]) when they change.
+    hlod: BTreeMap<Cell, HlodBuilt>,
+}
+
+/// A cell's merged meshes on the GPU: one item per material, and everything of its own to
+/// free with it (a model's materials belong to the model).
+struct HlodBuilt {
+    /// What it was built from: the cell, its content's hash and its take-over distance.
+    key: (Cell, u64, u64),
+    items: Vec<vc::ItemId>,
+    meshes: Vec<vc::MeshId>,
+    /// The materials of the shapes' colours in it (the models' are the models' own).
+    materials: Vec<vc::MaterialId>,
+    /// Triangles of its merged meshes, all materials together.
+    triangles: u64,
+    /// The box of every merged mesh, in world coordinates.
+    bounds: (Vec3, Vec3),
+    /// Where it takes over from the cell's own items.
+    near_m: f64,
+}
+
+/// What the far levels of detail need before anything is built: every static entity's own
+/// end (the distance its item is culled at) and, per cell, its plan.
+struct HlodPlan {
+    /// Per entity, the end of its own item: a model's as resolved for it, a shape's
+    /// [`NEAR_MIN_M`] when its cell has a merged mesh and infinite when it has none.
+    ends: BTreeMap<EntityId, f64>,
+    /// The cells with a merged mesh, and the entities in each.
+    cells: BTreeMap<Cell, (CellPlan, Vec<EntityId>)>,
+}
+
+impl HlodPlan {
+    /// Nothing takes over (no empty mesh to hand the near level): every shape draws on.
+    fn none() -> HlodPlan {
+        HlodPlan {
+            ends: BTreeMap::new(),
+            cells: BTreeMap::new(),
+        }
+    }
+
+    /// The plan for `world`, its models resident (uploaded) at `assets_revision`. A cell
+    /// with more vertices than [`hlod::MAX_CELL_VERTICES`] has no merged mesh and says so.
+    fn of(
+        world: &World,
+        resident: &BTreeMap<String, Result<ResidentModel, FailedModel>>,
+        assets_revision: u64,
+        problems: &mut Vec<String>,
+    ) -> HlodPlan {
+        let (box_v, sphere_v, cylinder_v) = (
+            mesh::unit_box().positions.len(),
+            mesh::unit_sphere().positions.len(),
+            mesh::unit_cylinder().positions.len(),
+        );
+        // A model entity's own end: resolved once per asset, set of distances and scale.
+        let mut resolved: BTreeMap<(String, u64, Vec<u64>, Option<u64>), f64> = BTreeMap::new();
+        let mut ends: BTreeMap<EntityId, f64> = BTreeMap::new();
+        let mut contents: BTreeMap<Cell, Content> = BTreeMap::new();
+        let mut vertices: BTreeMap<Cell, usize> = BTreeMap::new();
+        let mut members: BTreeMap<Cell, Vec<EntityId>> = BTreeMap::new();
+        let mut near: BTreeMap<Cell, f64> = BTreeMap::new();
+        for e in world.entities() {
+            // Characters move: their items follow them; they take no part.
+            if e.character().is_some() {
+                continue;
+            }
+            let cell = Cell::of(e.position[0], e.position[2]);
+            let content = contents
+                .entry(cell)
+                .or_insert_with(|| Content::new(cell, assets_revision));
+            let (end, count) = if let Some(m) = e.model() {
+                let Some(Ok(model)) = resident.get(&m.asset) else {
+                    continue;
+                };
+                let component = LodOverride {
+                    switch_m: m.lod_distances_m.clone(),
+                    draw_m: m.draw_distance_m,
+                    coverage: None,
+                };
+                let scale = scale_bucket(m.scale * e.scale);
+                let key = (
+                    m.asset.clone(),
+                    scale.to_bits(),
+                    component
+                        .switch_m
+                        .iter()
+                        .flatten()
+                        .map(|d| d.to_bits())
+                        .collect(),
+                    component.draw_m.map(f64::to_bits),
+                );
+                let end = *resolved.entry(key).or_insert_with(|| {
+                    LodDistances::resolve(
+                        model.read.levels,
+                        model.size_m * scale,
+                        model.read.file.as_ref(),
+                        Some(&component),
+                    )
+                    .0
+                    .draw_m
+                });
+                content.model(e, m);
+                (end, model.coarsest.iter().map(|p| p.positions.len()).sum())
+            } else if let Some(shape) = e.shape() {
+                content.shape(e, shape);
+                // A shape alone never gave way: the cell's plan says where it stops.
+                (
+                    NEAR_MIN_M,
+                    match shape.kind {
+                        ShapeKind::Box => box_v,
+                        ShapeKind::Sphere => sphere_v,
+                        ShapeKind::Cylinder => cylinder_v,
+                    },
+                )
+            } else {
+                continue;
+            };
+            ends.insert(e.id, end);
+            *vertices.entry(cell).or_default() += count;
+            members.entry(cell).or_default().push(e.id);
+            // What never ends by distance (a shape of a cell over the vertex cap) does not
+            // put the take-over off.
+            let n = near.entry(cell).or_insert(NEAR_MIN_M);
+            if end.is_finite() {
+                *n = n.max(end);
+            }
+        }
+        let mut plan = HlodPlan {
+            ends,
+            cells: BTreeMap::new(),
+        };
+        for (cell, members) in members {
+            let (Some(&count), Some(&near_m), Some(content)) =
+                (vertices.get(&cell), near.get(&cell), contents.remove(&cell))
+            else {
+                continue;
+            };
+            if count > hlod::MAX_CELL_VERTICES {
+                problems.push(format!(
+                    "Cell ({}, {}) has no far level: its shapes and models hold more than {} \
+                     vertices together, so its own items draw on instead",
+                    cell.x,
+                    cell.z,
+                    hlod::MAX_CELL_VERTICES
+                ));
+                for &id in &members {
+                    if let Some(end) = plan.ends.get_mut(&id)
+                        && world.entity(id).is_some_and(|e| e.shape().is_some())
+                    {
+                        *end = f64::INFINITY;
+                    }
+                }
+                continue;
+            }
+            let hash = content.finish();
+            let near_m = near_m.max(NEAR_MIN_M);
+            // Every member's own item ends where the merged mesh takes over (plus the margin
+            // `until_of`, where the item is built).
+            for &id in &members {
+                if let Some(end) = plan.ends.get_mut(&id) {
+                    *end = near_m;
+                }
+            }
+            plan.cells
+                .insert(cell, (CellPlan { cell, hash, near_m }, members));
+        }
+        plan
+    }
+
+    /// The end of entity `id`'s own item, when it takes part.
+    fn end_of(&self, id: EntityId) -> Option<f64> {
+        self.ends.get(&id).copied()
+    }
 }
 
 /// One character item: the characters it draws, in instance order, and where it drew them.
@@ -131,6 +306,9 @@ struct CharacterGroup {
 /// One model item: what is needed to count again what the renderer draws of it.
 struct ModelItem {
     asset: String,
+    /// Where each level ends by the component, the file and the rule alone (without the far
+    /// level's margin).
+    own_until_m: Vec<f64>,
     /// The item's instances, as last handed to the renderer.
     instances: Vec<Mat4>,
     /// Triangles each level submits per instance, finest first.
@@ -158,6 +336,10 @@ struct ModelKey {
     scale: Option<u64>,
     /// The item draws the character the camera follows, which is never culled by distance.
     followed: bool,
+    /// Where the merged mesh of the cell these entities lie in takes over, as its bits (the
+    /// cell's near distance): the item's own instances end a cell's diagonal past it. The bits
+    /// of infinity when no merged mesh takes over.
+    cell_near: u64,
 }
 
 impl ModelKey {
@@ -179,6 +361,12 @@ impl ModelKey {
     /// they do not follow the scale.
     fn scale(&self) -> f64 {
         self.scale.map_or(1.0, f64::from_bits)
+    }
+
+    /// Where the merged mesh of the cell takes over for these entities; infinite when none
+    /// does.
+    fn cell_near(&self) -> f64 {
+        f64::from_bits(self.cell_near)
     }
 }
 
@@ -410,6 +598,15 @@ pub struct WorldRenderer {
     /// The counts of the last live frame, kept here: the renderer's own statistics are also
     /// written by a picture, which is drawn through the same frame path.
     live_stats: Option<FrameStats>,
+    /// The empty mesh that draws nothing where a cell is near and its own items draw (the
+    /// first level of a far level's item); `None` when it could not be uploaded, and then no
+    /// cell has a far level.
+    hlod_empty: Option<vc::MeshId>,
+    /// How many merged meshes of far levels were built so far: a count of work for tests.
+    hlod_builds: u64,
+    /// What the last plan of the far levels found to say (a cell too dense for a merged
+    /// mesh): repeated with every sync, like the setup problems.
+    hlod_notes: Vec<String>,
     /// What the renderer divides the distances of the levels by in a live frame: the live
     /// quality's share (40 % low, 50 % medium, 100 % high), as for everything it draws. A
     /// picture is always drawn at the highest quality, where it is 1.
@@ -432,6 +629,8 @@ struct ResidentModel {
     bounds: (Vec3, Vec3),
     /// The extent of the model across, metres: the size the rule from the file follows.
     size_m: f64,
+    /// The coarsest level's parts on the CPU, for the far levels of cells.
+    coarsest: Vec<CpuPart>,
     /// The levels of the file: the ones that draw (in the order of `levels`), what the file
     /// says of the distances, and the sentences about a broken set (said once per build that
     /// draws the model).
@@ -450,6 +649,24 @@ struct ResidentModel {
 struct ResidentLevel {
     parts: Vec<(vc::MeshId, vc::MaterialId)>,
     triangles: u64,
+}
+
+/// The vertex arrays of one uploaded mesh, kept on the CPU for the far levels of cells.
+type CpuMesh = (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>);
+
+/// The shape groups of a build, by (kind, colour, the take-over distance of the cell): the
+/// instances and how far the item draws.
+type ShapeGroups = BTreeMap<(u8, [u32; 3], u64), (ShapeKind, Vec<Mat4>, f64)>;
+
+/// One part of a model's coarsest level on the CPU, to merge into the far level of a cell.
+#[derive(Clone, Debug)]
+struct CpuPart {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    uvs: Vec<[f32; 2]>,
+    indices: Vec<u32>,
+    /// The part's material on the GPU.
+    material: vc::MaterialId,
 }
 
 impl ResidentModel {
@@ -502,6 +719,26 @@ impl WorldRenderer {
                 None
             }
         };
+        // The far levels' first level: a mesh without triangles, so that a cell near the
+        // camera draws nothing of its merged mesh (the item still exists, and hands over to
+        // the merged mesh at its distance).
+        let hlod_empty = match renderer.add_mesh(&vc::Mesh {
+            positions: &[],
+            normals: &[],
+            indices: &[],
+            face_ids: None,
+            uvs: None,
+            wind: None,
+        }) {
+            Ok(id) => Some(id),
+            Err(e) => {
+                setup_problems.push(format!(
+                    "The empty mesh of the far levels could not be uploaded, so no cell has a \
+                     far level: {e}."
+                ));
+                None
+            }
+        };
         let terrain_material = renderer.add_material(&vc::Material::default());
         let puffs = units.map(|u| {
             let material = renderer.add_material(&vc::Material {
@@ -546,6 +783,9 @@ impl WorldRenderer {
             model_uploads: 0,
             followed: None,
             live_stats: None,
+            hlod_empty,
+            hlod_builds: 0,
+            hlod_notes: Vec::new(),
             lod_scale: quality_lod_scale(&vc::Quality::LOW),
         };
         world_renderer.apply_environment(&Environment::default(), false);
@@ -842,6 +1082,7 @@ impl WorldRenderer {
         // A picture starts settled and is drawn at the highest quality: the metres as written.
         let forward_triangles = forward_triangles(&stats);
         let models = self.account(proj * view, eye, 1.0);
+        let hlod = self.account_hlod(proj * view, eye, 1.0);
         Ok(Picture {
             width,
             height,
@@ -852,6 +1093,7 @@ impl WorldRenderer {
                 instances: u64::from(stats.instances),
                 forward_triangles,
                 models,
+                hlod,
             },
             problems: self.problems(),
         })
@@ -874,6 +1116,34 @@ impl WorldRenderer {
     /// ([`WorldRenderer::render`]) does not change them: what it drew is in the picture.
     pub fn frame_stats(&self) -> FrameStats {
         self.live_stats.unwrap_or_default()
+    }
+
+    /// What the far levels drew from `eye` through `view_proj` by the same rule: a cell is
+    /// drawn when its box is farther than its take-over distance and within [`FAR_M`].
+    fn account_hlod(&self, view_proj: Mat4, eye: Vec3, lod_scale: f32) -> HlodStats {
+        let mut stats = HlodStats {
+            cells: self.built.hlod.len(),
+            drawn: 0,
+            triangles: 0,
+        };
+        for cell in self.built.hlod.values() {
+            let count = culling::count(
+                &[Mat4::IDENTITY],
+                &[0, cell.triangles],
+                cell.bounds,
+                &[cell.near_m, FAR_M],
+                view_proj,
+                eye,
+                lod_scale,
+            );
+            if let Some(&(instances, triangles)) = count.levels.get(1)
+                && instances > 0
+            {
+                stats.drawn += 1;
+                stats.triangles += triangles;
+            }
+        }
+        stats
     }
 
     /// What each model item drew from `eye` through `view_proj`, counted again by the
@@ -908,6 +1178,7 @@ impl WorldRenderer {
                         })
                         .collect(),
                     until_m: item.until_m.clone(),
+                    own_until_m: item.own_until_m.clone(),
                 }
             })
             .collect()
@@ -961,8 +1232,26 @@ impl WorldRenderer {
 
     /// Frees the previous build and adds terrain, ground, shapes, characters and plants.
     fn rebuild(&mut self, world: &World, heights: Option<&HeightField>) {
+        // The models are uploaded before the far levels are planned: a cell's plan needs each
+        // model's levels and coarsest geometry.
+        upload_missing(
+            &mut self.renderer,
+            world,
+            &mut self.models,
+            &self.asset_files,
+            &mut self.model_uploads,
+        );
+        let plan = if self.hlod_empty.is_some() {
+            let mut notes = Vec::new();
+            let plan = HlodPlan::of(world, &self.models, self.assets_revision, &mut notes);
+            self.hlod_notes = notes;
+            plan
+        } else {
+            HlodPlan::none()
+        };
         free(&mut self.renderer, &mut self.built);
         let mut problems = self.setup_problems.clone();
+        problems.append(&mut self.hlod_notes.clone());
         let field: Option<Cow<'_, HeightField>> = match (heights, &world.terrain) {
             (Some(h), _) => Some(Cow::Borrowed(h)),
             (None, Some(terrain)) => match terrain.build() {
@@ -1016,19 +1305,25 @@ impl WorldRenderer {
             None => scene.r.set_ground(None),
         }
         if let Some(units) = self.units {
-            scene.shapes(world, units);
+            scene.shapes(world, units, &plan);
         }
-        scene.models(
-            world,
-            &mut self.models,
-            &self.asset_files,
-            &mut self.model_uploads,
-            self.units,
-            self.followed,
-        );
+        scene.models(world, &self.models, self.units, self.followed, &plan);
         scene.characters(world);
         scene.plants(world);
+        scene.hlod(
+            &plan,
+            world,
+            &self.models,
+            self.hlod_empty,
+            &mut self.hlod_builds,
+        );
         self.problems = problems;
+    }
+
+    /// How many merged meshes of far levels were built since the renderer was made: a cell's
+    /// again only when its content, assets or take-over distance changed.
+    pub fn hlod_builds(&self) -> u64 {
+        self.hlod_builds
     }
 }
 
@@ -1051,6 +1346,52 @@ fn vc_layer(l: &TerrainLayer) -> vc::TerrainLayer {
         roughness: l.roughness as f32,
         variation: LAYER_VARIATION,
         ..Default::default()
+    }
+}
+
+/// Where a cell's own items draw until when its merged mesh takes over at `near`: a cell's
+/// diagonal past it, so that no cluster of the cell leaves a hole before it shows.
+fn until_of(near: f64) -> f64 {
+    near + hlod::CELL_M * 2f64.sqrt()
+}
+
+/// Uploads every model the world shows that is not resident yet (one upload per asset, and
+/// again after its files change).
+fn upload_missing(
+    r: &mut vc::Renderer,
+    world: &World,
+    resident: &mut BTreeMap<String, Result<ResidentModel, FailedModel>>,
+    files: &BTreeMap<String, Vec<u8>>,
+    uploads: &mut u64,
+) {
+    let mut wanted: BTreeSet<String> = BTreeSet::new();
+    for e in world.entities() {
+        if let Some(m) = e.model() {
+            wanted.insert(m.asset.clone());
+        }
+    }
+    for asset in wanted {
+        if resident.contains_key(&asset) {
+            continue;
+        }
+        let made = upload_model(r, &asset, files);
+        if made.is_ok() {
+            *uploads += 1;
+        }
+        resident.insert(asset, made);
+    }
+}
+
+/// Removes a cell's merged meshes, items and its own materials.
+fn free_hlod(r: &mut vc::Renderer, built: HlodBuilt) {
+    for id in built.items {
+        r.remove_item(id);
+    }
+    for id in built.meshes {
+        r.remove_mesh(id);
+    }
+    for id in built.materials {
+        r.remove_material(id);
     }
 }
 
@@ -1183,6 +1524,7 @@ fn upload_model(
         levels: Vec::new(),
         bounds: (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
         size_m: data.lods.size_m,
+        coarsest: Vec::new(),
         read: data.lods.read.clone(),
         meshes: Vec::new(),
         materials: Vec::new(),
@@ -1240,10 +1582,12 @@ fn upload_model(
     // One mesh and one material per prim (a glTF material and the levels that draw it), as
     // before the levels; each level then lists the prims it draws.
     let mut uploaded: Vec<Option<(vc::MeshId, vc::MaterialId, u64)>> = Vec::new();
+    let mut cpu: Vec<Option<CpuMesh>> = Vec::new();
     let mut fail = None;
     for prim in &data.prims {
         let Some(m) = data.materials.get(prim.material) else {
             uploaded.push(None);
+            cpu.push(None);
             continue;
         };
         let orm_role = if m.occlusion_image.is_some()
@@ -1282,6 +1626,12 @@ fn upload_model(
                     out.bounds.0 = out.bounds.0.min(p);
                     out.bounds.1 = out.bounds.1.max(p);
                 }
+                cpu.push(Some((
+                    prim.positions.clone(),
+                    prim.normals.clone(),
+                    prim.uvs.clone(),
+                    prim.indices.clone(),
+                )));
                 uploaded.push(Some((mesh, material, (prim.indices.len() / 3) as u64)));
             }
             Err(e) => {
@@ -1314,6 +1664,28 @@ fn upload_model(
             ResidentLevel { parts, triangles }
         })
         .collect();
+    // The coarsest level's geometry stays on the CPU for the far levels of cells.
+    out.coarsest = out
+        .levels
+        .last()
+        .map(|level| {
+            level
+                .parts
+                .iter()
+                .filter_map(|&(mesh, material)| {
+                    let at = out.meshes.iter().position(|&m| m == mesh)?;
+                    let (positions, normals, uvs, indices) = cpu.get(at).cloned().flatten()?;
+                    Some(CpuPart {
+                        positions: positions.clone(),
+                        normals: normals.clone(),
+                        uvs: uvs.clone(),
+                        indices: indices.clone(),
+                        material,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     if !notes.is_empty() {
         out.note = Some(format!(
             "some textures could not be read and are left out ({})",
@@ -1549,8 +1921,10 @@ impl Scene<'_> {
     }
 
     /// Shapes: one item per (kind, colour), an instance per entity.
-    fn shapes(&mut self, world: &World, units: UnitMeshes) {
-        let mut groups: BTreeMap<(u8, [u32; 3]), (ShapeKind, Vec<Mat4>)> = BTreeMap::new();
+    fn shapes(&mut self, world: &World, units: UnitMeshes, plan: &HlodPlan) {
+        // Per (kind, colour): the instances and, where a cell's merged mesh takes over, how
+        // far the item draws (a cell's diagonal past that); otherwise never.
+        let mut groups: ShapeGroups = BTreeMap::new();
         for e in world.entities() {
             let Some(s) = e.shape() else { continue };
             let order = match s.kind {
@@ -1558,19 +1932,195 @@ impl Scene<'_> {
                 ShapeKind::Sphere => 1,
                 ShapeKind::Cylinder => 2,
             };
-            groups
-                .entry((order, s.color.map(f32::to_bits)))
-                .or_insert_with(|| (s.kind, Vec::new()))
-                .1
-                .push(placement(
-                    e.position,
-                    e.rotation_y_deg,
-                    s.size.map(|v| v * e.scale),
-                ));
+            // One item per take-over distance too: only where a cell's merged mesh takes
+            // over does the item end, a cell's diagonal past it.
+            let near = plan.end_of(e.id).unwrap_or(f64::INFINITY);
+            let group = groups
+                .entry((order, s.color.map(f32::to_bits), near.to_bits()))
+                .or_insert_with(|| {
+                    (
+                        s.kind,
+                        Vec::new(),
+                        if near.is_finite() {
+                            until_of(near)
+                        } else {
+                            0.0
+                        },
+                    )
+                });
+            group.1.push(placement(
+                e.position,
+                e.rotation_y_deg,
+                s.size.map(|v| v * e.scale),
+            ));
         }
-        for ((_, color), (kind, instances)) in groups {
+        for ((_, color, _), (kind, instances, until)) in groups {
             let material = self.color(color.map(f32::from_bits));
-            self.add_item(&[(units.of(kind), material)], &instances);
+            if until > 0.0 {
+                let item = self
+                    .r
+                    .add_lod_item(&[(units.of(kind), material, until as f32)], &instances);
+                self.r.set_item_cull_fade(item, MODEL_CULL_FADE);
+                self.built.items.push(item);
+            } else {
+                self.add_item(&[(units.of(kind), material)], &instances);
+            }
+        }
+    }
+
+    /// The far levels of the cells: each cell's merged meshes, one item per material, kept
+    /// from the previous build while the cell's content, assets and take-over distance are
+    /// the same. The first level of an item is the empty mesh (the cell is near, its own
+    /// items draw); the second the merged mesh, until [`FAR_M`].
+    fn hlod(
+        &mut self,
+        plan: &HlodPlan,
+        world: &World,
+        resident: &BTreeMap<String, Result<ResidentModel, FailedModel>>,
+        empty: Option<vc::MeshId>,
+        builds: &mut u64,
+    ) {
+        let Some(empty) = empty else { return };
+        // Cells that went, or whose plan changed: freed.
+        let stale: Vec<Cell> = self
+            .built
+            .hlod
+            .iter()
+            .filter(|(cell, built)| {
+                plan.cells
+                    .get(cell)
+                    .is_none_or(|(p, _)| p.key() != built.key)
+            })
+            .map(|(cell, _)| *cell)
+            .collect();
+        for cell in stale {
+            if let Some(old) = self.built.hlod.remove(&cell) {
+                free_hlod(self.r, old);
+            }
+        }
+        for (cell, (cell_plan, members)) in &plan.cells {
+            let key = cell_plan.key();
+            if self.built.hlod.get(cell).is_some_and(|b| b.key == key) {
+                continue;
+            }
+            // The cell's triangles, sorted by what draws them: a shape's colour, or a
+            // model's material.
+            let mut colours: BTreeMap<[u32; 3], Merged> = BTreeMap::new();
+            // A model's materials in the order the entities show them (the renderer's ids
+            // do not order).
+            let mut materials: Vec<(vc::MaterialId, Merged)> = Vec::new();
+            let mut over = false;
+            for &id in members {
+                let Some(e) = world.entity(id) else { continue };
+                if let Some(shape) = e.shape() {
+                    let unit = match shape.kind {
+                        ShapeKind::Box => mesh::unit_box(),
+                        ShapeKind::Sphere => mesh::unit_sphere(),
+                        ShapeKind::Cylinder => mesh::unit_cylinder(),
+                    };
+                    let scaled = placement(
+                        e.position,
+                        e.rotation_y_deg,
+                        shape.size.map(|v| v * e.scale),
+                    );
+                    over |= !colours
+                        .entry(shape.color.map(f32::to_bits))
+                        .or_default()
+                        .push_mesh(&unit, scaled);
+                } else if let Some(m) = e.model()
+                    && let Some(Ok(model)) = resident.get(&m.asset)
+                {
+                    let s = m.scale * e.scale;
+                    let placed = placement(e.position, e.rotation_y_deg, [s; 3]);
+                    for part in &model.coarsest {
+                        let at = match materials.iter().position(|(id, _)| *id == part.material) {
+                            Some(at) => at,
+                            None => {
+                                materials.push((part.material, Merged::default()));
+                                materials.len() - 1
+                            }
+                        };
+                        let Some((_, merged)) = materials.get_mut(at) else {
+                            continue;
+                        };
+                        over |= !merged.push(
+                            &part.positions,
+                            &part.normals,
+                            Some(&part.uvs),
+                            &part.indices,
+                            placed,
+                        );
+                    }
+                }
+            }
+            if over {
+                self.problems.push(format!(
+                    "Cell ({}, {}) has no far level: its shapes and models hold more than {} \
+                     vertices together, so its own items draw on instead",
+                    cell.x,
+                    cell.z,
+                    hlod::MAX_CELL_VERTICES
+                ));
+                continue;
+            }
+            let mut built = HlodBuilt {
+                key,
+                items: Vec::new(),
+                meshes: Vec::new(),
+                materials: Vec::new(),
+                triangles: 0,
+                bounds: (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+                near_m: cell_plan.near_m,
+            };
+            // The shapes' colour materials are this build's and would be freed with it: the
+            // cell makes its own. The models' materials are the models' own.
+            let colour_materials: BTreeMap<[u32; 3], vc::MaterialId> = colours
+                .keys()
+                .map(|color| {
+                    let [r, g, b] = color.map(f32::from_bits);
+                    let id = self.r.add_material(&vc::Material {
+                        base_color: [r, g, b, 1.0],
+                        roughness: SHAPE_ROUGHNESS,
+                        ..Default::default()
+                    });
+                    built.materials.push(id);
+                    (*color, id)
+                })
+                .collect();
+            let parts: Vec<(vc::MaterialId, Merged)> = colours
+                .into_iter()
+                .filter_map(|(color, mesh)| Some((colour_materials.get(&color).copied()?, mesh)))
+                .chain(materials)
+                .collect();
+            for (material, mesh) in parts {
+                if mesh.indices.is_empty() {
+                    continue;
+                }
+                match upload_mesh(self.r, &mesh.mesh()) {
+                    Ok(id) => {
+                        built.meshes.push(id);
+                        if let Some(b) = mesh.bounds() {
+                            built.bounds = (built.bounds.0.min(b.0), built.bounds.1.max(b.1));
+                        }
+                        built.triangles += mesh.triangles();
+                        let item = self.r.add_lod_item(
+                            &[
+                                (empty, material, cell_plan.near_m as f32),
+                                (id, material, FAR_M as f32),
+                            ],
+                            &[Mat4::IDENTITY],
+                        );
+                        built.items.push(item);
+                        *builds += 1;
+                    }
+                    Err(e) => self.problems.push(format!(
+                        "The far level of cell ({}, {}) could not be uploaded and is \
+                         missing: {e}.",
+                        cell.x, cell.z
+                    )),
+                }
+            }
+            self.built.hlod.insert(*cell, built);
         }
     }
 
@@ -1585,11 +2135,10 @@ impl Scene<'_> {
     fn models(
         &mut self,
         world: &World,
-        resident: &mut BTreeMap<String, Result<ResidentModel, FailedModel>>,
-        files: &BTreeMap<String, Vec<u8>>,
-        uploads: &mut u64,
+        resident: &BTreeMap<String, Result<ResidentModel, FailedModel>>,
         units: Option<UnitMeshes>,
         followed: Option<EntityId>,
+        plan: &HlodPlan,
     ) {
         let mut by_asset: BTreeMap<String, Vec<&Entity>> = BTreeMap::new();
         for e in world.entities() {
@@ -1600,13 +2149,6 @@ impl Scene<'_> {
         let mut missing: Vec<Mat4> = Vec::new();
         let mut missing_characters: Vec<&Entity> = Vec::new();
         for (asset, entities) in by_asset {
-            if !resident.contains_key(&asset) {
-                let made = upload_model(self.r, &asset, files);
-                if made.is_ok() {
-                    *uploads += 1;
-                }
-                resident.insert(asset.clone(), made);
-            }
             let Some(Ok(m)) = resident.get(&asset) else {
                 let Some(Err(failed)) = resident.get(&asset) else {
                     continue;
@@ -1667,6 +2209,7 @@ impl Scene<'_> {
                     scale: follows_scale(m.read.levels, m.read.file.as_ref(), Some(&component))
                         .then(|| scale_bucket(scale).to_bits()),
                     followed: Some(e.id) == followed && e.character().is_some(),
+                    cell_near: plan.end_of(e.id).unwrap_or(f64::INFINITY).to_bits(),
                 };
                 sets.entry(key).or_default().push(e);
             }
@@ -1691,9 +2234,37 @@ impl Scene<'_> {
                     }
                 }
                 // Where each level that draws ends; the last is the draw distance.
+                // Where the merged mesh of the cell these entities lie in takes over (the key
+                // says: one distance for the item): the item's instances draw until a cell's
+                // diagonal past it, so that no cluster of the cell leaves a hole before it
+                // shows. A distance given in metres (the component's, the file's) is kept
+                // where it is nearer: what the file says to stop drawing is not drawn.
+                let far_until = if key.followed {
+                    0.0
+                } else {
+                    if key.cell_near().is_finite() {
+                        until_of(key.cell_near())
+                    } else {
+                        0.0
+                    }
+                };
                 let mut until_m = m.read.drawn_ends(&distances.ends_m());
-                if key.followed
-                    && let Some(last) = until_m.last_mut()
+                let own_until_m = until_m.clone();
+                if let Some(last) = until_m.last_mut()
+                    && far_until > 0.0
+                {
+                    if last.is_finite() {
+                        *last = if key.scale.is_some() {
+                            last.max(far_until)
+                        } else {
+                            last.min(far_until)
+                        };
+                    } else {
+                        *last = far_until;
+                    }
+                }
+                if let Some(last) = until_m.last_mut()
+                    && key.followed
                 {
                     *last = f64::INFINITY;
                 }
@@ -1720,13 +2291,27 @@ impl Scene<'_> {
                             Some(placement(e.position, e.rotation_y_deg, [s; 3]))
                         })
                         .collect();
-                    self.add_model_item(&asset, &parts, instances, m, until_m.clone());
+                    self.add_model_item(
+                        &asset,
+                        &parts,
+                        instances,
+                        m,
+                        until_m.clone(),
+                        own_until_m.clone(),
+                    );
                 }
                 if !characters.is_empty() {
                     let body = Body::Model { size: 1.0 };
                     let instances: Vec<Mat4> =
                         characters.iter().map(|e| character_pose(e, body)).collect();
-                    let item = self.add_model_item(&asset, &parts, instances.clone(), m, until_m);
+                    let item = self.add_model_item(
+                        &asset,
+                        &parts,
+                        instances.clone(),
+                        m,
+                        until_m,
+                        own_until_m,
+                    );
                     self.built.characters.push(CharacterGroup {
                         item,
                         ids: characters.iter().map(|e| e.id).collect(),
@@ -1771,12 +2356,14 @@ impl Scene<'_> {
         instances: Vec<Mat4>,
         m: &ResidentModel,
         until_m: Vec<f64>,
+        own_until_m: Vec<f64>,
     ) -> vc::ItemId {
         let item = self.r.add_lod_item(parts, &instances);
         self.r.set_item_cull_fade(item, MODEL_CULL_FADE);
         self.built.items.push(item);
         self.built.models.push(ModelItem {
             asset: asset.to_string(),
+            own_until_m,
             instances,
             triangles: m.levels.iter().map(|l| l.triangles).collect(),
             drawn: m.read.drawn.clone(),

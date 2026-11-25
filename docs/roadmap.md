@@ -218,9 +218,11 @@ from the engine, as mechanisms with no game in them, in the order they are sched
    generated build script is a build artefact) and `gamecraft-cli project bake`, which runs a
    script and saves the result as a celled project in one step, replacing only what the script
    owns on a re-run (`decisions.md`).
-2. **Far levels of detail for groups (HLOD):** a cell, or a block within it, merged into one
-   simplified mesh or impostor for distance, built from the cell's content and rebuilt when the
-   cell changes. Per-model levels still draw every instance.
+2. ~~**Far levels of detail for groups (HLOD):**~~ Done 2026-11-25, in memory: the static shapes
+   and models of a cell of 128 m merged into one mesh per material (models at their coarsest
+   level), drawn beyond the cell's own items' draw distances and rebuilt only for the cells an
+   edit touches; `view.render`'s `stats.hlod` says what they drew (`decisions.md`). Open: a copy
+   in the project's cooked cache, plants merged too.
 3. **Terrain from a DEM at full resolution:** a heightmap in tiles as the source (1-4 m, imported
    from a DEM), with sculpting as a layer over it, instead of a coarse control grid plus at most
    1 024 edits.

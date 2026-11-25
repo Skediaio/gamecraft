@@ -362,17 +362,18 @@ fn a_second_sync_leaves_no_stale_items() {
 
     assert_eq!(r.item_count(), 0);
     r.sync(&busy, Some(&hf));
-    // One terrain chunk, the apron, red boxes, the blue box, the sphere, the character, the birch.
-    assert_eq!(r.item_count(), 7);
+    // One terrain chunk, the apron, red boxes, the blue box, the sphere, the character, the
+    // birch, and the three merged colour meshes of the cell the shapes are in.
+    assert_eq!(r.item_count(), 10);
     r.sync(&quiet, Some(&hf));
-    // One terrain chunk, the apron and the cylinder.
-    assert_eq!(r.item_count(), 3);
+    // One terrain chunk, the apron, the cylinder and its cell's merged mesh.
+    assert_eq!(r.item_count(), 4);
     r.sync(&busy, Some(&hf));
-    assert_eq!(r.item_count(), 7);
+    assert_eq!(r.item_count(), 10);
     // An unchanged world is not rebuilt; an environment change is no rebuild either.
     busy.environment.time_of_day_h = 18.0;
     r.sync(&busy, Some(&hf));
-    assert_eq!(r.item_count(), 7);
+    assert_eq!(r.item_count(), 10);
     r.sync(&World::new("nothing", 0), None);
     assert_eq!(r.item_count(), 0);
     drop(gpu);

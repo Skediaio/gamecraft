@@ -18,9 +18,9 @@
 use gamecraft_project::textures::pack_glb;
 use gamecraft_render::model;
 use gamecraft_render::{
-    Camera, LevelCount, Picture, PictureRequest, Quality, WorldRenderer, headless_gpu,
+    Camera, HlodStats, LevelCount, Picture, PictureRequest, Quality, WorldRenderer, headless_gpu,
 };
-use gamecraft_world::{Character, Component, EntityDraft, Model, World};
+use gamecraft_world::{Character, Component, EntityDraft, Model, Shape, ShapeKind, World};
 use serde_json::{Value, json};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -409,9 +409,17 @@ fn the_finest_level_is_near_the_coarsest_far_and_nothing_beyond_the_draw_distanc
         assert_eq!(level(m.levels.clone(), 0), lc(0, 1, 36));
         assert_eq!(level(m.levels.clone(), 1), lc(1, 0, 0));
         assert_eq!(level(m.levels.clone(), 2), lc(2, 1, 12));
-        assert_eq!(m.until_m, vec![20.0, 60.0, 150.0]);
+        // The distances are given in metres: nothing beyond the draw distance, far level or
+        // not (the cell's merged mesh shows the model again from 300 m).
+        assert_eq!(m.own_until_m, vec![20.0, 60.0, 150.0]);
+        assert_eq!(m.until_m, vec![20.0, 60.0, 150.0], "{m:?}");
         // What the renderer submitted in the view: the two levels that drew, no more.
-        assert_eq!(p.stats.forward_triangles, base + 36 + 12, "{:?}", p.stats);
+        assert_eq!(
+            p.stats.forward_triangles,
+            base + 36 + 12 + p.stats.hlod.triangles,
+            "{:?}",
+            p.stats
+        );
         assert!(p.problems.is_empty(), "{:?}", p.problems);
         // The camera 50 m further back: the levels change by the same distances (79.5 m is
         // past the second change).
@@ -422,7 +430,12 @@ fn the_finest_level_is_near_the_coarsest_far_and_nothing_beyond_the_draw_distanc
         assert_eq!(level(m.levels.clone(), 0), lc(0, 0, 0));
         assert_eq!(level(m.levels.clone(), 1), lc(1, 1, 24));
         assert_eq!(level(m.levels.clone(), 2), lc(2, 1, 12));
-        assert_eq!(p.stats.forward_triangles, base + 24 + 12, "{:?}", p.stats);
+        assert_eq!(
+            p.stats.forward_triangles,
+            base + 24 + 12 + p.stats.hlod.triangles,
+            "{:?}",
+            p.stats
+        );
     }
 }
 
@@ -456,10 +469,15 @@ fn a_model_without_levels_is_drawn_as_before_and_culled_by_its_size() {
     assert_eq!(m.levels, vec![lc(0, 1, 12)]);
     // 0.9 m on a side, 1.56 m across: drawn to about 364 m (the rule).
     assert!(
-        m.until_m.len() == 1 && (364.0..366.0).contains(&m.until_m[0]),
+        m.own_until_m.len() == 1 && (364.0..366.0).contains(&m.own_until_m[0]),
         "{m:?}"
     );
-    assert_eq!(p.stats.forward_triangles, base + 12, "{:?}", p.stats);
+    assert_eq!(
+        p.stats.forward_triangles,
+        base + 12 + p.stats.hlod.triangles,
+        "{:?}",
+        p.stats
+    );
     assert_eq!(r.model_uploads(), 1);
     // Scaled ten times, it counts ten times the size: 9 m crates are drawn to 3.6 km.
     let mut big = world();
@@ -473,7 +491,7 @@ fn a_model_without_levels_is_drawn_as_before_and_culled_by_its_size() {
     assert_eq!(r.sync(&big, None), Vec::<String>::new());
     let m = one(&picture(&mut r, camera));
     assert_eq!(m.drawn, 1, "{m:?}");
-    assert!(m.until_m[0] > 3600.0, "{m:?}");
+    assert!(m.own_until_m[0] > 3600.0, "{m:?}");
 }
 
 #[test]
@@ -502,20 +520,23 @@ fn the_component_wins_over_the_file_which_wins_over_the_rule() {
     let first = size / (2.0 * 0.5773502691896257 * 0.25);
     let second = size / (2.0 * 0.5773502691896257 * 0.0625);
     assert!(
-        close(m[0].until_m[0], first) && close(m[0].until_m[1], second),
+        close(m[0].own_until_m[0], first) && close(m[0].own_until_m[1], second),
         "{m:?}"
     );
-    assert_eq!(m[0].until_m[2], 300.0);
+    assert_eq!(m[0].own_until_m[2], 300.0);
     // The component: its draw distance; the rest as the file and the rule say.
-    assert_eq!(m[1].until_m, vec![m[0].until_m[0], m[0].until_m[1], 250.0]);
+    assert_eq!(
+        m[1].own_until_m,
+        vec![m[0].own_until_m[0], m[0].own_until_m[1], 250.0]
+    );
     // Both: the first change from the component, the second from the rule, the end from the
     // component.
-    assert_eq!(m[2].until_m, vec![30.0, m[0].until_m[1], 400.0]);
+    assert_eq!(m[2].own_until_m, vec![30.0, m[0].own_until_m[1], 400.0]);
     assert!(m.iter().all(|row| row.instances == 1), "{m:?}");
     // A picture from this camera carries the same rows.
     let p = picture(&mut r, view([0.0, 0.5, 0.0], [20.0, 0.5, -10.0]));
     assert_eq!(p.stats.models.len(), 3);
-    assert_eq!(p.stats.models[1].until_m[2], 250.0);
+    assert_eq!(p.stats.models[1].own_until_m[2], 250.0);
     // Another distance is other geometry: the scene is built again.
     let rebuilds = r.rebuild_count();
     let both = w.find("Both").unwrap();
@@ -528,7 +549,7 @@ fn the_component_wins_over_the_file_which_wins_over_the_rule() {
     assert_eq!(r.sync(&w, None), Vec::<String>::new());
     assert!(r.rebuild_count() > rebuilds, "a new draw distance rebuilds");
     let p = picture(&mut r, view([0.0, 0.5, 0.0], [20.0, 0.5, -10.0]));
-    assert_eq!(p.stats.models[2].until_m[2], 450.0);
+    assert_eq!(p.stats.models[2].own_until_m[2], 450.0);
     // Too many distances for three levels: said, and the extra one is not used.
     let rule = w.find("Rule").unwrap();
     w.entity_mut(rule)
@@ -545,7 +566,7 @@ fn the_component_wins_over_the_file_which_wins_over_the_rule() {
         "{problems:?}"
     );
     let p = picture(&mut r, view([0.0, 0.5, 0.0], [20.0, 0.5, -10.0]));
-    assert_eq!(p.stats.models[0].until_m, vec![5.0, 9.0, 300.0]);
+    assert_eq!(p.stats.models[0].own_until_m, vec![5.0, 9.0, 300.0]);
 }
 
 #[test]
@@ -577,7 +598,12 @@ fn four_hundred_crates_over_a_kilometre_draw_far_fewer_triangles_than_they_hold(
     assert_eq!(drawn, m.drawn as u64 * 12);
     assert!(drawn * 4 < 400 * 12, "{drawn} triangles of 4800");
     // The renderer submitted exactly what the count says.
-    assert_eq!(p.stats.forward_triangles, base + drawn, "{:?}", p.stats);
+    assert_eq!(
+        p.stats.forward_triangles,
+        base + drawn + p.stats.hlod.triangles,
+        "{:?}",
+        p.stats
+    );
     // From 300 m above the centre, the crates within about 200 m horizontally are within
     // the draw distance; the far side of the field is not.
     let above = view([475.0, 300.0, 475.0], [475.0, 0.0, 474.9]);
@@ -635,7 +661,12 @@ fn the_renderer_culls_what_is_outside_the_view() {
     let m = one(&p);
     assert_eq!((m.instances, m.drawn, m.culled), (5, 2, 3), "{m:?}");
     // Only the cell in the view was submitted: the renderer's own frustum culling, per cell.
-    assert_eq!(p.stats.forward_triangles, base + 24, "{:?}", p.stats);
+    assert_eq!(
+        p.stats.forward_triangles,
+        base + 24 + p.stats.hlod.triangles,
+        "{:?}",
+        p.stats
+    );
     // Turned around, it is the other way round.
     let back = view([0.0, 0.5, 0.0], [0.0, 0.5, 10.0]);
     let p = picture(&mut r, back);
@@ -677,7 +708,7 @@ fn a_broken_set_of_levels_warns_and_is_drawn() {
     assert_eq!((m.drawn, m.culled), (2, 0), "{m:?}");
     // The size is the finest level's (one cube), so its first change is at 6 m: the model
     // 10 m away is already at the second level, the one 100 m away at the third.
-    assert_eq!(m.until_m[0], 6.0, "{m:?}");
+    assert_eq!(m.own_until_m[0], 6.0, "{m:?}");
     assert_eq!(m.levels, vec![lc(0, 0, 0), lc(1, 1, 24), lc(2, 1, 36)]);
 }
 
@@ -824,8 +855,10 @@ fn a_thousand_scattered_copies_with_their_own_scales_are_a_handful_of_items() {
     assert_eq!(r.sync(&w, None), Vec::<String>::new());
     let p = picture(&mut r, camera);
     let rows = &p.stats.models;
+    // A handful: one item per bucket of scales and per take-over distance of the cells the
+    // bucket's copies lie in.
     assert!(
-        (6..=9).contains(&rows.len()),
+        (6..=18).contains(&rows.len()),
         "{} items for 1000 copies of their own size",
         rows.len()
     );
@@ -834,11 +867,18 @@ fn a_thousand_scattered_copies_with_their_own_scales_are_a_handful_of_items() {
         .iter()
         .flat_map(|m| m.levels.iter().map(|l| l.triangles))
         .sum();
-    assert_eq!(p.stats.forward_triangles, base + counted, "{:?}", p.stats);
+    // The copies' far levels (their merged meshes) draw where the copies are culled.
+    assert!(p.stats.hlod.cells > 0, "{:?}", p.stats.hlod);
+    assert_eq!(
+        p.stats.forward_triangles,
+        base + counted + p.stats.hlod.triangles,
+        "{:?}",
+        p.stats
+    );
     assert!(p.problems.is_empty(), "{:?}", p.problems);
     // A bucket's distances are its upper scale's: a copy is never culled early.
     for row in rows {
-        let biggest = row.until_m.last().copied().unwrap_or(0.0)
+        let biggest = row.own_until_m.last().copied().unwrap_or(0.0)
             / (0.9 * 3f64.sqrt() * 270.0 / (2.0 * 0.5773502691896257));
         let smallest = biggest / 1.25;
         assert!(
@@ -853,14 +893,19 @@ fn a_thousand_scattered_copies_with_their_own_scales_are_a_handful_of_items() {
     assert_eq!(r.sync(&fixed, None), Vec::<String>::new());
     let p = picture(&mut r, camera);
     assert_eq!(p.stats.models.len(), 1, "{:?}", p.stats.models);
-    assert_eq!(p.stats.models[0].until_m, vec![600.0]);
+    assert_eq!(p.stats.models[0].own_until_m, vec![600.0]);
     let counted: u64 = p
         .stats
         .models
         .iter()
         .flat_map(|m| m.levels.iter().map(|l| l.triangles))
         .sum();
-    assert_eq!(p.stats.forward_triangles, base + counted, "{:?}", p.stats);
+    assert_eq!(
+        p.stats.forward_triangles,
+        base + counted + p.stats.hlod.triangles,
+        "{:?}",
+        p.stats
+    );
 }
 
 #[test]
@@ -920,7 +965,16 @@ fn a_live_view_counts_at_its_quality_s_distances_and_a_picture_at_the_written_on
     r.set_quality(Quality::High);
     let m = only(&r.count_models(&camera, 4.0 / 3.0));
     assert_eq!((m.drawn, m.culled), (2, 1), "{m:?}");
-    // Medium: the renderer halves every distance, so 300 m is beyond the crate's 182 m.
+    // The crate's own end is the size rule's (364 m); where its cell's merged mesh takes
+    // over, a cell's diagonal past it (545 m) is where the crate's own item ends.
+    let m = only(&r.count_models(&camera, 4.0 / 3.0));
+    assert!(
+        close(m.own_until_m[0], 364.5) && close(m.until_m[0], 364.5 + 128.0 * 2f64.sqrt()),
+        "{m:?}"
+    );
+    // Medium: the renderer halves every distance, the cells' take-over included (the item
+    // ends at 273 m), so the crate at 300 m is beyond its own item: the merged mesh of its
+    // cell draws it instead.
     r.set_quality(Quality::Medium);
     let m = only(&r.count_models(&camera, 4.0 / 3.0));
     assert_eq!((m.drawn, m.culled), (1, 2), "{m:?}");
@@ -929,8 +983,10 @@ fn a_live_view_counts_at_its_quality_s_distances_and_a_picture_at_the_written_on
     r.draw(&camera, 0.0, &target, &mut encoder).unwrap();
     queue.submit([encoder.finish()]);
     let live = r.frame_stats();
-    assert_eq!(live.instances, 1, "one crate in the live view: {live:?}");
-    assert_eq!(live.forward_triangles, live_base + 12, "{live:?}");
+    // The crate near the camera, the merged meshes of the two cells beyond it, and the near
+    // cell's empty level.
+    assert_eq!(live.instances, 4, "the live view: {live:?}");
+    assert_eq!(live.forward_triangles, live_base + 36, "{live:?}");
     // ...and a picture from the same camera is still drawn at the highest quality.
     let p = picture(&mut r, camera);
     assert_eq!(
@@ -939,14 +995,16 @@ fn a_live_view_counts_at_its_quality_s_distances_and_a_picture_at_the_written_on
         "{:?}",
         p.stats
     );
-    assert_eq!(p.stats.instances, 2);
+    // The two crates and the three cells' merged meshes (the near cell's at its empty level).
+    assert_eq!(p.stats.instances, 5, "{:?}", p.stats);
+    assert_eq!(p.stats.hlod.cells, 3, "{:?}", p.stats);
     // The picture went through the renderer's frame path too; the live counts are their own.
     assert_eq!(
         r.frame_stats(),
         live,
         "a picture does not change the live counts"
     );
-    // Low: 40 percent (146 m): the crate at 100 m is still drawn, the others not.
+    // Low: 40 percent: the item ends at 218 m; the crate at 100 m is still drawn.
     r.set_quality(Quality::Low);
     let m = only(&r.count_models(&camera, 4.0 / 3.0));
     assert_eq!((m.drawn, m.culled), (1, 2), "{m:?}");
@@ -999,7 +1057,7 @@ fn a_level_without_geometry_ends_the_model_or_is_left_out() {
         );
         let p = picture(&mut r, camera);
         let m = one(&p);
-        assert_eq!(m.until_m, until, "{m:?}");
+        assert_eq!(m.own_until_m, until, "{m:?}");
         assert_eq!(m.levels.len(), 2, "{m:?}");
         // Near: the finest level; Middle: the coarse one that draws; Far: beyond 60 m only
         // where the empty level was the last.
@@ -1047,11 +1105,11 @@ fn screen_coverage_follows_the_model_s_scale_in_buckets() {
     for k in 0..3 {
         let share = [1.0, 0.25, 0.02][k];
         assert!(
-            (one.until_m[k] - 11f64.sqrt() / (2.0 * half_tan * share)).abs() < 1e-9,
+            (one.own_until_m[k] - 11f64.sqrt() / (2.0 * half_tan * share)).abs() < 1e-9,
             "{}",
-            one.until_m[k]
+            one.own_until_m[k]
         );
-        let ratio = ten.until_m[k] / one.until_m[k];
+        let ratio = ten.own_until_m[k] / one.own_until_m[k];
         assert!((ratio - 11.641_532_182_653_137).abs() < 1e-9, "{ratio}");
     }
 }
@@ -1165,4 +1223,220 @@ fn a_model_made_of_strips_and_fans_is_drawn() {
         vec![lc(0, 1, 36), lc(1, 1, 34)],
         "the strip is the coarse level's geometry: {rows:?}"
     );
+}
+
+// ---------------------------------------------------------- far levels of detail (cells)
+
+/// A world of `n` solid boxes, `spacing` metres apart over a square, all one colour.
+fn boxes(n: usize, spacing: f64) -> World {
+    let mut w = world();
+    let side = (n as f64).sqrt().round() as usize;
+    for i in 0..n {
+        let (x, z) = ((i % side) as f64 * spacing, (i / side) as f64 * spacing);
+        w.add_entity(EntityDraft {
+            name: format!("Box {i}"),
+            position: [x, 0.0, z],
+            components: vec![Component::Shape(Shape {
+                kind: ShapeKind::Box,
+                size: [4.0, 3.0, 4.0],
+                color: [0.6, 0.5, 0.4],
+                solid: true,
+            })],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    }
+    w
+}
+
+#[test]
+fn a_kilometre_of_boxes_seen_from_far_draws_its_cells_not_its_boxes() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    // 64 cells of 128 m over a kilometre, each with its merged mesh.
+    let w = boxes(1024, 32.0);
+    let camera = view([500.0, 500.0, 2500.0], [500.0, 0.0, 500.0]);
+    let base = baseline(&mut r, camera);
+    assert_eq!(r.sync(&w, None), Vec::<String>::new());
+    assert_eq!(r.hlod_builds(), 64, "one merged mesh per cell");
+    let p = picture(&mut r, camera);
+    assert_eq!(p.stats.hlod.cells, 64, "{:?}", p.stats.hlod);
+    assert_eq!(
+        p.stats.hlod.drawn, 64,
+        "every cell is far: {:?}",
+        p.stats.hlod
+    );
+    assert_eq!(p.stats.hlod.triangles, 1024 * 12, "{:?}", p.stats.hlod);
+    // Nothing else: the boxes' own items are culled (every cluster is more than 481 m away).
+    assert_eq!(p.stats.forward_triangles, base + 1024 * 12, "{:?}", p.stats);
+    // A few items: one for the boxes' colour, one per cell, and the puff.
+    assert!(r.item_count() <= 1 + 64, "{}", r.item_count());
+    // Walking the camera does not build anything. From nearby the cells around the
+    // camera are near (their own boxes draw) and only the far ones their merged meshes.
+    let p2 = picture(&mut r, view([16.0, 40.0, 16.0], [500.0, 0.0, 500.0]));
+    assert_eq!(r.hlod_builds(), 64);
+    assert!(
+        p2.stats.hlod.drawn > 5 && p2.stats.hlod.drawn < 64,
+        "seen from a corner: {:?}",
+        p2.stats.hlod
+    );
+}
+
+#[test]
+fn a_near_cell_draws_its_own_items_and_only_a_far_one_its_merged_mesh() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let w = boxes(1024, 32.0);
+    let camera = view([500.0, 2.0, 500.0], [500.0, 2.0, 1000.0]);
+    let base = baseline(&mut r, camera);
+    assert_eq!(r.sync(&w, None), Vec::<String>::new());
+    let p = picture(&mut r, camera);
+    let stats = p.stats;
+    assert!(
+        stats.hlod.drawn > 0 && stats.hlod.drawn < 64,
+        "{:?}",
+        stats.hlod
+    );
+    // Sixteen boxes of twelve triangles in a cell.
+    assert_eq!(stats.hlod.triangles, stats.hlod.drawn as u64 * 192);
+    // The boxes of the near cells draw themselves: what the view submitted is the merged
+    // meshes plus whole boxes.
+    let rest = stats.forward_triangles - base - stats.hlod.triangles;
+    assert!(rest >= 12 && rest.is_multiple_of(12), "{stats:?}");
+}
+
+#[test]
+fn an_edit_rebuilds_only_the_cells_it_touches() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let mut w = boxes(400, 50.0);
+    r.sync(&w, None);
+    let first = r.hlod_builds();
+    assert_eq!(first, 64, "20 by 20 boxes of 50 m: 8 by 8 cells of 128 m");
+    // A box moved inside its cell: that cell's mesh is built again, no other.
+    let moved = w.entities().next().unwrap().id;
+    w.entity_mut(moved).unwrap().position[0] += 1.0;
+    r.sync(&w, None);
+    assert_eq!(r.hlod_builds(), first + 1);
+    // A box moved into another cell: both cells change.
+    w.entity_mut(moved).unwrap().position[0] = 300.0;
+    r.sync(&w, None);
+    assert_eq!(r.hlod_builds(), first + 3, "{:?}", r.hlod_builds());
+    // A character walking is no change to any cell.
+    let walker = w
+        .add_entity(EntityDraft {
+            name: "Walker".into(),
+            position: [10.0, 0.0, 10.0],
+            components: vec![Component::Character(Character::default())],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    r.sync(&w, None);
+    let before_walk = r.hlod_builds();
+    w.entity_mut(walker).unwrap().position = [11.0, 0.0, 10.0];
+    r.sync(&w, None);
+    assert_eq!(r.hlod_builds(), before_walk, "a character takes no part");
+    // Every box turned: every cell again.
+    let shaped: Vec<_> = w
+        .entities()
+        .filter(|e| e.shape().is_some())
+        .map(|e| e.id)
+        .collect();
+    for id in shaped {
+        w.entity_mut(id).unwrap().rotation_y_deg = 10.0;
+    }
+    r.sync(&w, None);
+    assert_eq!(r.hlod_builds(), before_walk + 64);
+    // No boxes: no cells, and nothing left behind.
+    let ids: Vec<_> = w
+        .entities()
+        .filter(|e| e.shape().is_some())
+        .map(|e| e.id)
+        .collect();
+    for id in ids {
+        w.remove_entity(id);
+    }
+    r.sync(&w, None);
+    let p = picture(&mut r, view([500.0, 500.0, 2500.0], [500.0, 0.0, 500.0]));
+    assert_eq!(p.stats.hlod, HlodStats::default(), "{:?}", p.stats.hlod);
+    assert_eq!(r.hlod_builds(), before_walk + 64, "nothing new to build");
+    assert_eq!(
+        r.item_count(),
+        1,
+        "the walker's capsule and nothing of the cells: {}",
+        r.item_count()
+    );
+}
+
+#[test]
+fn a_model_is_merged_at_its_coarsest_level_and_a_reupload_builds_its_cells_again() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    let mut w = world();
+    // Ten things of three levels in one cell (36, 24 and 12 triangles) and ten in another.
+    for i in 0..20 {
+        let (x, z) = if i < 10 {
+            (i as f64 * 4.0, 4.0)
+        } else {
+            ((i - 10) as f64 * 4.0, 900.0)
+        };
+        add(&mut w, &format!("Thing {i}"), ASSET, [x, 0.0, z], |m| {
+            m.lod_distances_m = Some(vec![20.0, 60.0]);
+            m.draw_distance_m = Some(150.0);
+        });
+    }
+    r.provide_asset(ASSET, named());
+    assert_eq!(r.sync(&w, None), Vec::<String>::new());
+    assert_eq!(r.hlod_builds(), 2, "one merged mesh per cell");
+    // A model with a draw distance of its own (150 m): the merged mesh takes over at the least
+    // distance, 300 m, beyond it.
+    let near = view([20.0, 40.0, 500.0], [20.0, 0.0, 4.0]);
+    let p = picture(&mut r, near);
+    // The cell at z = 900 is behind the camera; the cell at z = 4 is 500 m away: drawn.
+    assert_eq!(
+        (p.stats.hlod.cells, p.stats.hlod.drawn),
+        (2, 1),
+        "{:?}",
+        p.stats.hlod
+    );
+    assert_eq!(
+        p.stats.hlod.triangles,
+        10 * 12,
+        "the coarsest level: {:?}",
+        p.stats.hlod
+    );
+    assert_eq!(
+        p.stats.models[0].drawn, 0,
+        "its own items are culled: {:?}",
+        p.stats.models
+    );
+    // Another version of the asset: both cells again.
+    r.provide_asset(
+        ASSET,
+        named_with(json!({"gamecraft": {"draw_distance_m": 900}})),
+    );
+    r.sync(&w, None);
+    assert_eq!(r.hlod_builds(), 4, "the cells show the new model");
+    // A shape beside the models joins the cell's merged mesh under its own colour.
+    w.add_entity(EntityDraft {
+        name: "Slab".into(),
+        position: [0.0, 0.0, 300.0],
+        components: vec![Component::Shape(Shape {
+            kind: ShapeKind::Box,
+            size: [8.0, 1.0, 8.0],
+            color: [0.9, 0.1, 0.1],
+            solid: false,
+        })],
+        ..EntityDraft::default()
+    })
+    .unwrap();
+    r.sync(&w, None);
+    assert_eq!(r.hlod_builds(), 5, "the cell of the slab, and no other");
+    let p = picture(&mut r, view([0.0, 30.0, 900.0], [0.0, 0.0, 300.0]));
+    assert!(p.stats.hlod.drawn >= 1, "{:?}", p.stats.hlod);
+    assert!(p.problems.is_empty(), "{:?}", p.problems);
 }

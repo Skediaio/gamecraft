@@ -20,6 +20,11 @@
 //!   ([`WorldRenderer::sync`]). What each model drew, per level, is counted again on the CPU by
 //!   the renderer's own rule (`culling`) and comes with every picture
 //!   ([`PictureStats::models`]).
+//! - **Far levels of detail** ([`hlod`]): the static shapes and models of a cell of the
+//!   ground (128 m) merged into one mesh per material, each model at its coarsest level,
+//!   drawn where the cell is farther than its own items and nothing near; a cell's merged
+//!   mesh is built again only when its content changes. What they drew is in every picture's
+//!   stats ([`PictureStats::hlod`]).
 //! - **Roads**: every `road` draped on the terrain's triangles a few centimetres above them
 //!   ([`roads`]), one item per terrain chunk and colour, rough and lit like the ground under
 //!   it; where roads overlap the higher tier lies on top, so no two surfaces are coplanar.
@@ -49,6 +54,7 @@ mod blit;
 mod camera;
 mod culling;
 pub mod effects;
+pub mod hlod;
 mod image;
 mod light;
 pub mod mesh;
@@ -182,6 +188,21 @@ pub struct PictureStats {
     /// the same distances and scale show it), in order of asset path, then of the first
     /// entity that shows it. Empty without models.
     pub models: Vec<ModelStats>,
+    /// What the far levels of cells drew.
+    pub hlod: HlodStats,
+}
+
+/// What the far levels of detail ([`hlod`]) drew in the view of a picture: the cells with a
+/// merged mesh, and how many of them drew (their box farther than the cell's take-over
+/// distance, within the view) with the triangles they submitted in the view pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HlodStats {
+    /// Cells with a merged mesh in the scene.
+    pub cells: usize,
+    /// Cells whose merged mesh drew.
+    pub drawn: usize,
+    /// Triangles the merged meshes submitted in the view pass.
+    pub triangles: u64,
 }
 
 /// What one model (an asset as entities with the same distances and scale show it) drew in
@@ -203,8 +224,14 @@ pub struct ModelStats {
     /// submit in the view pass.
     pub levels: Vec<LevelCount>,
     /// Where each level ends, metres from the camera; the last is the draw distance, infinite
-    /// for a model that is never culled (a character the camera follows).
+    /// for a model that is never culled (a character the camera follows). Where a far level of
+    /// the cell takes over ([`hlod`]), the last end is a cell's diagonal past that, so that no
+    /// cluster leaves a hole: [`ModelStats::own_until_m`] has the model's own.
     pub until_m: Vec<f64>,
+    /// Where each level ends by the component, the file and the rule alone, metres: the
+    /// distances without the far level's margin (the same as `until_m` for a character, or
+    /// where no cell has a merged mesh).
+    pub own_until_m: Vec<f64>,
 }
 
 /// Counts of the last live frame ([`WorldRenderer::draw`]); a picture leaves them as they

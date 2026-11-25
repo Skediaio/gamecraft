@@ -8,6 +8,40 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-25: A cell's static geometry is merged for the distance, in memory
+
+Per-model levels (the decision below on levels of detail) still draw every instance: a district
+of 300 000 instances is 300 000 instances to submit whatever their level. So the ground is cut in
+cells of 128 m and each cell's **static** shapes and models (characters excluded: they move) are
+merged into one mesh per material, every model at its coarsest level, as most engines do offline
+for their far levels (Unreal's HLOD, clusters and impostors). The merged mesh takes over where the
+cell is farther than the largest draw distance of its own items (at least 300 m) and draws until
+20 km, the far plane of a view. Chosen 128 m because a cell of a project (512 m) can hold a whole
+district, and 64 merged meshes for a kilometre squared are few enough; chosen per cell, not per
+block within it, for the same reason.
+
+- **No hole at a cell's corner, and no flicker where both draw.** The renderer measures an item's
+  distance to the box of its cluster of instances (8 m) and the merged mesh's to the cell's box: a
+  cluster at a cell's far corner is up to a cell's diagonal farther than the cell. So the cell's own
+  items draw until a diagonal past the take-over distance, and every merged entity is scaled 0.5 %
+  about its own origin, so where both draw the copy stays inside the real geometry. A VisionCraft
+  item's first level starts at distance 0, so the near level of a merged item is an empty mesh.
+- **A take-over follows the cell's farthest-drawing item**, so a landmark that draws to 3 km holds
+  its whole cell at full detail until then: the items are grouped per asset, distances and
+  take-over distance, not per cell, so a cell cannot cut one of its items short and an item draws
+  on only where merged meshes take over (a cell with a landmark in it does not hold every copy of a
+  model in the world). The distances of the size rule are the cell's to move; a distance given in
+  metres (the component's, the file's) stays where it is when it is nearer: what a file says to
+  stop drawing is not drawn, merged or not. Chosen over per-cell items (an item per cell per
+  asset: many more items for the near field) and over cutting a user's `draw_distance_m`.
+- **Built again only where something changed.** A cell's content is hashed (its entities' ids,
+  poses, shapes or models, and the assets revision); a rebuild makes a cell's merged mesh again only
+  when its hash, its assets or its take-over distance changed, and keeps the rest as uploaded. The
+  meshes stay in memory: a copy in the cooked cache of a project, keyed by the same hash, is where
+  most engines put it and is not built yet (open).
+- Not merged: plants (items per species, seed and growth; a district's trees matter as much as its
+  buildings), roads and terrain; a cell over 4 M vertices keeps its own items and says so.
+
 ### 2026-11-25: A bake replaces what the script owns, and the result is kept, not the script
 
 A game that generates a large world (62 000 entities from an OpenStreetMap extract, 295 000
