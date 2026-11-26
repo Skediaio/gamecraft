@@ -157,11 +157,6 @@ pub struct Socket {
 /// Every socket of every model asset the host measured: by asset path, then by name.
 pub type Sockets = BTreeMap<String, BTreeMap<String, Socket>>;
 
-/// Whether a glTF node's name marks a socket ([`SOCKET_PREFIX`] and a name after it).
-pub fn is_socket_node(name: &str) -> bool {
-    socket_name_of(name).is_some()
-}
-
 /// The socket a glTF node's name marks: the name after [`SOCKET_PREFIX`], if it is a plain
 /// socket name.
 pub fn socket_name_of(node_name: &str) -> Option<&str> {
@@ -202,11 +197,11 @@ pub(crate) fn check_socket_name(
 
 /// The names of the sockets a model asset has, as a sentence for an error: `rail_top,
 /// rail_left` or `none`.
-pub fn list_sockets(sockets: Option<&BTreeMap<String, Socket>>) -> String {
-    match sockets {
-        Some(map) if !map.is_empty() => map.keys().cloned().collect::<Vec<_>>().join(", "),
-        Some(_) => "none".to_string(),
-        None => String::new(),
+pub fn list_sockets(sockets: &BTreeMap<String, Socket>) -> String {
+    if sockets.is_empty() {
+        "none".to_string()
+    } else {
+        sockets.keys().cloned().collect::<Vec<_>>().join(", ")
     }
 }
 
@@ -246,27 +241,49 @@ fn socket_frame(socket: &Socket) -> DMat4 {
 pub struct Placed {
     /// The origin of the attachment (where it meets its socket), world metres.
     pub position: [f64; 3],
-    /// Its rotation in the world: a unit quaternion `[x, y, z, w]`.
+    /// Its turn in the world: a unit quaternion `[x, y, z, w]`, the entity's yaw and every
+    /// socket's turn of the chain, multiplied.
     pub rotation: [f64; 4],
-    /// Its scale along its own axes: the entity's and every attachment's of the chain.
-    pub scale: [f64; 3],
+    /// Its scale along its own axes: the lengths of the frame's axes, when they are at right
+    /// angles to each other. `None` when the entity is scaled per axis and a socket of the
+    /// chain turns by another angle than a right angle: the frame is then skewed, and no
+    /// single scale along its own axes describes it ([`Placed::matrix`] is right all the
+    /// same).
+    pub scale: Option<[f64; 3]>,
     /// Its model-to-world matrix, column-major.
     pub matrix: [f64; 16],
 }
 
-/// The chain of matrices from the entity's frame to the attachment at `path`: the entity's
-/// frame, then for each attachment the socket's frame and the attachment's scale.
-fn compose(entity: &Entity, model: &Model, sockets: &Sockets, path: &[String]) -> Option<DMat4> {
+/// The chain from the entity's frame to the attachment at `path`: its matrix (the entity's
+/// frame, then for each attachment the socket's frame and the attachment's scale) and its
+/// turn (the entity's yaw, then each socket's turn). The turn is composed on its own: read
+/// back from the matrix it would be wrong wherever a scale per axis meets a turn.
+fn compose(
+    entity: &Entity,
+    model: &Model,
+    sockets: &Sockets,
+    path: &[String],
+) -> Option<(DMat4, DQuat)> {
     let chain = walk(model, path)?;
     let mut frame = entity_frame(entity, model);
+    let mut turn = DQuat::from_rotation_y(deg_to_rad(entity.rotation_y_deg));
     let mut parent_asset = model.asset.as_str();
     for attachment in chain {
         let socket = sockets.get(parent_asset)?.get(&attachment.socket)?;
         frame *= socket_frame(socket);
         frame *= DMat4::from_scale(DVec3::splat(attachment.scale));
+        turn *= DQuat::from_array(socket.rotation);
         parent_asset = attachment.asset.as_str();
     }
-    Some(frame)
+    // A turn is a unit quaternion; the sockets' turns are too, up to rounding.
+    let length_sq = turn.length_squared();
+    if !length_sq.is_finite() || length_sq <= 0.0 {
+        return None;
+    }
+    if length_sq != 1.0 {
+        turn *= 1.0 / length_sq.sqrt();
+    }
+    Some((frame, turn))
 }
 
 /// Where the attachment at `path` below `entity`'s model lands (the origin of the attachment
@@ -277,23 +294,34 @@ pub fn place(entity: &Entity, model: &Model, sockets: &Sockets, path: &[String])
     if path.is_empty() {
         return None;
     }
-    let frame = compose(entity, model, sockets, path)?;
-    let (scale, rotation, position) = frame.to_scale_rotation_translation();
+    let (frame, rotation) = compose(entity, model, sockets, path)?;
+    let position = frame.w_axis.truncate().to_array();
     let matrix = frame.to_cols_array();
+    // The frame's axes: their lengths are the scale along the attachment's own axes when the
+    // axes are at right angles to each other. A scale per axis under a turn that is not a
+    // right angle skews them ([`Placed::scale`] is then `None`): the frame is right, a single
+    // turn and scale read from it would not be.
+    let (x, y, z) = (
+        frame.x_axis.truncate(),
+        frame.y_axis.truncate(),
+        frame.z_axis.truncate(),
+    );
+    let at_right_angles = |a: DVec3, b: DVec3| a.dot(b).abs() <= 1e-9 * a.length() * b.length();
+    let scale = (at_right_angles(x, y) && at_right_angles(x, z) && at_right_angles(y, z))
+        .then(|| [x.length(), y.length(), z.length()]);
     let finite = position
-        .to_array()
         .iter()
-        .chain(scale.to_array().iter())
-        .chain(rotation.to_array().iter())
+        .chain(&rotation.to_array())
         .all(|v| v.is_finite())
+        && scale.is_none_or(|s| s.iter().all(|v| v.is_finite()))
         && matrix.iter().all(|v| v.is_finite());
     if !finite {
         return None;
     }
     Some(Placed {
-        position: position.to_array(),
+        position,
         rotation: rotation.to_array(),
-        scale: scale.to_array(),
+        scale,
         matrix,
     })
 }

@@ -4,7 +4,7 @@
 
 use crate::attachments::{
     Attachment, Attachment as A, MAX_ATTACHMENT_DEPTH, MAX_ATTACHMENTS, SOCKET_PREFIX, Socket,
-    Sockets, is_socket_name, is_socket_node, list_sockets, place, socket_name_of, walk,
+    Sockets, is_socket_name, list_sockets, place, socket_name_of, walk,
 };
 use crate::{Component, EntityDraft, Model, World};
 use gamecraft_math::{DMat4, DQuat, DVec3, Portable, deg_to_rad};
@@ -104,7 +104,7 @@ fn a_two_deep_chain_lands_at_the_composed_transform() {
             close(adapter.position[k], [10.0, 2.0, 20.0][k], 1e-9),
             "{adapter:?}"
         );
-        assert!(close(adapter.scale[k], 4.0, 1e-9), "{adapter:?}");
+        assert!(close(adapter.scale.unwrap()[k], 4.0, 1e-9), "{adapter:?}");
     }
     // The entity's yaw and the socket's roll: ry(30) * rz(90), its parts from the half angles.
     let (s, c) = deg_to_rad(15.0).psin_cos();
@@ -145,7 +145,7 @@ fn a_two_deep_chain_lands_at_the_composed_transform() {
     assert!(close(optic.position[1], 2.0, 1e-3), "{optic:?}");
     assert!(close(optic.position[2], 20.7928, 1e-3), "{optic:?}");
     for k in 0..3 {
-        assert!(close(optic.scale[k], 2.0, 1e-9), "{optic:?}");
+        assert!(close(optic.scale.unwrap()[k], 2.0, 1e-9), "{optic:?}");
     }
     for k in 0..4 {
         assert!(close(optic.rotation[k], want[k], 1e-12), "{optic:?}");
@@ -157,10 +157,26 @@ fn a_two_deep_chain_lands_at_the_composed_transform() {
         )
         * DMat4::from_scale(DVec3::splat(0.5));
     assert_eq!(optic.matrix, with_glam2.to_cols_array());
+    // What is reported is read from the composed frame's own terms: the translation, the
+    // turns (the entity's yaw and the sockets' turns, multiplied), and the lengths of the
+    // frame's axes, which are a scale along the attachment's own axes when they are at right
+    // angles (a decomposition of the frame agrees to the last bit of a double here).
     let (s2, r2, t2) = with_glam2.to_scale_rotation_translation();
     assert_eq!(optic.position, t2.to_array());
-    assert_eq!(optic.rotation, r2.to_array());
-    assert_eq!(optic.scale, s2.to_array());
+    assert_eq!(
+        optic.rotation,
+        (DQuat::from_rotation_y(deg_to_rad(30.0)) * DQuat::from_array(ROLL_Z)).to_array()
+    );
+    for k in 0..3 {
+        assert!(
+            close(optic.scale.unwrap()[k], s2.to_array()[k], 1e-12),
+            "{optic:?}"
+        );
+        assert!(
+            close(optic.rotation[k], r2.to_array()[k], 1e-12),
+            "{optic:?}"
+        );
+    }
 }
 
 #[test]
@@ -191,10 +207,13 @@ fn what_gives_no_place() {
             .is_some()
     );
     assert!(model.attachment(&["top".to_string()]).is_none());
-    assert_eq!(list_sockets(None), "");
-    assert_eq!(list_sockets(Some(&BTreeMap::new())), "none");
+    assert_eq!(list_sockets(&BTreeMap::new()), "none");
     assert_eq!(
-        list_sockets(world.model_sockets("models/base.glb")),
+        list_sockets(
+            world
+                .model_sockets("models/base.glb")
+                .expect("the base's sockets are measured")
+        ),
         "rail_left, rail_top"
     );
     // The size and depth of a tree.
@@ -228,10 +247,8 @@ fn names_are_checked() {
     assert!(
         !is_socket_name("") && !is_socket_name("with space") && !is_socket_name(&"x".repeat(65))
     );
-    assert!(is_socket_node("socket_rail_top"));
-    assert!(!is_socket_node("socket_"));
-    assert!(!is_socket_node("rail_top") && !is_socket_node("sockets_a"));
     assert_eq!(socket_name_of("socket_rail_top"), Some("rail_top"));
+    assert_eq!(socket_name_of("socket_"), None);
     assert_eq!(socket_name_of("rail_top"), None);
 }
 
@@ -383,4 +400,86 @@ fn sockets_handed_over_are_kept_and_the_odd_ones_dropped() {
     );
     world.set_model_sockets(sockets());
     assert_eq!(world.to_json().unwrap(), text);
+}
+
+/// A turn of 90 degrees about +X.
+const ROLL_X: [f64; 4] = [
+    std::f64::consts::FRAC_1_SQRT_2,
+    0.0,
+    0.0,
+    std::f64::consts::FRAC_1_SQRT_2,
+];
+/// A turn of 45 degrees about +X.
+const TILT_X: [f64; 4] = [0.3826834323650897, 0.0, 0.0, 0.9238795325112867];
+
+#[test]
+fn under_a_scale_per_axis_the_rotation_is_the_turns_and_the_scale_is_honest() {
+    // Two entities stretched to three times their depth (z), each with an optic on a socket
+    // turned about x: by a right angle, and by half a right angle.
+    let mut world = World::new("w", 1);
+    for (name, asset) in [("Post", "models/base.glb"), ("Tilt", "models/base45.glb")] {
+        world
+            .add_entity(EntityDraft {
+                name: name.into(),
+                position: [10.0, 0.0, 20.0],
+                scale: crate::Scale::per_axis(1.0, 1.0, 3.0),
+                components: vec![Component::Model(Model {
+                    attachments: vec![Attachment::new("side", "models/optic.glb")],
+                    ..Model::of(asset)
+                })],
+                ..EntityDraft::default()
+            })
+            .unwrap();
+    }
+    world.set_model_sockets(
+        [
+            (
+                "models/base.glb".to_string(),
+                [("side".to_string(), socket([0.0, 1.0, 0.0], ROLL_X))]
+                    .into_iter()
+                    .collect(),
+            ),
+            (
+                "models/base45.glb".to_string(),
+                [("side".to_string(), socket([0.0, 1.0, 0.0], TILT_X))]
+                    .into_iter()
+                    .collect(),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let path = ["side".to_string()];
+    for (name, turn, scale) in [
+        ("Post", ROLL_X, Some([1.0, 3.0, 1.0])),
+        ("Tilt", TILT_X, None),
+    ] {
+        let e = world.entities().find(|e| e.name == name).unwrap();
+        let placed = place(e, e.model().unwrap(), world.all_model_sockets(), &path).unwrap();
+        assert_eq!(placed.position, [10.0, 1.0, 20.0], "{name}");
+        // The turns: the entity's (none) and the socket's, the same bits as the product.
+        assert_eq!(placed.rotation, turn, "{name}: {placed:?}");
+        // A right angle puts the entity's depth scale on the attachment's height: a scale
+        // along its own axes. Half a right angle shears the frame: there is none, and it is
+        // not reported.
+        match (placed.scale, scale) {
+            (Some(found), Some(want)) => {
+                for k in 0..3 {
+                    assert!(close(found[k], want[k], 1e-12), "{name}: {placed:?}");
+                }
+            }
+            (None, None) => {}
+            _ => panic!("{name}: {placed:?}"),
+        }
+        // The frame itself is the composed one, turned with the scale, sheared or not.
+        let frame = DMat4::from_scale_rotation_translation(
+            DVec3::new(1.0, 1.0, 3.0),
+            DQuat::IDENTITY,
+            DVec3::new(10.0, 0.0, 20.0),
+        ) * DMat4::from_rotation_translation(
+            DQuat::from_array(turn),
+            DVec3::new(0.0, 1.0, 0.0),
+        );
+        assert_eq!(placed.matrix, frame.to_cols_array(), "{name}");
+    }
 }

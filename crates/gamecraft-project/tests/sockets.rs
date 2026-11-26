@@ -138,3 +138,43 @@ fn a_name_used_twice_keeps_the_first_and_a_node_outside_the_scene_is_no_socket()
     let crate_: &[u8] = include_bytes!("../../../examples/assets-demo/assets/models/crate.glb");
     assert!(inspect(crate_, &|_: &str| None).unwrap().sockets.is_empty());
 }
+
+#[test]
+fn a_socket_under_a_parent_scaled_per_axis_keeps_the_turns_and_its_place() {
+    // A body scaled [2, 1, 0.5] and turned 20 degrees carries `socket_arm` at (1, 2, 3) in
+    // the body, turned 30 degrees about z (a right angle would only swap the axes, and
+    // leave no shear to find).
+    let m = Model::new(
+        &[Mesh(1)],
+        vec![
+            Node::new("Body", Some(0))
+                .at(5.0, 0.0, -4.0)
+                .turned(20.0)
+                .scaled3([2.0, 1.0, 0.5])
+                .children(&[1]),
+            Node::new("socket_arm", None)
+                .at(1.0, 2.0, 3.0)
+                .rotated(turn(30.0, 0.0, 0.0, 1.0)),
+        ],
+        &[0],
+    );
+    let s = m.inspect().unwrap();
+    let arm = &s.sockets["arm"];
+    // The turn is the body's and then the socket's own: the scales play no part. (Read
+    // back from the matrix they shear, the turn would be neither.)
+    let want = DQuat::from_rotation_y(gamecraft_math::deg_to_rad(20.0))
+        * DQuat::from_array(turn(30.0, 0.0, 0.0, 1.0));
+    for k in 0..4 {
+        assert!(close(arm.rotation[k], want.to_array()[k]), "{arm:?}");
+    }
+    // The place is in the scaled body.
+    let body = DMat4::from_scale_rotation_translation(
+        DVec3::new(2.0, 1.0, 0.5),
+        DQuat::from_rotation_y(gamecraft_math::deg_to_rad(20.0)),
+        DVec3::new(5.0, 0.0, -4.0),
+    );
+    let at = body.transform_point3(DVec3::new(1.0, 2.0, 3.0));
+    for k in 0..3 {
+        assert!(close(arm.position[k], at.to_array()[k]), "{arm:?}");
+    }
+}

@@ -98,7 +98,10 @@ fn placed_json(
 }
 
 const PLACED: &str = "{entity, path: [socket, ...], socket, asset, scale, position, rotation \
-     ([x, y, z, w]), world_scale: [x, y, z]}: where the attachment landed";
+     ([x, y, z, w]), world_scale: [x, y, z] | null}: where the attachment landed (world_scale is \
+     null when the entity is scaled per axis and a socket of the chain turns by another angle \
+     than a right angle: the frame is skewed then, and has no single scale along its own \
+     axes)";
 
 fn add_spec() -> CommandSpec {
     spec(
@@ -134,7 +137,8 @@ fn set_spec() -> CommandSpec {
         "attachment.set",
         "Swap Attachment",
         "Swaps the model of the attachment at `path`, and sets its `scale` when one is given. \
-         What it holds on its own sockets stays.",
+         What it holds on its own sockets stays, on the new model's sockets: refused when that \
+         model lacks one of them (the error names it), or when its sockets are not known.",
         vec![
             entity_param(),
             path_param(true),
@@ -147,7 +151,7 @@ fn set_spec() -> CommandSpec {
             param("scale", T::Number, SCALE_SET_DOC),
         ],
         PLACED,
-        json!({"entity": "Rifle", "path": ["rail_top"], "asset": "models/suppressor.glb"}),
+        json!({"entity": "Rifle", "path": ["rail_top", "top"], "asset": "models/suppressor.glb"}),
     )
 }
 
@@ -205,9 +209,10 @@ fn path_of(p: Params<'_>) -> Result<Vec<String>, CommandError> {
             kind_of(v)
         ))
     })?;
-    if items.len() >= MAX_ATTACHMENT_DEPTH {
+    if items.len() > MAX_ATTACHMENT_DEPTH {
         return Err(bad(format!(
-            "`path` names {} levels; attachments mount at most {MAX_ATTACHMENT_DEPTH} deep",
+            "`path` names {} levels; a path names an attachment, and attachments mount at \
+             most {MAX_ATTACHMENT_DEPTH} levels deep",
             items.len()
         )));
     }
@@ -307,13 +312,12 @@ fn socket_of<'a>(
     sockets.get(socket).ok_or_else(|| {
         failed(format!(
             "the model `{asset}` has no socket `{socket}`; its sockets are: {}",
-            list_sockets(Some(sockets))
+            list_sockets(sockets)
         ))
     })
 }
 
-/// A clone of `entity`'s model with `path` (empty: the list of the model's own attachments)
-/// pointing at the list to add to or remove from.
+/// A clone of `entity`'s model, to change and set back.
 fn model_of(edit: &Edit<'_>, id: EntityId) -> Result<Model, CommandError> {
     let entity = edit
         .world
@@ -344,10 +348,12 @@ fn add(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
     }
     let scale = scale_of(p)?.unwrap_or(1.0);
     let (model, chain) = chain(edit, id, &path)?;
-    if path.len() + 1 > MAX_ATTACHMENT_DEPTH {
-        return Err(bad(format!(
-            "`path` names level {}; attachments mount at most {MAX_ATTACHMENT_DEPTH} levels deep",
-            path.len() + 1
+    if path.len() >= MAX_ATTACHMENT_DEPTH {
+        return Err(failed(format!(
+            "`path` names the attachment at level {}, and attachments mount at most \
+             {MAX_ATTACHMENT_DEPTH} levels deep: nothing mounts on its sockets; swap it with \
+             attachment.set, or take it off with attachment.remove",
+            path.len()
         )));
     }
     let count: usize = model.attachments.iter().map(Attachment::size).sum();
@@ -458,6 +464,47 @@ fn set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
         .map(|a| a.socket.clone())
         .ok_or_else(|| failed("the path names no attachment"))?;
     let mut edited = model_of(edit, id)?;
+    // What it holds stays on its sockets: the new model must have them. A model whose sockets
+    // were not measured cannot be checked, so it cannot take the place.
+    let held: Vec<String> = edited
+        .attachment(&path)
+        .map(|t| {
+            t.attachments
+                .iter()
+                .map(|a| a.socket.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !held.is_empty() {
+        let sockets = edit.world.model_sockets(&asset).ok_or_else(|| {
+            failed(format!(
+                "the sockets of the model `{asset}` are not known: the host measures them when \
+                 it opens the world's pack (project.open, file.open with `pack`); so it cannot \
+                 take the place of the attachment at `{}`, which holds {} attachments",
+                shown_path(&path),
+                held.len()
+            ))
+        })?;
+        let lacks: Vec<String> = held
+            .iter()
+            .filter(|s| !sockets.contains_key(*s))
+            .map(|s| format!("`{s}`"))
+            .collect();
+        if !lacks.is_empty() {
+            return Err(failed(format!(
+                "the model `{asset}` has no socket{} {}, and the attachment at `{}` holds {} \
+                 attachment{} there: that model cannot take its place. The sockets it has: {}. \
+                 Remove what the attachment holds first (attachment.remove with cascade: \
+                 true), or swap a model that has their sockets",
+                if lacks.len() == 1 { "" } else { "s" },
+                lacks.join(", "),
+                shown_path(&path),
+                held.len(),
+                if held.len() == 1 { "" } else { "s" },
+                list_sockets(sockets)
+            )));
+        }
+    }
     let target = edited.attachment_mut(&path).ok_or_else(|| {
         failed(format!(
             "no attachment is mounted at `{}`",

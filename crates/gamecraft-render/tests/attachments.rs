@@ -580,3 +580,153 @@ fn a_model_stretched_along_one_axis_is_drawn_stretched_its_attachment_with_it() 
         "and as tall: {plain:?} {wide:?}"
     );
 }
+
+/// A green slab 4 m on each side standing on its socket's origin: large enough that the rule
+/// alone would draw it from a kilometre away.
+fn slab_big() -> Vec<u8> {
+    glb(&[Part::cube("Slab", [0.0; 3], [4.0; 3], GREEN)])
+}
+
+/// A tiny blue cube of 0.1 m with `socket_side`: the rule alone stops drawing it at some
+/// twenty metres.
+fn tiny() -> Vec<u8> {
+    glb(&[
+        Part::cube("Cube", [-0.05, 0.0, -0.05], [0.1, 0.1, 0.1], BLUE),
+        Part::socket("socket_side", [0.0, 0.05, 0.0], IDENTITY),
+    ])
+}
+
+/// The stand-in's magenta in sunlight (208, 104, 200): red and blue high, green well under.
+fn is_magenta(c: [f64; 3]) -> bool {
+    c[0] > 150.0 && c[2] > 150.0 && c[1] < 140.0 && c[0] > 1.5 * c[1] && c[2] > 1.5 * c[1]
+}
+
+/// The pixels per metre at `distance` m straight ahead of a camera of 50 degrees over 240
+/// pixels.
+fn px_per_m(distance: f64) -> f64 {
+    120.0 / (distance * (25.0f64).to_radians().tan())
+}
+
+#[test]
+fn a_missing_attachment_s_stand_in_sits_at_its_socket_not_near_the_origin() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    provide(&mut r);
+    let (mut world, hf) = flat();
+    world.set_model_sockets(sockets());
+    // A rig far from the origin whose mount's model was never given: a stand-in on its
+    // socket `top`, a metre up.
+    let mut model = Model::of("models/base.glb");
+    model.attachments = vec![Attachment::new("top", "models/absent.glb")];
+    world
+        .add_entity(EntityDraft {
+            name: "Rig".into(),
+            position: [500.0, 0.0, 500.0],
+            components: vec![Component::Model(model)],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    // The one problem line: the model of the mount, drawn as a stand-in.
+    let problems = r.sync(&world, Some(&hf));
+    assert!(
+        problems.len() == 1
+            && problems[0].contains("models/absent.glb")
+            && problems[0].contains("magenta"),
+        "{problems:?}"
+    );
+    let looking = |at: [f64; 3]| Camera {
+        position: [at[0], at[1], at[2] + 10.0],
+        target: at,
+        fov_y_deg: 50.0,
+    };
+    let near = picture(&mut r, looking([500.0, 0.6, 500.0]));
+    let far = picture(&mut r, looking([0.0, 0.6, 0.0]));
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, p) in [("near", &near), ("far", &far)] {
+        std::fs::write(
+            dir.join(format!("render-attachments-stand-in-{name}.png")),
+            encode_png(&p.rgba, p.width, p.height).unwrap(),
+        )
+        .unwrap();
+    }
+    let found = centroid(&near, is_magenta).expect("the stand-in is at the socket, by the rig");
+    assert!(
+        centroid(&far, is_magenta).is_none(),
+        "nothing stands in for it near the origin"
+    );
+    // At 10 m the socket is where the camera looks, 0.4 m above its height. The stand-in is
+    // the cube of half a metre in the socket's frame, which `top` rolls 90 degrees about z:
+    // it lies to the left of the socket and is centred on its height. Its centre is a
+    // quarter of a metre to the left of the middle, and 0.4 m above it.
+    assert!(
+        (found.0 - (160.0 - 0.25 * px_per_m(10.0))).abs() < 3.0,
+        "{found:?}"
+    );
+    assert!(
+        (found.1 - (120.0 - 0.4 * px_per_m(10.0))).abs() < 3.0,
+        "{found:?}"
+    );
+}
+
+#[test]
+fn an_attachment_is_never_drawn_beyond_where_its_root_s_model_stops_drawing() {
+    let Some((_gpu, mut r)) = renderer() else {
+        return;
+    };
+    provide(&mut r);
+    r.provide_asset("models/slab.glb", slab_big());
+    r.provide_asset("models/tiny.glb", tiny());
+    let (mut world, hf) = flat();
+    let mut sockets = sockets();
+    sockets.insert(
+        "models/tiny.glb".to_string(),
+        [(
+            "side".to_string(),
+            Socket {
+                position: [0.0, 0.05, 0.0],
+                rotation: IDENTITY,
+            },
+        )]
+        .into_iter()
+        .collect(),
+    );
+    world.set_model_sockets(sockets);
+    // Left: a post that stops at 40 m (its component says so) with a slab on its socket.
+    // Right: a cube of 0.1 m, which the rule stops at some twenty metres, with a slab on it.
+    // The slabs alone would be drawn from a kilometre away.
+    let mut post = Model {
+        draw_distance_m: Some(40.0),
+        ..Model::of("models/base.glb")
+    };
+    post.attachments = vec![Attachment::new("top", "models/slab.glb")];
+    let mut cube = Model::of("models/tiny.glb");
+    cube.attachments = vec![Attachment::new("side", "models/slab.glb")];
+    for (name, x, model) in [("Post", -5.0, post), ("Cube", 5.0, cube)] {
+        world
+            .add_entity(EntityDraft {
+                name: name.into(),
+                position: [x, 0.0, 0.0],
+                components: vec![Component::Model(model)],
+                ..EntityDraft::default()
+            })
+            .unwrap();
+    }
+    assert_eq!(r.sync(&world, Some(&hf)), Vec::<String>::new());
+    let looking_from = |z: f64| Camera {
+        position: [0.0, 3.0, z],
+        target: [0.0, 3.0, 0.0],
+        fov_y_deg: 50.0,
+    };
+    // A hundred metres away: the roots are not drawn, and neither is what sits on them.
+    let far = picture(&mut r, looking_from(100.0));
+    assert!(centroid(&far, is_red).is_none(), "the post ends at 40 m");
+    assert!(
+        centroid(&far, is_green).is_none(),
+        "the slabs end where their roots do"
+    );
+    // Fourteen metres away: both draw.
+    let near = picture(&mut r, looking_from(14.0));
+    assert!(centroid(&near, is_green).is_some(), "near, the slabs draw");
+}

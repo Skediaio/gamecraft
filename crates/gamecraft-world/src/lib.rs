@@ -57,7 +57,7 @@ mod tests;
 
 pub use attachments::{
     Attachment, MAX_ATTACHMENT_DEPTH, MAX_ATTACHMENTS, MAX_SOCKET_NAME_CHARS, SOCKET_PREFIX,
-    Socket, Sockets, is_socket_name, is_socket_node, list_sockets, place, socket_name_of, walk,
+    Socket, Sockets, is_socket_name, list_sockets, place, socket_name_of, walk,
 };
 pub use combat::{Behaviour, BehaviourMode, Health, Launcher};
 pub use component::{

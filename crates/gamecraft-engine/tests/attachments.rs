@@ -18,6 +18,7 @@ mod common;
 
 use common::{refuse, snapshot};
 use gamecraft_engine::Session;
+use gamecraft_world::attachments::{Attachment, MAX_ATTACHMENT_DEPTH};
 use gamecraft_world::{Component, Model, Socket, World};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -53,10 +54,46 @@ fn sockets() -> BTreeMap<String, BTreeMap<String, Socket>> {
                 .collect(),
         ),
         ("models/optic.glb".to_string(), BTreeMap::new()),
+        // A link with one socket, for a deep chain; a relay with the adapter's socket.
+        (
+            "models/link.glb".to_string(),
+            [("next".to_string(), socket([0.0, 0.5, 0.0], IDENTITY))]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            "models/relay.glb".to_string(),
+            [("top".to_string(), socket([0.0, 0.1, 0.3], IDENTITY))]
+                .into_iter()
+                .collect(),
+        ),
+        // A socket turned about x, by a right angle and by half a right angle.
+        (
+            "models/tilted.glb".to_string(),
+            [("side".to_string(), socket([0.0, 1.0, 0.0], ROLL_X))]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            "models/tilted45.glb".to_string(),
+            [("side".to_string(), socket([0.0, 1.0, 0.0], TILT_X))]
+                .into_iter()
+                .collect(),
+        ),
     ]
     .into_iter()
     .collect()
 }
+
+/// A turn of 90 degrees about +X.
+const ROLL_X: [f64; 4] = [
+    std::f64::consts::FRAC_1_SQRT_2,
+    0.0,
+    0.0,
+    std::f64::consts::FRAC_1_SQRT_2,
+];
+/// A turn of 45 degrees about +X.
+const TILT_X: [f64; 4] = [0.3826834323650897, 0.0, 0.0, 0.9238795325112867];
 
 /// A session with a flat terrain, a base entity turned 30 degrees with its model twice as
 /// large, and the sockets handed over.
@@ -473,4 +510,241 @@ fn a_world_without_attachments_keeps_its_text_and_prefab_children_carry_them() {
         instance["attachments"][0]["position"],
         json!([0.0, 1.0, 0.0])
     );
+}
+
+/// A chain eight levels deep, the most a mount may be: the base, a link on its `rail_top`,
+/// and a link on each link's `next`.
+fn with_deep_chain() -> Session {
+    let mut s = with_base();
+    let mut top = Attachment::new("next", "models/link.glb");
+    for _ in 0..6 {
+        top = Attachment {
+            attachments: vec![top],
+            ..Attachment::new("next", "models/link.glb")
+        };
+    }
+    let first = Attachment {
+        attachments: vec![top],
+        ..Attachment::new("rail_top", "models/link.glb")
+    };
+    let mut w = s.document().clone();
+    let id = w.entities().next().unwrap().id;
+    w.entity_mut(id)
+        .unwrap()
+        .set_component(Component::Model(Model {
+            attachments: vec![first],
+            ..Model::of("models/base.glb")
+        }));
+    s.replace_document(w);
+    s
+}
+
+/// `["rail_top", "next", ...]`, eight names: the deepest attachment.
+fn eight() -> Vec<String> {
+    let mut path = vec!["rail_top".to_string()];
+    path.extend(vec!["next".to_string(); MAX_ATTACHMENT_DEPTH - 1]);
+    path
+}
+
+fn parts(v: &Value) -> Vec<f64> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_f64().unwrap())
+        .collect()
+}
+
+#[test]
+fn the_deepest_attachment_is_reached_and_a_ninth_level_is_refused_in_true_words() {
+    let mut s = with_deep_chain();
+    let deep = eight();
+    assert_eq!(deep.len(), 8);
+    // The tree is eight deep.
+    let listed = s
+        .run("attachment.list", &json!({"entity": "Base"}))
+        .unwrap();
+    let mut at = &tree_of(&listed, "Base")["attachments"][0];
+    let mut depth = 1;
+    while !at["attachments"].as_array().unwrap().is_empty() {
+        at = &at["attachments"][0];
+        depth += 1;
+    }
+    assert_eq!(depth, 8, "{listed}");
+    // Set at depth 8.
+    let answer = s
+        .run(
+            "attachment.set",
+            &json!({"entity": "Base", "path": deep, "asset": "models/optic.glb", "scale": 3}),
+        )
+        .unwrap();
+    assert_eq!(answer["path"], json!(deep));
+    assert!(close(answer["scale"].as_f64().unwrap(), 3.0, 1e-12));
+    assert!(!answer["world_scale"].is_null(), "{answer}");
+    // A ninth level does not exist: the sentence says so, and it is true.
+    refuse(
+        &mut s,
+        "attachment.add",
+        json!({"entity": "Base", "path": deep, "socket": "next", "asset": "models/link.glb"}),
+        &["level 8", "at most 8 levels deep"],
+    );
+    let mut nine = deep.clone();
+    nine.push("next".to_string());
+    refuse(
+        &mut s,
+        "attachment.set",
+        json!({"entity": "Base", "path": nine, "asset": "models/optic.glb"}),
+        &["`path`", "9", "at most 8"],
+    );
+    refuse(
+        &mut s,
+        "attachment.remove",
+        json!({"entity": "Base", "path": nine}),
+        &["`path`", "9", "at most 8"],
+    );
+    // Removed at depth 8: the leaf.
+    let answer = s
+        .run(
+            "attachment.remove",
+            &json!({"entity": "Base", "path": deep}),
+        )
+        .unwrap();
+    assert_eq!(answer["removed"], 1);
+    refuse(
+        &mut s,
+        "attachment.set",
+        json!({"entity": "Base", "path": deep, "asset": "models/optic.glb"}),
+        &["no attachment is mounted"],
+    );
+}
+
+#[test]
+fn add_set_and_remove_redo_after_an_undo() {
+    for (command, params) in [
+        (
+            "attachment.add",
+            json!({"entity": "Base", "socket": "rail_left", "asset": "models/optic.glb"}),
+        ),
+        (
+            "attachment.set",
+            json!({"entity": "Base", "path": ["rail_top", "top"], "asset": "models/link.glb",
+                   "scale": 2}),
+        ),
+        (
+            "attachment.remove",
+            json!({"entity": "Base", "path": ["rail_top", "top"]}),
+        ),
+    ] {
+        let mut s = with_chain();
+        let before = s.document().clone();
+        let list_before = s.run("attachment.list", &json!({})).unwrap();
+        s.run(command, &params).unwrap();
+        let after = s.document().clone();
+        let list_after = s.run("attachment.list", &json!({})).unwrap();
+        assert_ne!(
+            &after, &before,
+            "{command}: the command changes the document"
+        );
+        assert_ne!(list_after, list_before, "{command}");
+        s.undo().unwrap();
+        assert_eq!(*s.document(), before, "{command}: undo");
+        assert_eq!(s.run("attachment.list", &json!({})).unwrap(), list_before);
+        s.redo().unwrap();
+        assert_eq!(*s.document(), after, "{command}: redo");
+        assert_eq!(s.run("attachment.list", &json!({})).unwrap(), list_after);
+        assert!(!s.can_redo(), "{command}: one step");
+    }
+}
+
+#[test]
+fn a_swap_keeps_the_children_where_the_new_model_has_their_sockets_or_refuses() {
+    let mut s = with_chain();
+    // Onto a model without the socket the child is mounted on: refused, naming it and the
+    // way out; the world is as before.
+    refuse(
+        &mut s,
+        "attachment.set",
+        json!({"entity": "Base", "path": ["rail_top"], "asset": "models/optic.glb"}),
+        &["`top`", "models/optic.glb", "attachment.remove"],
+    );
+    // Onto a model whose sockets were not measured: refused, saying so.
+    refuse(
+        &mut s,
+        "attachment.set",
+        json!({"entity": "Base", "path": ["rail_top"], "asset": "models/unmeasured.glb"}),
+        &["not known"],
+    );
+    // Onto a model that has the socket: the child stays, on the new model's socket.
+    s.run(
+        "attachment.set",
+        &json!({"entity": "Base", "path": ["rail_top"], "asset": "models/relay.glb"}),
+    )
+    .unwrap();
+    let tree = tree_of(
+        &s.run("attachment.list", &json!({"entity": "Base"}))
+            .unwrap(),
+        "Base",
+    );
+    let adapter = &tree["attachments"][0];
+    assert_eq!(adapter["asset"], "models/relay.glb");
+    assert_eq!(adapter["attachments"][0]["asset"], "models/optic.glb");
+    assert!(
+        !adapter["attachments"][0]["position"].is_null(),
+        "{adapter}"
+    );
+    // The optic landed on the relay's socket: 0.1 up and 0.3 forward in the relay's frame,
+    // at the relay's scale 2 and the base's 2, in the rolled frame of `rail_top` (the roll
+    // turns the relay's up to the base's left): 0.4 to the left and 1.2 forward of the base's
+    // top, 2 up, turned 30 degrees with the base.
+    let at = parts(&adapter["attachments"][0]["position"]);
+    let (s30, c30) = gamecraft_math::Portable::psin_cos(gamecraft_math::deg_to_rad(30.0));
+    let (left, forward) = (0.4, 1.2);
+    let want = [
+        10.0 - left * c30 + forward * s30,
+        2.0,
+        20.0 + left * s30 + forward * c30,
+    ];
+    for k in 0..3 {
+        assert!(close(at[k], want[k], 1e-9), "{adapter}: {want:?}");
+    }
+}
+
+#[test]
+fn the_rotation_reported_is_the_turns_under_a_scale_per_axis() {
+    let mut s = Session::new(World::new("Flat", 1));
+    for (name, asset) in [
+        ("Post", "models/tilted.glb"),
+        ("Tilt", "models/tilted45.glb"),
+    ] {
+        s.run(
+            "entity.add",
+            &json!({"name": name, "position": [10, 0, 20], "scale": [1, 1, 3],
+                    "components": [{"type": "model", "asset": asset}]}),
+        )
+        .unwrap();
+    }
+    s.set_model_sockets(sockets());
+    let mount = |s: &mut Session, entity: &str| {
+        s.run(
+            "attachment.add",
+            &json!({"entity": entity, "socket": "side", "asset": "models/optic.glb"}),
+        )
+        .unwrap()
+    };
+    let post = mount(&mut s, "Post");
+    let tilt = mount(&mut s, "Tilt");
+    for (answer, turn) in [(&post, ROLL_X), (&tilt, TILT_X)] {
+        for (found, want) in parts(&answer["rotation"]).into_iter().zip(turn) {
+            assert!(close(found, want, 1e-12), "{answer}");
+        }
+        assert_eq!(answer["position"], json!([10.0, 1.0, 20.0]), "{answer}");
+    }
+    // A right angle about x puts the entity's depth on the optic's height: a scale along its
+    // own axes. Half a right angle shears the frame: none is reported, rather than a wrong
+    // one.
+    for (found, want) in parts(&post["world_scale"]).into_iter().zip([1.0, 3.0, 1.0]) {
+        assert!(close(found, want, 1e-12), "{post}");
+    }
+    assert!(tilt["world_scale"].is_null(), "{tilt}");
+    let tree = tree_of(&s.run("attachment.list", &json!({})).unwrap(), "Tilt");
+    assert!(tree["attachments"][0]["world_scale"].is_null(), "{tree}");
 }

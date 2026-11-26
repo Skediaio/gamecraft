@@ -434,6 +434,47 @@ fn source_pose(world: &World, s: &Source<'_>, body: Body) -> Mat4 {
     on_frame(world, s.entity, &s.path, || character_pose(s.entity, body))
 }
 
+/// Where a static item draws a model of `e`: its own model at its position, turned and scaled
+/// axis by axis, or the attachment at `path` where the engine places it
+/// ([`attachments::frame`]). An attachment whose chain has a socket nobody measured has no
+/// place and is drawn on the entity's frame.
+fn static_pose(world: &World, e: &Entity, model: &Model, path: &[String]) -> Mat4 {
+    let own = || placement(e.position, e.rotation_y_deg, model_size(e, model));
+    if path.is_empty() {
+        own()
+    } else {
+        attachments::frame(world, e, model, path).unwrap_or_else(own)
+    }
+}
+
+/// Where the model of `e` stops drawing on its own: its component's `draw_distance_m`, else
+/// what the file or the rule says for the size it has in the world (as the plan of the far
+/// levels works it out). `None` when its asset is not resident.
+fn model_end(
+    resident: &BTreeMap<String, Result<ResidentModel, FailedModel>>,
+    e: &Entity,
+    model: &Model,
+) -> Option<f64> {
+    let Some(Ok(m)) = resident.get(&model.asset) else {
+        return None;
+    };
+    let component = LodOverride {
+        switch_m: model.lod_distances_m.clone(),
+        draw_m: model.draw_distance_m,
+        coverage: None,
+    };
+    Some(
+        LodDistances::resolve(
+            m.read.levels,
+            m.size_m * scale_bucket(model.scale * e.scale.largest()),
+            m.read.file.as_ref(),
+            Some(&component),
+        )
+        .0
+        .draw_m,
+    )
+}
+
 /// Where a model of `e` is drawn on the frame `own`, in which the item draws the entity's own
 /// model: that frame for the entity's own model (`path` empty), or the attachment at `path`
 /// on it, at its socket's full rotation ([`attachments::pose`]). An attachment whose chain
@@ -2261,26 +2302,24 @@ impl Scene<'_> {
                 for s in &entities {
                     let e = s.entity;
                     let Some(model) = e.model() else { continue };
-                    // A small magenta box where the model would stand: at the entity, or at
-                    // its socket when the socket is known.
-                    let stand_in = if s.path.is_empty() {
-                        let size = MISSING_MODEL_SIZE_M * model.scale;
-                        Some(placement(
-                            e.position,
-                            e.rotation_y_deg,
-                            e.scale.times([size; 3]),
-                        ))
-                    } else {
-                        attachments::pose(world, e, model, &s.path, Mat4::IDENTITY).map(|at| {
-                            at * Mat4::from_scale(Vec3::splat(MISSING_MODEL_SIZE_M as f32))
-                        })
-                    };
-                    let Some(pose) = stand_in else { continue };
+                    // A character's stand-in is drawn by its item, where that draws the
+                    // entity's own model (following it, lying with it).
                     if e.character().is_some() {
                         missing_characters.push(s.clone());
-                    } else {
-                        missing.push(pose);
+                        continue;
                     }
+                    // A small magenta box where the model would stand: at the entity, or on
+                    // its socket, where the engine places the attachment.
+                    let stand_in = if s.path.is_empty() {
+                        let size = MISSING_MODEL_SIZE_M * model.scale;
+                        placement(e.position, e.rotation_y_deg, e.scale.times([size; 3]))
+                    } else {
+                        let Some(at) = attachments::frame(world, e, model, &s.path) else {
+                            continue;
+                        };
+                        at * Mat4::from_scale(Vec3::splat(MISSING_MODEL_SIZE_M as f32))
+                    };
+                    missing.push(stand_in);
                 }
                 continue;
             };
@@ -2296,7 +2335,10 @@ impl Scene<'_> {
             for s in &entities {
                 let e = s.entity;
                 let Some(model) = e.model() else { continue };
-                // An attachment has no distances of its own: the file's, else the rule.
+                let scale = s.scale(model);
+                // An attachment has no distances of its own in the data: the file's, else
+                // the rule from its size. And it is never drawn beyond where its root
+                // entity's model stops drawing (that model's own distance, else its rule).
                 let component = if s.path.is_empty() {
                     LodOverride {
                         switch_m: model.lod_distances_m.clone(),
@@ -2304,9 +2346,24 @@ impl Scene<'_> {
                         coverage: None,
                     }
                 } else {
-                    LodOverride::default()
+                    match model_end(resident, e, model) {
+                        None => LodOverride::default(),
+                        Some(root) => {
+                            let own = LodDistances::resolve(
+                                m.read.levels,
+                                m.size_m * scale_bucket(scale),
+                                m.read.file.as_ref(),
+                                Some(&LodOverride::default()),
+                            )
+                            .0
+                            .draw_m;
+                            LodOverride {
+                                draw_m: Some(own.min(root)),
+                                ..LodOverride::default()
+                            }
+                        }
+                    }
                 };
-                let scale = s.scale(model);
                 let key = ModelKey {
                     lod_distances_m: component
                         .switch_m
@@ -2395,12 +2452,7 @@ impl Scene<'_> {
                 if !statics.is_empty() {
                     let instances: Vec<Mat4> = statics
                         .iter()
-                        .filter_map(|s| {
-                            let (e, model) = (s.entity, s.model()?);
-                            Some(on_frame(world, e, &s.path, || {
-                                placement(e.position, e.rotation_y_deg, model_size(e, model))
-                            }))
-                        })
+                        .filter_map(|s| Some(static_pose(world, s.entity, s.model()?, &s.path)))
                         .collect();
                     self.add_model_item(
                         &asset,

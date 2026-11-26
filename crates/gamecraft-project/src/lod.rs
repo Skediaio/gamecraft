@@ -1187,12 +1187,14 @@ pub fn sockets(document: &Document) -> Result<BTreeMap<String, gamecraft_world::
         .or_else(|| document.scenes().next())
         .ok_or("the file has no scene")?;
     let nodes: Vec<gltf::Node<'_>> = document.nodes().collect();
-    let mut stack: Vec<(usize, [f64; 16], usize)> =
-        scene.nodes().map(|n| (n.index(), IDENTITY, 0)).collect();
+    let mut stack: Vec<(usize, [f64; 16], DQuat, usize)> = scene
+        .nodes()
+        .map(|n| (n.index(), IDENTITY, DQuat::IDENTITY, 0))
+        .collect();
     let mut visits = 0usize;
     // Every socket with its node, then the first node of a name in the file wins.
     let mut found: Vec<(usize, String, gamecraft_world::Socket)> = Vec::new();
-    while let Some((index, parent, depth)) = stack.pop() {
+    while let Some((index, parent, parent_turn, depth)) = stack.pop() {
         visits += 1;
         if visits > MAX_NODE_VISITS || depth > MAX_NODE_DEPTH {
             return Err("the scene's node tree is too deep or loops".into());
@@ -1201,20 +1203,30 @@ pub fn sockets(document: &Document) -> Result<BTreeMap<String, gamecraft_world::
             continue;
         };
         let world = mul(&parent, &to_f64(&node.transform().matrix()));
+        // The turn is the turns of the chain, multiplied: read back from the matrix, a node
+        // scaled per axis would turn the socket by something that is no turn at all.
+        let own = DQuat::from_array(node.transform().decomposed().1.map(f64::from));
+        let own_sq = own.length_squared();
+        if !own_sq.is_finite() || own_sq <= 1e-24 {
+            return Err(format!(
+                "node {} has a rotation that is not a turn (a quaternion of length zero or                  not a number)",
+                node.name().unwrap_or(&index.to_string())
+            ));
+        }
+        let turn = parent_turn * (own * (1.0 / own_sq.sqrt()));
         let name = node.name().unwrap_or("");
         if let Some(socket) = socket_name_of(name) {
-            let (_, rotation, position) =
-                DMat4::from_cols_array(&world).to_scale_rotation_translation();
+            let position = DMat4::from_cols_array(&world).w_axis.truncate();
             found.push((
                 index,
                 socket.to_string(),
                 gamecraft_world::Socket {
                     position: position.to_array(),
-                    rotation: rotation.to_array(),
+                    rotation: turn.to_array(),
                 },
             ));
         }
-        stack.extend(node.children().map(|c| (c.index(), world, depth + 1)));
+        stack.extend(node.children().map(|c| (c.index(), world, turn, depth + 1)));
     }
     found.sort_by_key(|(index, _, _)| *index);
     let mut out: BTreeMap<String, gamecraft_world::Socket> = BTreeMap::new();
