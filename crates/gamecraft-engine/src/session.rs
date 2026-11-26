@@ -14,8 +14,10 @@ use crate::params::Params;
 use crate::spec::{CommandSpec, Scope, nearest};
 use crate::triggers::PlayLog;
 use gamecraft_sim::Sim;
+use gamecraft_sim::SpatialIndex;
 use gamecraft_world::{HeightField, Heightmap, ModelBounds, Terrain, World, WorldError};
 use serde_json::Value;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
@@ -220,6 +222,11 @@ pub struct Session {
     validated: Option<World>,
     /// How many entities the last World command checked.
     checked_entities: usize,
+    /// The spatial index of the document for the queries, built the first time one needs
+    /// it and brought up to date for the entities a change touched (the world it was made
+    /// for is kept beside it: a copy shares its entities). `None` until then. While playing
+    /// the simulation's own index is used.
+    document_index: RefCell<Option<(World, SpatialIndex)>>,
 }
 
 /// What a transaction remembers of the journal: its length, end and truncation.
@@ -260,6 +267,35 @@ impl Session {
             depth: 0,
             validated: None,
             checked_entities: 0,
+            document_index: RefCell::new(None),
+        }
+    }
+
+    /// Runs `f` with the spatial index of the current world: the simulation's while playing,
+    /// else the document's, made the first time a query needs it and brought up to date for
+    /// the entities a change touched since. The index is never written into the document.
+    pub(crate) fn with_index<R>(&self, f: impl FnOnce(&SpatialIndex) -> R) -> R {
+        if let Some(sim) = &self.live {
+            return f(sim.index());
+        }
+        let mut slot = self.document_index.borrow_mut();
+        if !slot
+            .as_ref()
+            .is_some_and(|(base, _)| *base == self.document)
+        {
+            let index = match slot.take() {
+                Some((base, mut index)) => {
+                    index.update(&base, &self.document);
+                    index
+                }
+                None => SpatialIndex::build(&self.document),
+            };
+            *slot = Some((self.document.clone(), index));
+        }
+        match slot.as_ref() {
+            Some((_, index)) => f(index),
+            // Just set above: an empty index for an empty session.
+            None => f(&SpatialIndex::new()),
         }
     }
 

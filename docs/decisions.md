@@ -8,6 +8,48 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-26: A uniform grid over the ground plane for what a ray or a character can meet
+
+On a world of 300 000 entities (boxes and prefab instances with their children over 8 km) a
+ray walked every entity: 44 ms a kilometre of ray and 43 ms a line of sight of 300 m in
+release, and a tick with eight walkers tested millions of solids (52 ms against 16.7). The
+spec asked for well under a millisecond and a tick well under its step.
+
+- **A uniform grid of 32 m cells** (`gamecraft_sim::index`, `SpatialIndex`): every entity with
+  a shape, a model's collider box or a road is a member of each cell its footprint touches
+  (the smallest box around what the simulation collides with and the renderer draws). A ray
+  walks the cells its ground projection crosses (Amanatides and Woo) and tests only their
+  members; a character takes the members of the cells around it. Chosen over a BVH (a grid is
+  rebuilt and updated in place far more simply, and the world is flat: two dimensions are
+  enough) and over trees of bounding boxes per entity (the same). 32 m because a kilometre of
+  ray then crosses some 40 cells and holds about 215 entities on that world, and a character's
+  square touches one to four.
+- **What the index cannot place is found everywhere**: a footprint over more than 256 cells (a
+  long road), a character, a footprint without a box. All are few. A ray that would cross
+  more cells than there are members to look at looks at every member instead (a small world).
+- **It changes no result.** The candidates are a superset of what a walk hits, each is tested by
+  the same code, and the two places where order decided something are settled as the walk in
+  id order settled them: a ray keeps the first of equal distances, which was the lowest id;
+  the solids around a character are sorted by id before they push (a push depends on the
+  order). A character carried by a push out of the square its solids were gathered in (placed
+  deep inside something large) is pushed again from the same start with the square grown as
+  far as it was carried, which is complete again, and after four tries over every solid, which
+  is the old computation. Tested to the bit: 800 random rays and 400 lines of sight over a
+  mixed world, with skips; every existing suite of positions, hashes and combat.
+- **Built once, updated for what changed.** The simulation builds it with its solids when the
+  world is taken over and updates it from the world's own list of changed entities
+  (`World::changed_entities_since`: the shared-subtree diff of the entity map); when that
+  list cannot be made (something was removed, a prefab changed) it is built again. The
+  session keeps one for the document the first time a query needs it and updates it the same
+  way, including through undo and redo; while playing the queries use the simulation's.
+  Derived data: it is never written, hashed or undone.
+- **Characters are a list, not cells**: they move every tick. The code that looked for them by
+  walking every entity (a projectile's hits and `heard`, a behaviour's enemy, the game master's
+  sight) walks the list.
+- **The work is counted**, not only timed: `ray::cast_counted` says how many entities were
+  looked at, `Sim::solid_tests` how many solids the steps tested; `at_scale.rs` asserts the
+  counts and prints the times.
+
 ### 2026-11-25: A scale per axis, one number in the file when the three are equal
 
 One deck prefab for every span length (roadmap item 7) needs an instance stretched along its

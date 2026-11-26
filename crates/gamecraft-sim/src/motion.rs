@@ -4,21 +4,36 @@
 use gamecraft_math::{Portable, deg_to_rad, yaw_forward};
 use gamecraft_world::limits::MAX_COORDINATE_M;
 use gamecraft_world::{Character, HeightField};
+use std::cell::Cell;
 
-use crate::solid::Solid;
+use crate::index::SpatialIndex;
+use crate::solid::{Solid, Solids};
 use crate::{Body, DT, FALL_FLOOR_M, GRAVITY_MPS2, Input, MAX_PUSH_ITERATIONS, STEP_HEIGHT_M};
 
 /// How far above the terrain, metres, a character's feet may be and still count as standing
 /// on the terrain itself (for the slope limit) rather than on a solid.
 const ON_TERRAIN_TOLERANCE_M: f64 = 1e-9;
 
-/// What a character moves through: the terrain and the solid shapes.
+/// How far beyond its radius and its step a character's solids are gathered, metres: a push
+/// moves it by no more in the common case, and if it does ([`Surroundings::push_out`]) every
+/// solid is looked at after all.
+const PUSH_REACH_MARGIN_M: f64 = 1.0;
+/// Most times a push pass starts again with a square grown as far as the character was carried
+/// before every solid is looked at.
+const MAX_REACHES: usize = 4;
+
+/// What a character moves through: the terrain, the solids of the running world, the index
+/// that says which of them are around a place, and a count of the solids tested.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Surroundings<'a> {
     /// The terrain's height field, `None` without terrain.
     pub(crate) heights: Option<&'a HeightField>,
-    /// The solid shapes, in id order.
-    pub(crate) solids: &'a [Solid],
+    /// Every solid of the running world, in id order.
+    pub(crate) solids: &'a Solids,
+    /// Which solids are around a place.
+    pub(crate) index: &'a SpatialIndex,
+    /// How many solids were tested: the work, counted (AGENTS.md rule 18).
+    pub(crate) tests: &'a Cell<u64>,
 }
 
 /// Where a character is and how it moves.
@@ -73,21 +88,6 @@ impl Surroundings<'_> {
         self.heights.and_then(|h| h.height_at(x, z))
     }
 
-    /// The ground under `x`, `z` for feet that can reach up to `reach`: the highest of the
-    /// terrain and the tops of boxes and cylinders containing the point whose top is at most
-    /// `reach`; [`FALL_FLOOR_M`] when there is none.
-    fn ground(&self, x: f64, z: f64, reach: f64) -> f64 {
-        let mut best = self.terrain(x, z);
-        for solid in self.solids {
-            if let Some(top) = solid.support_top(x, z)
-                && top <= reach
-            {
-                best = Some(best.map_or(top, |b| b.max(top)));
-            }
-        }
-        best.unwrap_or(FALL_FLOOR_M)
-    }
-
     /// Clamps a centre into the terrain square (when there is one) and the coordinate limit
     /// of the world document.
     fn clamp_horizontal(&self, x: f64, z: f64) -> (f64, f64) {
@@ -131,13 +131,78 @@ impl Surroundings<'_> {
         rise > run * deg_to_rad(max_slope_deg).ptan()
     }
 
-    /// Pushes a character's circle out of every solid it overlaps, in up to
-    /// [`MAX_PUSH_ITERATIONS`] rounds.
-    fn push_out(&self, x: f64, z: f64, feet: f64, character: &Character) -> (f64, f64) {
-        let mut p = [x, z];
+    /// The solids within `reach` of (`x`, `z`), in id order: the entities the index finds
+    /// there, in the order a walk over every solid would meet them.
+    fn around(&self, x: f64, z: f64, reach: f64) -> Vec<&Solid> {
+        self.solids.of_ids(&self.index.near([x, z], reach))
+    }
+
+    /// The ground under `x`, `z` for feet that can reach up to `reach`: the highest of the
+    /// terrain and the tops of boxes and cylinders containing the point whose top is at most
+    /// `reach`; [`FALL_FLOOR_M`] when there is none.
+    fn ground(&self, x: f64, z: f64, reach: f64) -> f64 {
+        let mut best = self.terrain(x, z);
+        for solid in self.around(x, z, 0.0) {
+            if let Some(top) = solid.support_top(x, z)
+                && top <= reach
+            {
+                best = Some(best.map_or(top, |b| b.max(top)));
+            }
+        }
+        best.unwrap_or(FALL_FLOOR_M)
+    }
+
+    /// Pushes a character's circle at `start` out of the solids around it, exactly as a walk
+    /// over every solid would (up to [`MAX_PUSH_ITERATIONS`] rounds, in id order).
+    ///
+    /// The solids are gathered in a square around `start`. A solid that meets the circle
+    /// comes within the radius of its centre, so the pass is complete whenever the centre
+    /// stays inside the square's inner edge. A character placed deep inside something large
+    /// is carried beyond it; then the pass starts again from `start` with the square grown as
+    /// far as it was carried (at most [`MAX_REACHES`] times, then over every solid).
+    fn push_out(&self, start: [f64; 2], feet: f64, character: &Character) -> [f64; 2] {
+        let radius = character.radius_m;
+        let mut reach = radius + character.run_speed_mps * DT + PUSH_REACH_MARGIN_M;
+        for _ in 0..MAX_REACHES {
+            let around = self.around(start[0], start[1], reach);
+            let Some(p) = self.pushed(start, &around, feet, character) else {
+                break;
+            };
+            let carried = (p[0] - start[0]).abs().max((p[1] - start[1]).abs());
+            if carried <= reach - radius {
+                return p;
+            }
+            reach = carried + radius + PUSH_REACH_MARGIN_M;
+        }
+        self.push_out_everywhere(start, feet, character)
+    }
+
+    /// [`Surroundings::push_out`] over every solid: the exact result, whatever it costs.
+    fn push_out_everywhere(&self, start: [f64; 2], feet: f64, character: &Character) -> [f64; 2] {
+        self.pushed(
+            start,
+            &self.solids.all().iter().collect::<Vec<_>>(),
+            feet,
+            character,
+        )
+        .unwrap_or(start)
+    }
+
+    /// Up to [`MAX_PUSH_ITERATIONS`] rounds of pushing the circle at `start` out of `around`,
+    /// in their order; `None` for a position that is not finite (there is none: a solid that
+    /// would push to one pushes not at all).
+    fn pushed(
+        &self,
+        start: [f64; 2],
+        around: &[&Solid],
+        feet: f64,
+        character: &Character,
+    ) -> Option<[f64; 2]> {
+        let mut p = start;
         for _ in 0..MAX_PUSH_ITERATIONS {
             let mut moved = false;
-            for solid in self.solids {
+            for solid in around {
+                self.tests.set(self.tests.get().saturating_add(1));
                 if let Some(q) = solid.push(p, character.radius_m, feet, character.height_m) {
                     p = q;
                     moved = true;
@@ -147,8 +212,7 @@ impl Surroundings<'_> {
                 break;
             }
         }
-        let [x, z] = p;
-        (x, z)
+        p.iter().all(|v| v.is_finite()).then_some(p)
     }
 
     /// Advances one character one tick.
@@ -179,7 +243,7 @@ impl Surroundings<'_> {
         if grounded && self.slope_blocks((x0, z0), (x, z), y, character.max_slope_deg) {
             (x, z) = (x0, z0);
         }
-        (x, z) = self.push_out(x, z, y, character);
+        let [mut x, mut z] = self.push_out([x, z], y, character);
         (x, z) = self.clamp_horizontal(x, z);
 
         // Ground: follow it, land on it, or leave it.

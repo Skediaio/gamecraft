@@ -439,8 +439,10 @@ fn sight(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
         {
             continue;
         }
-        let clear = ray::line_of_sight(world, sim.heights(), eye, to, |e| e == id || e == o.id)
-            .is_some_and(|s| s.blocked_by.is_none());
+        let clear = ray::line_of_sight_in(world, sim.heights(), Some(sim.index()), eye, to, |e| {
+            e == id || e == o.id
+        })
+        .is_some_and(|s| s.blocked_by.is_none());
         if clear {
             things.push((d, o, kind));
         }

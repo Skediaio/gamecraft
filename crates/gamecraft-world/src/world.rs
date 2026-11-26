@@ -830,6 +830,15 @@ impl World {
         self.check(Some(before))
     }
 
+    /// The entities of this world that are not the very ones of `before`: new or changed, in
+    /// id order, when they can be listed; `None` when every entity must be looked at (one of
+    /// `before` is gone, the prefabs differ, an entity got another parent). For what is
+    /// derived from the entities and kept up to date in place, as a simulation's spatial
+    /// index is.
+    pub fn changed_entities_since(&self, before: &World) -> Option<Vec<EntityId>> {
+        self.changed_entities(before)
+    }
+
     /// The keys of the entities that differ from `before`'s, when they are all that needs
     /// checking (see [`World::validate_change`]); `None` when every entity must be.
     fn changed_entities(&self, before: &World) -> Option<Vec<EntityId>> {

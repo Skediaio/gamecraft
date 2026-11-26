@@ -29,7 +29,7 @@ Dependencies point downwards only (`cargo xtask layers`).
 |---|---|---|---|
 | L0 | `gamecraft-math` | `Portable` maths, `Rng`, noise, `StateHasher`, angle helpers; re-exports glam | glam (with `libm`), libm |
 | L1 | `gamecraft-world` | `World`, `Terrain`, `HeightField`, `Environment`, `Entity`, `Component`; JSON format; validation | serde, serde_json |
-| L2 | `gamecraft-sim` | `Sim`: fixed step, `Input`, character movement, collisions, state hash | serde |
+| L2 | `gamecraft-sim` | `Sim`: fixed step, `Input`, character movement, collisions, the spatial index of what a ray or a character can meet, rays, state hash | serde |
 | L3 | `gamecraft-engine` | `Session`, `CommandSpec`, the commands, undo, edit and play, queries | serde, serde_json, visioncraft-flora (species list) |
 | L4 | `gamecraft-render` | the adapter: world in, VisionCraft renderer calls and pictures out | visioncraft-render, visioncraft-flora, wgpu, glam, png |
 | L4 | `gamecraft-automation` | `Host` (session, files, pictures), JSON lines, MCP | serde, serde_json |
@@ -80,8 +80,9 @@ world on the undo stack. A failed command leaves the world as it was.
 **Play.** `sim.start` builds a `Sim` from a copy of the document: derived data first (the height
 field), then one body per character. `sim.input` stores an input record for an entity; it stays
 until replaced. `sim.step` advances whole ticks of 1/60 s: for each character in id order, the
-input gives a wanted velocity, gravity and the ground give the vertical motion, solid shapes
-push the body out. The answer carries the tick and the state hash. `sim.stop` drops the
+input gives a wanted velocity, gravity and the ground give the vertical motion, the solid shapes
+around it (found through the spatial index) push the body out. The answer carries the tick and
+the state hash. `sim.stop` drops the
 simulation, or with `keep` makes the running world the document, as one undo step.
 
 **Direct.** A world command that arrives while a simulation runs (`entity.add`,
@@ -110,7 +111,10 @@ The simulation's promise (rule 3) rests on five habits:
   `gamecraft_math::Portable`, and glam is built with its `libm` feature. The simulation uses
   glam's `f64` types, whose code is scalar on every target; glam's `f32` types use SIMD on some
   targets and stay out of the simulation.
-- **Ordered iteration.** Entities are stepped in id order; maps are `BTreeMap`.
+- **Ordered iteration.** Entities are stepped in id order; maps are `BTreeMap`. The spatial
+  index (`gamecraft_sim::index`) gathers candidates out of id order, so where order could
+  change a result it is restored: the solids around a character are sorted by id before they
+  push, and a ray settles equal distances by the lowest id, as the walk in id order did.
 - **Seeded randomness.** `gamecraft_math::Rng`, forked per use from the world seed.
 - **A hash of everything that moves or decides what moves next.** `Sim::state_hash` covers the
   tick, the static content of the running world, and for every character its position,
@@ -154,4 +158,8 @@ to a repository of their own that both projects depend on (`decisions.md`).
 - Positions reach the renderer as `f32` relative to the world origin. Beyond a few kilometres
   they need to be relative to the camera (M3).
 - A running world that a command changed is taken over whole by the simulation. With many
-  entities that needs to become a change set (M2).
+  entities that needs to become a change set (M2); the solids and the spatial index are
+  already updated for the entities the change touched (`World::changed_entities_since`).
+- A tick still walks every entity to find the characters, the zones and the interactables
+  (`Sim::step`, `events`), and a shot's `heard` and a behaviour's `enemy` walk the list of
+  characters: few, but a list that is kept by a walk per tick.

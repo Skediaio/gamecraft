@@ -2,7 +2,7 @@
 //! out of them.
 
 use gamecraft_math::{Portable, deg_to_rad};
-use gamecraft_world::{Entity, ModelBox, ShapeKind, World};
+use gamecraft_world::{Entity, EntityId, ModelBox, ShapeKind, World};
 
 use crate::STEP_HEIGHT_M;
 
@@ -38,15 +38,49 @@ pub(crate) struct Solid {
     footprint: Footprint,
 }
 
-/// Every solid shape and solid model of `world` in id order (an entity's shape before its
-/// model). Shapes and models on character entities are left out: characters do not collide
-/// with each other in M0.
-pub(crate) fn solids_of(world: &World) -> Vec<Solid> {
-    world
-        .entities()
-        .flat_map(|e| [Solid::from_entity(e), Solid::from_model(world, e)])
-        .flatten()
-        .collect()
+/// Every solid shape and solid model of a world, in id order (an entity's shape before its
+/// model), each knowing the entity it is on. Shapes and models on character entities are left
+/// out: characters do not collide with each other in M0.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Solids {
+    /// The solids, in id order, an entity's shape before its model.
+    solids: Vec<Solid>,
+    /// The entity of each solid, in the same order: sorted.
+    owners: Vec<EntityId>,
+}
+
+impl Solids {
+    /// The solids of `world`.
+    pub(crate) fn of(world: &World) -> Solids {
+        let mut solids = Solids::default();
+        for e in world.entities() {
+            for solid in [Solid::from_entity(e), Solid::from_model(world, e)]
+                .into_iter()
+                .flatten()
+            {
+                solids.solids.push(solid);
+                solids.owners.push(e.id);
+            }
+        }
+        solids
+    }
+
+    /// Every solid, in their order.
+    pub(crate) fn all(&self) -> &[Solid] {
+        &self.solids
+    }
+
+    /// The solids of the entities `ids` (sorted, each once), in the order they have in
+    /// [`Solids::all`]: what a walk over every solid would meet among them, in that order.
+    pub(crate) fn of_ids<'a>(&'a self, ids: &[EntityId]) -> Vec<&'a Solid> {
+        let mut out = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let from = self.owners.partition_point(|&o| o < id);
+            let to = self.owners.partition_point(|&o| o <= id);
+            out.extend(self.solids.get(from..to).into_iter().flatten());
+        }
+        out
+    }
 }
 
 impl Solid {

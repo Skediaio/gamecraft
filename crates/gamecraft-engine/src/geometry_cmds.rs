@@ -144,16 +144,20 @@ fn ground(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
     Ok(json!({ "points": points }))
 }
 
-/// The nearest hit within `max_m` of a ray with a unit `dir` in the current world.
+/// The nearest hit within `max_m` of a ray with a unit `dir` in the current world, through
+/// its spatial index: only the entities the ray's ground projection crosses are looked at.
 fn cast(session: &Session, origin: [f64; 3], dir: [f64; 3], max_m: f64) -> Option<Found> {
-    ray::cast(
-        session.current_world(),
-        session.current_heights(),
-        origin,
-        dir,
-        max_m,
-        |_| false,
-    )
+    session.with_index(|index| {
+        ray::cast_in(
+            session.current_world(),
+            session.current_heights(),
+            Some(index),
+            origin,
+            dir,
+            max_m,
+            |_| false,
+        )
+    })
 }
 
 /// `{kind, entity?, name?, point, normal, distance_m}` of a hit.
@@ -277,18 +281,22 @@ fn line_of_sight_spec() -> CommandSpec {
 fn line_of_sight(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
     let from = p.point3("from")?.ok_or_else(|| bad("missing `from`"))?;
     let to = p.point3("to")?.ok_or_else(|| bad("missing `to`"))?;
-    let sight = ray::line_of_sight(
-        session.current_world(),
-        session.current_heights(),
-        from,
-        to,
-        |_| false,
-    )
-    .ok_or_else(|| {
-        bad(format!(
-            "`from` {from:?} and `to` {to:?} are too far apart to measure"
-        ))
-    })?;
+    let sight = session
+        .with_index(|index| {
+            ray::line_of_sight_in(
+                session.current_world(),
+                session.current_heights(),
+                Some(index),
+                from,
+                to,
+                |_| false,
+            )
+        })
+        .ok_or_else(|| {
+            bad(format!(
+                "`from` {from:?} and `to` {to:?} are too far apart to measure"
+            ))
+        })?;
     let Some(found) = sight.blocked_by else {
         return Ok(json!({"clear": true, "distance_m": sight.distance_m}));
     };

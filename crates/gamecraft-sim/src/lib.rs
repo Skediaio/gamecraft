@@ -97,12 +97,14 @@
 //! size or speed; spheres block but are not ground to stand on; plants are no obstacles;
 //! there are no rigid bodies, inertia or friction.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
 use gamecraft_math::{StateHasher, wrap_deg};
 use gamecraft_world::{Entity, EntityId, HeightField, World};
+pub use index::SpatialIndex;
 use serde::{Deserialize, Serialize};
 
 pub mod aim;
@@ -110,6 +112,7 @@ pub mod ballistics;
 pub mod behaviour;
 pub mod combat;
 mod events;
+pub mod index;
 mod motion;
 pub mod perception;
 pub mod ray;
@@ -120,7 +123,6 @@ pub use combat::{Magazine, Projectile};
 pub use events::{Event, EventKind};
 
 use motion::{State, Surroundings, clamp_to_disc};
-use solid::Solid;
 
 /// Simulation ticks per second.
 pub const TICK_HZ: u32 = 60;
@@ -260,8 +262,14 @@ pub struct Sim {
     tick: u64,
     bodies: BTreeMap<EntityId, Body>,
     inputs: BTreeMap<EntityId, Input>,
-    /// The solid shapes of `world`, derived by [`Sim::replace_world`].
-    solids: Vec<Solid>,
+    /// The solid shapes of `world`, derived by [`Sim::replace_world`], and the index of
+    /// what a ray or a character can meet ([`Sim::index`]).
+    solids: solid::Solids,
+    index: SpatialIndex,
+    /// The characters of the running world, in id order: they move every tick.
+    characters: Vec<EntityId>,
+    /// How many solids the steps have tested so far: the work ([`Sim::solid_tests`]).
+    solid_tests: u64,
     /// The hash of `world` without its characters' positions and rotations.
     static_hash: u64,
     /// The zones, interactables and trigger times of `world`, derived by
@@ -306,7 +314,10 @@ impl Sim {
             tick: 0,
             bodies: BTreeMap::new(),
             inputs: BTreeMap::new(),
-            solids: Vec::new(),
+            solids: solid::Solids::default(),
+            index: SpatialIndex::new(),
+            characters: Vec::new(),
+            solid_tests: 0,
             static_hash: 0,
             watch: events::Watch::default(),
             inside: BTreeSet::new(),
@@ -520,9 +531,33 @@ impl Sim {
     /// a character of the running world.
     pub fn sees(&self, a: EntityId, b: EntityId) -> bool {
         match (self.world.entity(a), self.world.entity(b)) {
-            (Some(a), Some(b)) => perception::sees(&self.world, self.heights.as_deref(), a, b),
+            (Some(a), Some(b)) => {
+                perception::sees(&self.world, self.heights.as_deref(), &self.index, a, b)
+            }
             _ => false,
         }
+    }
+
+    /// The running world as its shots meet it.
+    fn field(&self) -> combat::Field<'_> {
+        combat::Field {
+            world: &self.world,
+            heights: self.heights.as_deref(),
+            index: &self.index,
+            characters: &self.characters,
+        }
+    }
+
+    /// The index of what a ray or a character can meet in the running world
+    /// ([`index`]): what [`ray::cast_in`] and the simulation's own rays and collisions use.
+    pub fn index(&self) -> &SpatialIndex {
+        &self.index
+    }
+
+    /// How many solids the steps have tested so far: a count of the work of character
+    /// collision (AGENTS.md rule 18).
+    pub fn solid_tests(&self) -> u64 {
+        self.solid_tests
     }
 
     /// Fires the launcher of `id` now, between two ticks: along `yaw_deg` (default: the
@@ -583,7 +618,7 @@ impl Sim {
         }
         let projectile_id = self.next_projectile;
         let fired = combat::try_fire(
-            &self.world,
+            &self.field(),
             entity,
             launcher,
             &mut magazine,
@@ -651,6 +686,8 @@ impl Sim {
             let mind = behaviour::Mind {
                 world: &self.world,
                 heights: self.heights.as_deref(),
+                index: &self.index,
+                characters: &self.characters,
                 me,
                 behaviour,
                 muzzle_velocity_mps: me.launcher().map(|l| l.muzzle_velocity_mps),
@@ -695,7 +732,7 @@ impl Sim {
             if wants
                 && let Some(i) = input
                 && let Some((projectile, heard)) = combat::try_fire(
-                    &self.world,
+                    &self.field(),
                     entity,
                     launcher,
                     &mut magazine,
@@ -718,15 +755,21 @@ impl Sim {
         let mut events = Vec::new();
         let heights = self.heights.clone();
         let mut flying = std::mem::take(&mut self.projectiles);
-        flying.retain_mut(
-            |p| match combat::fly(&mut self.world, heights.as_deref(), p) {
+        flying.retain_mut(|p| {
+            match combat::fly(
+                &mut self.world,
+                heights.as_deref(),
+                &self.index,
+                &self.characters,
+                p,
+            ) {
                 Some(hit) => {
                     events.extend(hit);
                     false
                 }
                 None => true,
-            },
-        );
+            }
+        });
         self.projectiles = flying;
         events
     }
@@ -753,9 +796,13 @@ impl Sim {
         for _ in 0..ticks.min(MAX_STEP_TICKS) {
             self.think();
             self.turn_all();
+            // The characters move; the index of what can be met is theirs to keep current.
+            let tests = Cell::new(0u64);
             let around = Surroundings {
                 heights: self.heights.as_deref(),
                 solids: &self.solids,
+                index: &self.index,
+                tests: &tests,
             };
             for &id in &ids {
                 let Some(entity) = self.world.entity(id) else {
@@ -782,6 +829,7 @@ impl Sim {
                 }
                 self.bodies.insert(id, next.body);
             }
+            self.solid_tests = self.solid_tests.saturating_add(tests.get());
             let mut combat = self.shoot();
             combat.extend(self.fly());
             self.tick = self.tick.saturating_add(1);
@@ -917,12 +965,21 @@ impl Sim {
         self.sounds.retain(|(id, _)| brains.contains_key(id));
         self.magazines = magazines;
         self.brains = brains;
-        self.solids = solid::solids_of(&world);
         self.watch = events::Watch::of(&world);
         let zone_ids: BTreeSet<EntityId> = self.watch.zones.iter().copied().collect();
         self.inside
             .retain(|(who, zone)| bodies.contains_key(who) && zone_ids.contains(zone));
         self.held.retain(|who| bodies.contains_key(who));
+        // Nothing fails from here on: what is derived comes from the old and the new world.
+        // The index changes only for the entities the change touched.
+        let mut index = std::mem::take(&mut self.index);
+        index.update(&self.world, &world);
+        let solids = solid::Solids::of(&world);
+        let characters: Vec<EntityId> = world
+            .entities()
+            .filter(|e| e.character().is_some())
+            .map(|e| e.id)
+            .collect();
         self.world = world;
         if let Some(heights) = rebuilt {
             self.heights = heights;
@@ -930,6 +987,9 @@ impl Sim {
         self.bodies = bodies;
         self.inputs = inputs;
         self.static_hash = static_hash;
+        self.index = index;
+        self.solids = solids;
+        self.characters = characters;
         Ok(())
     }
 

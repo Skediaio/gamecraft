@@ -28,6 +28,7 @@ use gamecraft_world::{Entity, EntityId, Environment, HeightField, Launcher, Worl
 use serde::Serialize;
 
 use crate::ballistics::{Flight, SUBSTEP_S, advance, air_at};
+use crate::index::SpatialIndex;
 use crate::ray::{self, RayHit};
 use crate::{EventKind, FALL_FLOOR_M, PROJECTILE_SUBSTEPS};
 
@@ -186,10 +187,19 @@ pub(crate) fn launch(world: &World, launcher: &Launcher, shot: &Shot) -> Project
     }
 }
 
+/// The running world as a shot meets it: its entities, who is a character (few, and they move
+/// every tick), its ground and what a ray can meet.
+pub(crate) struct Field<'a> {
+    pub(crate) world: &'a World,
+    pub(crate) heights: Option<&'a HeightField>,
+    pub(crate) index: &'a SpatialIndex,
+    pub(crate) characters: &'a [EntityId],
+}
+
 /// Fires `launcher` of `shooter` if it is ready: the projectile and the `heard` events of its
 /// sound; the magazine counts the shot. `None` when it is not ready.
 pub(crate) fn try_fire(
-    world: &World,
+    field: &Field,
     shooter: &Entity,
     launcher: &Launcher,
     magazine: &mut Magazine,
@@ -200,6 +210,7 @@ pub(crate) fn try_fire(
     if !magazine.ready() {
         return None;
     }
+    let world = field.world;
     let from = muzzle(shooter, launcher);
     let shot = Shot {
         shooter: shooter.id,
@@ -213,15 +224,30 @@ pub(crate) fn try_fire(
     magazine.shoot(launcher);
     Some((
         projectile,
-        heard(world, shooter.id, from, launcher.sound_range_m),
+        heard(
+            world,
+            field.characters,
+            shooter.id,
+            from,
+            launcher.sound_range_m,
+        ),
     ))
 }
 
 /// The `heard` events of a shot from `point` by `shooter`: every character but the shooter,
 /// not down, whose eyes are within `range_m`, in id order.
-fn heard(world: &World, shooter: EntityId, point: [f64; 3], range_m: f64) -> Vec<EventKind> {
+fn heard(
+    world: &World,
+    characters: &[EntityId],
+    shooter: EntityId,
+    point: [f64; 3],
+    range_m: f64,
+) -> Vec<EventKind> {
     let mut out = Vec::new();
-    for e in world.entities() {
+    for &id in characters {
+        let Some(e) = world.entity(id) else {
+            continue;
+        };
         let Some(c) = e.character() else {
             continue;
         };
@@ -251,25 +277,37 @@ struct Impact {
 /// The nearest hit along the segment from `from` with unit `dir` and length `len`: terrain,
 /// shapes and character capsules, leaving out `skip`.
 fn impact(
-    world: &World,
-    heights: Option<&HeightField>,
+    field: &Field,
     from: [f64; 3],
     dir: [f64; 3],
     len: f64,
     skip: Option<EntityId>,
 ) -> Option<Impact> {
-    let mut best =
-        ray::cast(world, heights, from, dir, len, |id| Some(id) == skip).map(|f| Impact {
-            hit: f.hit,
-            target: f.entity,
-        });
-    for e in world.entities() {
+    let (world, characters) = (field.world, field.characters);
+    let mut best = ray::cast_in(
+        world,
+        field.heights,
+        Some(field.index),
+        from,
+        dir,
+        len,
+        |id| Some(id) == skip,
+    )
+    .map(|f| Impact {
+        hit: f.hit,
+        target: f.entity,
+    });
+    // The characters' capsules: few, and they move every tick.
+    for &id in characters {
+        if Some(id) == skip {
+            continue;
+        }
+        let Some(e) = world.entity(id) else {
+            continue;
+        };
         let Some(c) = e.character() else {
             continue;
         };
-        if Some(e.id) == skip {
-            continue;
-        }
         let [x, y, z] = e.position;
         let r = c.radius_m;
         let a = [x, y + r, z];
@@ -336,6 +374,8 @@ pub fn substep(
 pub(crate) fn fly(
     world: &mut World,
     heights: Option<&HeightField>,
+    index: &SpatialIndex,
+    characters: &[EntityId],
     p: &mut Projectile,
 ) -> Option<Vec<EventKind>> {
     for _ in 0..PROJECTILE_SUBSTEPS {
@@ -361,7 +401,18 @@ pub(crate) fn fly(
         let len = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
         let skip = (p.age_s < SELF_HIT_GRACE_S).then_some(p.shooter);
         if let Some(dir) = ray::normalize(delta)
-            && let Some(found) = impact(world, heights, p.position, dir, len, skip)
+            && let Some(found) = impact(
+                &Field {
+                    world,
+                    heights,
+                    index,
+                    characters,
+                },
+                p.position,
+                dir,
+                len,
+                skip,
+            )
         {
             let k = if len > 0.0 {
                 (found.hit.distance_m / len).clamp(0.0, 1.0)

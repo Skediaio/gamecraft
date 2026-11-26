@@ -26,6 +26,7 @@ use gamecraft_world::{Behaviour, BehaviourMode, Entity, EntityId, HeightField, W
 use serde::Serialize;
 
 use crate::combat::cone_offset;
+use crate::index::SpatialIndex;
 use crate::perception::{CHEST_SHARE, sees};
 use crate::{DT, GRAVITY_MPS2, Input};
 
@@ -181,6 +182,10 @@ pub fn aim_pitch_deg(from: [f64; 3], to: [f64; 3], speed_mps: f64) -> f64 {
 pub(crate) struct Mind<'a> {
     pub(crate) world: &'a World,
     pub(crate) heights: Option<&'a HeightField>,
+    /// What a ray can meet, and where from: the index of the running world.
+    pub(crate) index: &'a SpatialIndex,
+    /// The characters of the running world, in id order.
+    pub(crate) characters: &'a [EntityId],
     /// The deciding character.
     pub(crate) me: &'a Entity,
     pub(crate) behaviour: &'a Behaviour,
@@ -197,14 +202,18 @@ impl Mind<'_> {
     fn enemy(&self) -> Option<&Entity> {
         let mine = team_of(self.me)?;
         let mut best: Option<(f64, &Entity)> = None;
-        for other in self.world.entities() {
-            if other.id == self.me.id || other.character().is_none() || other.is_down() {
+        // The characters, few and known: not every entity of the world.
+        for &other in self.characters {
+            let Some(other) = self.world.entity(other) else {
+                continue;
+            };
+            if other.id == self.me.id || other.is_down() {
                 continue;
             }
             if team_of(other).is_none_or(|t| t == mine) {
                 continue;
             }
-            if !sees(self.world, self.heights, self.me, other) {
+            if !sees(self.world, self.heights, self.index, self.me, other) {
                 continue;
             }
             let d = horizontal(self.me.position, other.position);

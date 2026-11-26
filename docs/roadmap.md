@@ -248,9 +248,16 @@ from the engine, as mechanisms with no game in them, in the order they are sched
    three are equal, so no file or hash moved. A span stretches the length only (`decisions.md`).
    Open: a child turned by another angle keeps the scale along its own axes (until full
    orientation, M3).
-8. **Raycasts and simulation at scale:** a spatial index for rays, lines of sight and solids, so a
-   world of about 300 000 entities (prefab children included) raycasts in well under a
-   millisecond and simulates faster than real time.
+8. ~~**Raycasts and simulation at scale:**~~ done 2026-11-26: a uniform grid over the ground
+   plane of what a ray or a character can meet (`gamecraft_sim::index`), built once and updated
+   for the entities a change touches, used by rays, lines of sight, projectiles, behaviours,
+   the game master's sight and character collision, in the simulation and in the queries
+   before any simulation. On 300 000 entities over 8 km (release): a kilometre of ray 0.6 ms
+   (44 ms before, 215 entities looked at instead of 260 000), a line of sight of 300 m 0.5 ms
+   (43 ms), a tick with eight walkers 7 ms (52 ms, 66 solids tested instead of millions);
+   the same hits to the bit (`decisions.md`). Open: the per-tick walks that find characters,
+   zones and interactables; `sim.start` on that world takes 1.4 s (validation, the state
+   hash and the solids, all once).
 9. **Filtered shadows** (PCF, soft edges) instead of stair-stepped shadow edges at eye level.
 10. **Water as a surface kind in the simulation:** a character in water wades (slower, not
     standing on the ground); part of the water item above.

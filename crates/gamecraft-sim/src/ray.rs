@@ -9,6 +9,7 @@
 //! **A ray that starts inside a shape** (or on its surface) hits it at distance 0, with the
 //! normal pointing back along the ray (`-direction`): the ray is blocked where it starts.
 
+use crate::index::SpatialIndex;
 use gamecraft_math::{Portable, deg_to_rad};
 use gamecraft_world::{
     Entity, EntityId, HeightField, Road, Shape, ShapeKind, World, raycast_roads,
@@ -318,21 +319,23 @@ pub struct Found {
     pub entity: Option<EntityId>,
 }
 
-/// The nearest hit within `max_m` of a ray with a unit `dir`: the terrain (the triangles of
-/// `heights`), the surface of every `road` on it (the ground lifted by the road's offset over
-/// its footprint, exactly as drawn), and the `shape` and the model's collider box
-/// ([`World::model_box`]) of every entity, solid or not, except those `skip` names; on a tie
-/// the terrain, then the lowest id (an entity's shape before its model). A hit whose point is
-/// not finite is no hit.
-pub fn cast(
-    world: &World,
+/// The nearest hit within `max_m` of a ray with a unit `dir`, among the terrain (the
+/// triangles of `heights`) and `entities`: the surface of every `road` on it (the ground
+/// lifted by the road's offset over its footprint, exactly as drawn), and the `shape` and the
+/// model's collider box ([`World::model_box`]) of every entity, solid or not, except those
+/// `skip` names; on a tie the terrain, then the lowest id (an entity's shape before its
+/// model). A hit whose point is not finite is no hit. With how many entities were looked
+/// at: the work, counted.
+fn cast_among<'w>(
+    world: &'w World,
     heights: Option<&HeightField>,
+    entities: impl Iterator<Item = &'w Entity>,
     origin: [f64; 3],
     dir: [f64; 3],
     max_m: f64,
-    skip: impl Fn(EntityId) -> bool,
-) -> Option<Found> {
-    let mut best: Option<Found> = None;
+    skip: &impl Fn(EntityId) -> bool,
+) -> (Option<Found>, usize) {
+    let (mut best, mut tested): (Option<Found>, usize) = (None, 0);
     if let Some(field) = heights
         && let Some(t) = field.raycast(origin, dir, max_m)
     {
@@ -348,10 +351,11 @@ pub fn cast(
     }
     // Roads are gathered in the one pass over the entities and cast against together after.
     let mut roads: Vec<(&Entity, &Road)> = Vec::new();
-    for e in world.entities() {
+    for e in entities {
         if skip(e.id) {
             continue;
         }
+        tested += 1;
         if let Some(road) = e.road() {
             roads.push((e, road));
         }
@@ -366,7 +370,13 @@ pub fn cast(
             if hit.distance_m > max_m {
                 continue;
             }
-            if best.is_none_or(|b| hit.distance_m < b.hit.distance_m) {
+            // A walk in id order kept the first of equal distances: the lowest id. The
+            // terrain's is kept over any entity's.
+            let nearer = best.as_ref().is_none_or(|b| {
+                hit.distance_m < b.hit.distance_m
+                    || (hit.distance_m == b.hit.distance_m && b.entity.is_some_and(|id| e.id < id))
+            });
+            if nearer {
                 best = Some(Found {
                     hit,
                     entity: Some(e.id),
@@ -391,11 +401,79 @@ pub fn cast(
             entity: Some(id),
         });
     }
-    best.filter(|f| {
-        along(origin, dir, f.hit.distance_m)
-            .iter()
-            .all(|c| c.is_finite())
-    })
+    (
+        best.filter(|f| {
+            along(origin, dir, f.hit.distance_m)
+                .iter()
+                .all(|c| c.is_finite())
+        }),
+        tested,
+    )
+}
+
+/// [`cast_among`] over every entity of the world, and how many were looked at.
+fn cast_all(
+    world: &World,
+    heights: Option<&HeightField>,
+    origin: [f64; 3],
+    dir: [f64; 3],
+    max_m: f64,
+    skip: &impl Fn(EntityId) -> bool,
+) -> (Option<Found>, usize) {
+    cast_among(world, heights, world.entities(), origin, dir, max_m, skip)
+}
+
+/// The nearest hit within `max_m` of a ray with a unit `dir, over every entity of the world
+/// (the terrain, every road surface, every shape and collider box): the reference, at a cost
+/// that grows with the world. [`cast_in`] with an index finds the same.
+pub fn cast(
+    world: &World,
+    heights: Option<&HeightField>,
+    origin: [f64; 3],
+    dir: [f64; 3],
+    max_m: f64,
+    skip: impl Fn(EntityId) -> bool,
+) -> Option<Found> {
+    cast_all(world, heights, origin, dir, max_m, &skip).0
+}
+
+/// [`cast`] through a [`SpatialIndex`]: only the entities whose footprint the ray's ground
+/// projection crosses are looked at (and those the index finds everywhere). Without an index,
+/// or when the ray would cross more cells than there are entities to look at, every entity is.
+pub fn cast_in(
+    world: &World,
+    heights: Option<&HeightField>,
+    index: Option<&SpatialIndex>,
+    origin: [f64; 3],
+    dir: [f64; 3],
+    max_m: f64,
+    skip: impl Fn(EntityId) -> bool,
+) -> Option<Found> {
+    cast_counted(world, heights, index, origin, dir, max_m, skip).0
+}
+
+/// [`cast_in`], and how many entities were looked at: the work, counted.
+pub fn cast_counted(
+    world: &World,
+    heights: Option<&HeightField>,
+    index: Option<&SpatialIndex>,
+    origin: [f64; 3],
+    dir: [f64; 3],
+    max_m: f64,
+    skip: impl Fn(EntityId) -> bool,
+) -> (Option<Found>, usize) {
+    match index.and_then(|i| i.ray_candidates(origin, dir, max_m)) {
+        Some(ids) => cast_among(
+            world,
+            heights,
+            ids.iter().filter_map(|&id| world.entity(id)),
+            origin,
+            dir,
+            max_m,
+            &skip,
+        ),
+        None => cast_all(world, heights, origin, dir, max_m, &skip),
+    }
 }
 
 /// A hit this close to the far end of a line of sight does not block it (the ground or the
@@ -423,42 +501,76 @@ pub fn line_of_sight(
     to: [f64; 3],
     skip: impl Fn(EntityId) -> bool,
 ) -> Option<Sight> {
+    line_of_sight_counted(world, heights, None, from, to, skip).0
+}
+
+/// [`line_of_sight`] through a [`SpatialIndex`], as [`cast_in`] is [`cast`].
+pub fn line_of_sight_in(
+    world: &World,
+    heights: Option<&HeightField>,
+    index: Option<&SpatialIndex>,
+    from: [f64; 3],
+    to: [f64; 3],
+    skip: impl Fn(EntityId) -> bool,
+) -> Option<Sight> {
+    line_of_sight_counted(world, heights, index, from, to, skip).0
+}
+
+/// [`line_of_sight_in`], and how many entities were looked at in all.
+pub fn line_of_sight_counted(
+    world: &World,
+    heights: Option<&HeightField>,
+    index: Option<&SpatialIndex>,
+    from: [f64; 3],
+    to: [f64; 3],
+    skip: impl Fn(EntityId) -> bool,
+) -> (Option<Sight>, usize) {
     let delta = sub(to, from);
     if delta.iter().any(|c| !c.is_finite()) {
-        return None;
+        return (None, 0);
     }
     let Some(dir) = normalize(delta) else {
-        return Some(Sight {
-            distance_m: 0.0,
-            blocked_by: None,
-            direction: [0.0; 3],
-        });
+        return (
+            Some(Sight {
+                distance_m: 0.0,
+                blocked_by: None,
+                direction: [0.0; 3],
+            }),
+            0,
+        );
     };
     // The length along the unit direction, exact for the axis-aligned cases.
     let distance = dot(dir, delta);
     if !distance.is_finite() {
-        return None;
+        return (None, 0);
     }
     let reach = distance - LINE_OF_SIGHT_END_TOLERANCE_M;
-    let blocked_by = if reach > 0.0 {
-        cast(world, heights, from, dir, reach, skip)
+    let (blocked_by, tested) = if reach > 0.0 {
+        cast_counted(world, heights, index, from, dir, reach, skip)
     } else {
         // Shorter than the tolerance: only a start inside a shape blocks.
-        cast(
+        let (found, tested) = cast_counted(
             world,
             heights,
+            index,
             from,
             dir,
             LINE_OF_SIGHT_END_TOLERANCE_M,
             skip,
+        );
+        (
+            found.filter(|f| f.hit.distance_m == 0.0 && f.entity.is_some()),
+            tested,
         )
-        .filter(|f| f.hit.distance_m == 0.0 && f.entity.is_some())
     };
-    Some(Sight {
-        distance_m: distance,
-        blocked_by,
-        direction: dir,
-    })
+    (
+        Some(Sight {
+            distance_m: distance,
+            blocked_by,
+            direction: dir,
+        }),
+        tested,
+    )
 }
 
 #[cfg(test)]
