@@ -4,7 +4,7 @@ use crate::error::Ctx;
 use crate::limits::MAX_COORDINATE_M;
 use crate::{
     Behaviour, Character, Component, Health, Interactable, Launcher, Light, Model, Plant, Road,
-    Scale, Shape, WorldError, Zone,
+    Scale, Shape, Water, WorldError, Zone,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -252,6 +252,22 @@ impl Entity {
     pub fn road_mut(&mut self) -> Option<&mut Road> {
         self.components.iter_mut().find_map(|c| match c {
             Component::Road(r) => Some(r),
+            _ => None,
+        })
+    }
+
+    /// The water component, if any.
+    pub fn water(&self) -> Option<&Water> {
+        self.components.iter().find_map(|c| match c {
+            Component::Water(w) => Some(w),
+            _ => None,
+        })
+    }
+
+    /// The water component, if any, to change.
+    pub fn water_mut(&mut self) -> Option<&mut Water> {
+        self.components.iter_mut().find_map(|c| match c {
+            Component::Water(w) => Some(w),
             _ => None,
         })
     }

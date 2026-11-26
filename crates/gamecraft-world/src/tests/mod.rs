@@ -16,6 +16,7 @@ mod store;
 mod sun;
 mod terrain;
 mod validation;
+mod water;
 
 use crate::{
     Character, Component, EntityDraft, Environment, Plant, Shape, ShapeKind, Terrain,

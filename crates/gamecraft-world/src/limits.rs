@@ -188,3 +188,9 @@ pub const ROAD_TIER_STEP_M: f64 = 0.01;
 /// Most terrain triangles one `road`'s surface is clipped against (the cells under its pieces,
 /// two triangles each): about a second of work.
 pub const ROAD_DRAPE_WORK_MAX: u64 = 1 << 24;
+
+/// Most points of a `water` outline (the renderer tests them per pixel, as its own sea's).
+pub const WATER_POINTS_MAX: usize = 64;
+/// Shortest distance between two consecutive points of a `water` outline (the last and the
+/// first included), metres: a repeated point has no edge.
+pub const WATER_POINT_GAP_MIN_M: f64 = 0.01;

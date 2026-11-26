@@ -40,7 +40,9 @@
 //! in id order). A shot of [`Sim::fire`] (between two ticks) is heard at once.
 //!
 //! Perception (what a character sees) is described in [`perception`]; the ray maths it shares
-//! with the engine's queries is [`ray`].
+//! with the engine's queries is [`ray`]. Water is [`water`]: a character whose feet are under
+//! the surface wades, slower by depth, and water deeper than [`water::WADE_MAX_DEPTH_M`] is
+//! refused.
 //!
 //! No GPU, no files, no clock, no threads.
 //!
@@ -71,7 +73,15 @@
 //!    over which the terrain rises more than `tan(max_slope_deg)` per metre; it stays where it
 //!    is that tick. Downhill is always allowed, and there is no sliding: a character without
 //!    input stands still on any slope.
-//! 5. **Solids block.** A solid model with a `box` collider counts as a solid box: its asset's
+//! 5. **Water.** A character whose feet are below the surface of a water area (a `water`
+//!    component: [`gamecraft_world::water`]) wades: it keeps the ground under the water and
+//!    goes slower by the depth at its feet, its full speed up to [`water::WADE_FREE_DEPTH_M`]
+//!    (0.5 m), [`water::WADE_SLOWEST_SHARE`] (0.4) of it from [`water::WADE_MAX_DEPTH_M`]
+//!    (1.5 m), linearly in between. Water deeper than 1.5 m is refused: a character on dry or
+//!    wadeable ground does not step into it (the step is not taken); one that is in it wades
+//!    at the slowest share until it is out. Rays, lines of sight and projectiles pass through
+//!    water unchanged.
+//! 6. **Solids block.** A solid model with a `box` collider counts as a solid box: its asset's
 //!    bounding box ([`gamecraft_world::ModelBox`], derived by the host), scaled and turned by
 //!    its entity. A model whose asset has no bounds does not collide. A solid box, sphere or
 //!    cylinder (rotated by its entity's
@@ -81,13 +91,13 @@
 //!    its footprint: circle against rotated rectangle for a box, circle against circle for a
 //!    cylinder or a sphere (the sphere's widest circle within the overlap). Up to
 //!    [`MAX_PUSH_ITERATIONS`] rounds; two coinciding centres push along +X.
-//! 6. **Ground.** The ground under the character's centre is the highest of the terrain and
+//! 7. **Ground.** The ground under the character's centre is the highest of the terrain and
 //!    the tops of the solid boxes and cylinders whose footprint contains the centre and whose
 //!    top is at most [`STEP_HEIGHT_M`] above the feet (so a low box is a step to stand on). A
 //!    falling character whose feet reach the ground lands (`vy = 0`, grounded). A grounded
 //!    character follows the ground up, and down by at most [`STEP_HEIGHT_M`] per tick; a
 //!    larger drop makes it fall from the next tick on.
-//! 7. **The edge of the world.** With a terrain, the centre stays inside the terrain square.
+//! 8. **The edge of the world.** With a terrain, the centre stays inside the terrain square.
 //!    Without any ground beneath, a character falls to [`FALL_FLOOR_M`] and rests there.
 //!    Positions also stay within the world document's coordinate limit, and no non-finite
 //!    number is ever written.
@@ -117,10 +127,12 @@ mod motion;
 pub mod perception;
 pub mod ray;
 mod solid;
+pub mod water;
 
 pub use behaviour::{Brain, BrainState};
 pub use combat::{Magazine, Projectile};
 pub use events::{Event, EventKind};
+pub use water::{WADE_FREE_DEPTH_M, WADE_MAX_DEPTH_M, WADE_SLOWEST_SHARE, refused, wade_share};
 
 use motion::{State, Surroundings, clamp_to_disc};
 
@@ -266,6 +278,8 @@ pub struct Sim {
     /// what a ray or a character can meet ([`Sim::index`]).
     solids: solid::Solids,
     index: SpatialIndex,
+    /// The water areas of `world`, derived by [`Sim::replace_world`] ([`water`]).
+    water: water::Waters,
     /// The characters of the running world, in id order: they move every tick.
     characters: Vec<EntityId>,
     /// How many solids the steps have tested so far: the work ([`Sim::solid_tests`]).
@@ -316,6 +330,7 @@ impl Sim {
             inputs: BTreeMap::new(),
             solids: solid::Solids::default(),
             index: SpatialIndex::new(),
+            water: water::Waters::default(),
             characters: Vec::new(),
             solid_tests: 0,
             static_hash: 0,
@@ -558,6 +573,20 @@ impl Sim {
     /// collision (AGENTS.md rule 18).
     pub fn solid_tests(&self) -> u64 {
         self.solid_tests
+    }
+
+    /// The depth of the water the character `id` stands in, metres: `None` for a character on
+    /// dry land (or no character). What the next tick's wading reads.
+    pub fn water_depth(&self, id: EntityId) -> Option<f64> {
+        let e = self.world.entity(id)?;
+        e.character()?;
+        self.water
+            .depth_at(e.position[0], e.position[2], e.position[1])
+    }
+
+    /// Whether the running world has water ([`water`]).
+    pub fn has_water(&self) -> bool {
+        !self.water.is_empty()
     }
 
     /// Fires the launcher of `id` now, between two ticks: along `yaw_deg` (default: the
@@ -803,6 +832,7 @@ impl Sim {
                 solids: &self.solids,
                 index: &self.index,
                 tests: &tests,
+                water: &self.water,
             };
             for &id in &ids {
                 let Some(entity) = self.world.entity(id) else {
@@ -975,6 +1005,7 @@ impl Sim {
         let mut index = std::mem::take(&mut self.index);
         index.update(&self.world, &world);
         let solids = solid::Solids::of(&world);
+        let water = water::Waters::of(&world);
         let characters: Vec<EntityId> = world
             .entities()
             .filter(|e| e.character().is_some())
@@ -989,6 +1020,7 @@ impl Sim {
         self.static_hash = static_hash;
         self.index = index;
         self.solids = solids;
+        self.water = water;
         self.characters = characters;
         Ok(())
     }

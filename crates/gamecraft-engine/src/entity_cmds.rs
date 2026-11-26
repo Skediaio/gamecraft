@@ -215,8 +215,9 @@ fn add_spec() -> CommandSpec {
                 "Components as in the file format, at most one of each type: {\"type\": \
                  \"shape\", \"kind\": \"box\"|\"sphere\"|\"cylinder\", \"size\", \"color\", \
                  \"solid\"}, {\"type\": \"plant\", \"species\", \"seed\", \"growth\"}, \
-                 {\"type\": \"character\", \"height_m\", ...}; fields left out take their \
-                 defaults.",
+                 {\"type\": \"character\", \"height_m\", ...}, {\"type\": \"water\", \
+                 \"level_m\", \"outline\"} (water.add takes world points); fields left out \
+                 take their defaults.",
             )
             .default(json!([])),
         ],

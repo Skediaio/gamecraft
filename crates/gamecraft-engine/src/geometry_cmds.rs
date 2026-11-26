@@ -10,6 +10,8 @@
 //!
 //! `query.ground` is `query.ground_height` for many points at once, for the generator of a
 //! large map that needs the ground under a thousand piers: one call, however many points.
+//! Both also say whether a point is under water (a `water` component) and how deep: the
+//! surface there is water, else ground.
 
 use crate::error::{CommandError, bad};
 use crate::params::Params;
@@ -17,6 +19,7 @@ use crate::session::{Handler, Registration, Session};
 use crate::spec::{CommandSpec, ParamType as T, param, spec};
 use gamecraft_math::{Portable, rad_to_deg};
 use gamecraft_sim::ray::{self, Found, along, normalize};
+use gamecraft_world::{WaterArea, depth_at, surface_at, water_areas};
 use serde_json::{Map, Value, json};
 
 /// The commands of this module.
@@ -57,8 +60,10 @@ fn ground_height_spec() -> CommandSpec {
         "query.ground_height",
         "Ground Height",
         "The terrain's height, surface normal and slope at a point of the ground plane of the \
-         current world. Terrain only (shapes are not ground); null outside the terrain or \
-         without one.",
+         current world, and whether the point is under water (a `water` component: the surface \
+         there is \"water\" and `water_depth_m` how deep the ground is under it, else the \
+         surface is \"ground\" and both are null). Terrain only (shapes are not ground); null \
+         outside the terrain or without one.",
         vec![
             param("x", T::Number, "East-west coordinate.")
                 .required()
@@ -67,44 +72,71 @@ fn ground_height_spec() -> CommandSpec {
                 .required()
                 .unit("m"),
         ],
-        "{x, z, height_m: number | null, normal: [x, y, z] | null, slope_deg: number | null}",
+        "{x, z, height_m: number | null, normal: [x, y, z] | null, slope_deg: number | null, \
+         surface: \"ground\" | \"water\" | null, water_level_m: number | null, water_depth_m: \
+         number | null}",
         json!({"x": 8, "z": -10}),
     )
     .query()
 }
 
-/// The ground at `x`, `z` of `field`: the answer of `query.ground_height` for one point
-/// (nulls without ground).
-fn ground_point(field: Option<&gamecraft_world::HeightField>, x: f64, z: f64) -> Value {
+/// The ground at `x`, `z` of `field`, with the water of `areas` over it: the answer of
+/// `query.ground_height` for one point (nulls without ground).
+fn ground_point(
+    field: Option<&gamecraft_world::HeightField>,
+    areas: &[WaterArea],
+    x: f64,
+    z: f64,
+) -> Value {
     let height = field.and_then(|f| f.height_at(x, z));
     let normal = field.and_then(|f| f.normal_at(x, z));
     let slope = normal.map(|[nx, ny, nz]| rad_to_deg((nx * nx + nz * nz).sqrt().patan2(ny)));
-    json!({"x": x, "z": z, "height_m": height, "normal": normal, "slope_deg": slope})
+    // Under water when a water area covers the point and its surface is above the ground.
+    let wet = height.and_then(|h| depth_at(areas, x, z, h));
+    let level = wet.and_then(|_| surface_at(areas, x, z)).map(|a| a.level);
+    json!({
+        "x": x,
+        "z": z,
+        "height_m": height,
+        "normal": normal,
+        "slope_deg": slope,
+        "surface": height.map_or(Value::Null, |_| if wet.is_some() { json!("water") } else { json!("ground") }),
+        "water_level_m": level,
+        "water_depth_m": wet,
+    })
 }
 
 fn ground_height(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
     let x = p.f64("x")?.ok_or_else(|| bad("missing `x`"))?;
     let z = p.f64("z")?.ok_or_else(|| bad("missing `z`"))?;
-    Ok(ground_point(session.current_heights(), x, z))
+    let areas = water_areas(session.current_world());
+    Ok(ground_point(session.current_heights(), &areas, x, z))
 }
 
 fn ground_spec() -> CommandSpec {
     spec(
         "query.ground",
         "Ground at Points",
-        "The terrain's height, surface normal and slope at many points of the ground plane          of the current world, in one call: query.ground_height for a list of points, for          the generator of a large map. Terrain only (shapes are not ground); null, point by          point, outside the terrain or without one.",
-        vec![param(
-            "points",
-            T::Array,
-            &format!(
-                "[[x, z], ...] on the ground plane, 1 to {MAX_GROUND_POINTS} of them, each a \
+        "The terrain's height, surface normal and slope at many points of the ground plane \
+         of the current world, in one call, and for each whether it is under water: \
+         query.ground_height for a list of points, for the generator of a large map (where a \
+         pier ends, where a building must not stand). Terrain only (shapes are not ground); \
+         null, point by point, outside the terrain or without one.",
+        vec![
+            param(
+                "points",
+                T::Array,
+                &format!(
+                    "[[x, z], ...] on the ground plane, 1 to {MAX_GROUND_POINTS} of them, each a \
                  coordinate within ±{MAX_POINT_COORDINATE_M} m; answered in order."
-            ),
-        )
-        .required()
-        .unit("m")],
+                ),
+            )
+            .required()
+            .unit("m"),
+        ],
         "{points: [{x, z, height_m: number | null, normal: [x, y, z] | null, slope_deg: \
-         number | null}, ...]}: one per point given, in order",
+         number | null, surface: \"ground\" | \"water\" | null, water_level_m: number | null, \
+         water_depth_m: number | null}, ...]}: one per point given, in order",
         json!({"points": [[8, -10], [12, -4], [500, 500]]}),
     )
     .query()
@@ -122,11 +154,13 @@ fn ground(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
         )));
     }
     let field = session.current_heights();
+    let areas = water_areas(session.current_world());
     let mut points = Vec::with_capacity(list.len());
     for (i, v) in list.iter().enumerate() {
         let wrong = |what: &str| {
             bad(format!(
-                "`points[{i}]` must be [x, z], two numbers of metres within                  ±{MAX_POINT_COORDINATE_M}; got {what}"
+                "`points[{i}]` must be [x, z], two numbers of metres within ±{MAX_POINT_COORDINATE_M}; \
+                 got {what}"
             ))
         };
         let Some(pair) = v.as_array().filter(|pair| pair.len() == 2) else {
@@ -139,7 +173,7 @@ fn ground(session: &Session, p: Params<'_>) -> Result<Value, CommandError> {
                 .filter(|n| n.is_finite() && n.abs() <= MAX_POINT_COORDINATE_M)
                 .ok_or_else(|| wrong(&crate::spec::kind_of(item)))?;
         }
-        points.push(ground_point(field, xz[0], xz[1]));
+        points.push(ground_point(field, &areas, xz[0], xz[1]));
     }
     Ok(json!({ "points": points }))
 }

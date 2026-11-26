@@ -437,7 +437,8 @@ fn ground_height_on_flat_and_noise_terrain_and_without_ground() {
     assert_eq!(num(&r["slope_deg"]), 0.0);
     assert_eq!((r["x"].clone(), r["z"].clone()), (json!(3.0), json!(-4.0)));
 
-    let none = json!({"x": 500.0, "z": 0.0, "height_m": null, "normal": null, "slope_deg": null});
+    let none = json!({"x": 500.0, "z": 0.0, "height_m": null, "normal": null, "slope_deg": null,
+                      "surface": null, "water_level_m": null, "water_depth_m": null});
     assert_eq!(
         s.run("query.ground_height", &json!({"x": 500, "z": 0}))
             .unwrap(),
@@ -727,7 +728,8 @@ fn component_list_describes_every_component_and_its_examples_parse() {
             "health",
             "behaviour",
             "model",
-            "road"
+            "road",
+            "water"
         ]
     );
     for c in list {

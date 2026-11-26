@@ -613,6 +613,9 @@ pub struct WorldRenderer {
     /// quality's share (40 % low, 50 % medium, 100 % high), as for everything it draws. A
     /// picture is always drawn at the highest quality, where it is 1.
     lod_scale: f32,
+    /// The water areas of the last sync that are not drawn, as sentences, repeated with every
+    /// sync while they last.
+    water_problems: Vec<String>,
 }
 
 /// A model that could not be read or uploaded: why, and the asset files it was being read
@@ -789,6 +792,7 @@ impl WorldRenderer {
             hlod_builds: 0,
             hlod_notes: Vec::new(),
             lod_scale: quality_lod_scale(&vc::Quality::LOW),
+            water_problems: Vec::new(),
         };
         world_renderer.apply_environment(&Environment::default(), false);
         world_renderer
@@ -824,6 +828,11 @@ impl WorldRenderer {
         if environment_changed {
             self.apply_environment(&world.environment, lamps);
         }
+        // The water surface and its waves follow the world's water and the environment; the
+        // renderer keeps a surface that did not change.
+        let water = crate::water::plan(world, &world.environment);
+        self.renderer.set_sea(water.sea);
+        self.water_problems = water.problems;
         let unchanged = self
             .synced
             .as_ref()
@@ -843,6 +852,7 @@ impl WorldRenderer {
     fn problems(&self) -> Vec<String> {
         let mut problems = self.problems.clone();
         problems.extend(self.light_problem.iter().cloned());
+        problems.extend(self.water_problems.iter().cloned());
         problems
     }
 

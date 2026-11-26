@@ -21,6 +21,9 @@
 //! A `model` component names a glTF asset of a pack; the asset's bounding box is derived data
 //! that the host computes and hands over with [`World::set_model_bounds`] ([`ModelBounds`]).
 //!
+//! A `water` component is an area covered by a flat surface at one level; where it is water and
+//! how deep follows from its outline, its level and the ground ([`water`]).
+//!
 //! No GPU, no files, no clock: everything here is deterministic. Conventions: metres, Y up,
 //! the ground plane is x and z, north is -Z and east is +X; an entity's position is its base.
 
@@ -43,6 +46,7 @@ pub mod sculpt;
 mod store;
 mod terrain;
 pub mod tiles;
+pub mod water;
 mod world;
 
 #[cfg(test)]
@@ -76,4 +80,5 @@ pub use scenario::{
 pub use sculpt::{PaintRule, TerrainEdit, TerrainLayer, is_terrain_layer_name};
 pub use terrain::{HeightField, Rebuilt, Terrain, TerrainSource};
 pub use tiles::CachedBuild;
+pub use water::{Water, WaterArea, depth_at, inside_outline, surface_at, water_areas};
 pub use world::{FORMAT_VERSION, World};

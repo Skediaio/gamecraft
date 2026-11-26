@@ -8,6 +8,41 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-26: Water is a component, an outline and a level; wading slows by depth and deep water is refused
+
+The roadmap promised "water: sea level, lakes, rivers, through VisionCraft's water". What
+existed: `environment.sea_level_m`, which is a datum (how high world y = 0 is above sea level,
+for the density of the air projectiles fly through), not a surface; VisionCraft's renderer draws
+one water surface per scene, a level with an optional outline of 64 points; its own world model
+has one sea per project, with a knee-deep limit where walking stops. So the smallest addition
+that uses all of it:
+
+- **A `water` component**: an entity is an area of water, a flat surface at `level_m` over an
+  `outline` (3 to 64 points in the entity's frame) or everywhere. Chosen over one water surface
+  per world (VisionCraft's model): an entity gets ids, names, layers, undo, prefabs, replication
+  and pack overrides for free, the simulation and the queries can know any number of areas (a
+  town's river and its lakes), and the game master adds a pond with `entity.add`. The renderer
+  draws one surface, as it can: the sea when there is one, else the largest area, and names the
+  others in every picture's problems. When VisionCraft draws several, the component is ready.
+- **`water.add` and `water.set`** take a world height and world points, as `road.add` and
+  `road.set` do, and keep them in the entity's frame (the entity stands at the outline's centre
+  on the surface). `entity.add` takes the component as given.
+- **Wading, by depth**: full speed up to 0.5 m (knee-deep), falling linearly to 0.4 of it at
+  1.5 m (chest-deep on a 1.8 m character). **Deeper water is refused**: a character does not
+  step in (the step is not taken, as a wall blocks it), and one that is in it moves at the
+  slowest share until it is out. Chosen over VisionCraft's flat stop at 0.6 m (a soldier fords
+  a river chest-deep; slowing by depth reads well and keeps a map traversable) and over
+  swimming (buoyancy, a third state of a body: M4 and M6). A speed share that reached zero
+  would trap a character dropped in deep water, so the slowest share stands and the refusal is
+  a one-way door.
+- **Nothing else changes**: rays, lines of sight and projectiles pass through water; the depth
+  follows from positions, so the state hash needs nothing new; a world without water takes the
+  same code path as before, to the bit (the wading code returns early without water).
+- **The waves follow the wind** (Pierson-Moskowitz's fully developed sea, capped at sea state 6);
+  an outlined area is inland water with little fetch (waves under 1 m), as in VisionCraft's own
+  model. Constants with names in `gamecraft-render/src/water.rs`; a first rule, to be replaced
+  by per-water data when a pack needs it.
+
 ### 2026-11-26: A world file finds the pack above it, and an export says what it needs
 
 `view.render` of a world file inside a pack drew magenta boxes for every model: nothing told the

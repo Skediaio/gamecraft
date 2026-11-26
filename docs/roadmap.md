@@ -173,7 +173,9 @@ Worlds of real size, made of reusable parts, by anyone.
   shaping the terrain under them is open).
 - Terrain: sculpting as edits over the source, painted material layers, tiles streamed and
   refined by distance, positions relative to the camera.
-- Water: sea level, lakes, rivers, through VisionCraft's water.
+- Water: sea level, lakes, rivers, through VisionCraft's water: the sea and lakes as `water`
+  entities since 2026-11-26 (`design/water.md`); rivers with a flow, and several surfaces in one
+  picture, are open.
 - The renderer adapter updates only what changed; plants as instanced items with levels of
   detail and impostors.
 
@@ -261,8 +263,11 @@ from the engine, as mechanisms with no game in them, in the order they are sched
    zones and interactables; `sim.start` on that world takes 1.4 s (validation, the state
    hash and the solids, all once).
 9. **Filtered shadows** (PCF, soft edges) instead of stair-stepped shadow edges at eye level.
-10. **Water as a surface kind in the simulation:** a character in water wades (slower, not
-    standing on the ground); part of the water item above.
+10. ~~**Water as a surface kind in the simulation**~~: done 2026-11-26: a `water` component (an
+    outline and a level, or the sea everywhere), `water.add`/`water.set`, `query.ground` and
+    `sim.state` saying where it is water and how deep, a character wading by depth and refused
+    beyond 1.5 m, and the renderer's water for one surface (`design/water.md`). Open: swimming,
+    projectiles in water, several surfaces in one picture, rivers with a flow.
 11. **Collision from a model's own geometry:** per-mesh or convex-part colliders, or a collision
     mesh shipped in the glTF (nodes named `*-collider`), so a building can be walked under and
     onto (see also *Model collision finer than the bounding box* above).

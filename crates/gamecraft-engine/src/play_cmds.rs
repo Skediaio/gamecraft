@@ -40,8 +40,9 @@ pub(crate) const SPECS: &[Registration] = &[
 const MIN_FACE_DISTANCE_M: f64 = 1e-9;
 
 const CHARACTERS_DOC: &str = "[{id, name, position, rotation_y_deg, velocity, grounded, \
-    health: {max, current, armor, down} | null, behaviour: {state, ...} | null, magazine: {left, \
-    shots, ready_in_s, reloading} | null}]";
+    water_depth_m: number | null (the water it stands in), health: {max, current, armor, down} | \
+    null, behaviour: {state, ...} | null, magazine: {left, shots, ready_in_s, reloading} | \
+    null}]";
 
 const INPUT_DOC: &str = "{entity, forward, right, yaw_deg, pitch_deg, run, jump, interact, fire, \
     face: [x, z] | null, face_entity: id | null, face_pitch}";
@@ -65,6 +66,7 @@ fn characters(sim: &Sim) -> Vec<Value> {
                 "rotation_y_deg": e.rotation_y_deg,
                 "velocity": body.velocity,
                 "grounded": body.grounded,
+                "water_depth_m": sim.water_depth(e.id),
                 "health": health_json(e),
                 "behaviour": behaviour_json(sim, e.id),
                 "magazine": magazine_json(sim, e.id),

@@ -28,6 +28,9 @@
 //! - **Roads**: every `road` draped on the terrain's triangles a few centimetres above them
 //!   ([`roads`]), one item per terrain chunk and colour, rough and lit like the ground under
 //!   it; where roads overlap the higher tier lies on top, so no two surfaces are coplanar.
+//! - **Water**: the `water` component as VisionCraft's water surface (`water`): the sea
+//!   everywhere or the largest area, with waves from the wind; the other areas are named in
+//!   the problems.
 //! - **Characters**: a body (cylinder and head) with a small dark visor at eye height on the
 //!   side the character faces.
 //! - **Sky and light**: the physical sky, the sun from the environment, clouds, mist, rain, wind
@@ -38,9 +41,9 @@
 //!   data ([`Effects`]), never the simulation.
 //!
 //! No VisionCraft type appears in this crate's public API: everything that touches the renderer
-//! lives in `renderer.rs`, everything that touches the plant generator in `plants.rs`. The
-//! GPU-free half (meshes, cameras, PNG encoding, the light and wind mappings) is public and
-//! tested without a GPU.
+//! lives in `renderer.rs` and `water.rs`, everything that touches the plant generator in
+//! `plants.rs`. The GPU-free half (meshes, cameras, PNG encoding, the light and wind mappings)
+//! is public and tested without a GPU.
 //!
 //! Conventions: metres, Y up, north is -Z and east is +X; an entity's position is its base.
 //! Positions reach the GPU as `f32` relative to the world origin.
@@ -62,6 +65,7 @@ pub mod model;
 mod plants;
 mod renderer;
 pub mod roads;
+mod water;
 
 #[cfg(test)]
 mod tests;

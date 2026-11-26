@@ -396,6 +396,21 @@ const ROAD_FIELDS: &[Field] = &[
     ),
 ];
 
+const WATER_FIELDS: &[Field] = &[
+    field(
+        "level_m",
+        "number",
+        Some("m"),
+        "Height of the surface above the entity's position, within ±1000000. Default 0.          water.add places the entity on the surface, so this stays 0 there.",
+    ),
+    field(
+        "outline",
+        "[[x, z], ...]",
+        Some("m"),
+        "The outline of the area as offsets from the entity's position (turned by its          rotation_y_deg, times its scale), 3 to 64 points, consecutive points (the last and          the first included) at least 0.01 m apart; left out: water everywhere (the sea).          water.add takes world points and makes the offsets.",
+    ),
+];
+
 const LAUNCHER_FIELDS: &[Field] = &[
     field(
         "muzzle_velocity_mps",
@@ -655,6 +670,17 @@ const KINDS: &[Kind] = &[
         fields: ROAD_FIELDS,
         minimal: || json!({"type": "road", "points": [[0, 0], [20, 0]]}),
         example: || json!({"type": "road", "points": [[0, 0], [20, 0], [35, 12]], "width_m": 7, "widths_m": [], "color": [0.05, 0.05, 0.055], "lift_m": 0.03, "tier": 0, "ends": "round"}),
+    },
+    Kind {
+        kind: "water",
+        summary: "An area covered by a flat water surface at one level, over an outline of the \
+                  ground plane or everywhere (the sea). A character whose feet are under it \
+                  wades, slower by the depth, and water deeper than 1.5 m is refused; rays and \
+                  projectiles pass through it. Drawn as the renderer's water: one surface, the \
+                  sea or the largest area.",
+        fields: WATER_FIELDS,
+        minimal: || json!({"type": "water"}),
+        example: || json!({"type": "water", "level_m": 0.25, "outline": [[-5, -5], [5, -5], [5, 5], [-5, 5]]}),
     },
 ];
 

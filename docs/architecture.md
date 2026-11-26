@@ -59,8 +59,9 @@ Since then: scenario data (zones, objectives, triggers; `design/scenarios.md`), 
 (`design/ballistics.md`) and prefabs with overrides and children, which an entity refers to by
 `prefab` and a child to its `parent` (`design/journal.md`). Models (`model` components referring to glTF assets of a pack, whose bounding boxes the host
 measures and the world carries as derived data, so the simulation can collide without reading a
-file), terrain edits (sculpting and painting as an ordered list of recipes over the source) and
-projects of packs layered by id are in (`design/projects.md`). Planned: full orientation,
+file), terrain edits (sculpting and painting as an ordered list of recipes over the source),
+water (`water` components: an outline and a level, derived into where it is water and how deep;
+`design/water.md`) and projects of packs layered by id are in (`design/projects.md`). Planned: full orientation,
 layers, generators (forests, roads, rivers) (M3); rigid bodies and colliders (M4); scripts (M5).
 
 ### Axes and units
@@ -81,8 +82,9 @@ world on the undo stack. A failed command leaves the world as it was.
 field), then one body per character. `sim.input` stores an input record for an entity; it stays
 until replaced. `sim.step` advances whole ticks of 1/60 s: for each character in id order, the
 input gives a wanted velocity, gravity and the ground give the vertical motion, the solid shapes
-around it (found through the spatial index) push the body out. The answer carries the tick and
-the state hash. `sim.stop` drops the
+around it (found through the spatial index) push the body out, and in water it wades: slower by
+the depth at its feet, and it does not step into water deeper than 1.5 m. The answer carries the
+tick and the state hash. `sim.stop` drops the
 simulation, or with `keep` makes the running world the document, as one undo step.
 
 **Direct.** A world command that arrives while a simulation runs (`entity.add`,
@@ -146,7 +148,9 @@ What GameCraft needs and VisionCraft's renderer does not have is built in Vision
 gaps today: skeletal animation, camera-relative rendering for very large worlds, streaming of
 terrain chunks by distance, and statistics per level of detail (the renderer counts a frame's
 instances and triangles only; the adapter counts what each model drew per level again by the
-renderer's rule, `gamecraft-render/src/culling.rs`). If the shared part grows, the renderer and the plant generator move
+renderer's rule, `gamecraft-render/src/culling.rs`), several water surfaces in one scene
+(VisionCraft draws one `Sea`: GameCraft draws the sea or the largest area and names the others).
+If the shared part grows, the renderer and the plant generator move
 to a repository of their own that both projects depend on (`decisions.md`).
 
 ## Structural debt

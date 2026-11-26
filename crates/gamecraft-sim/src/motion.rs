@@ -8,6 +8,7 @@ use std::cell::Cell;
 
 use crate::index::SpatialIndex;
 use crate::solid::{Solid, Solids};
+use crate::water::{Waters, refused, wade_share};
 use crate::{Body, DT, FALL_FLOOR_M, GRAVITY_MPS2, Input, MAX_PUSH_ITERATIONS, STEP_HEIGHT_M};
 
 /// How far above the terrain, metres, a character's feet may be and still count as standing
@@ -32,6 +33,8 @@ pub(crate) struct Surroundings<'a> {
     pub(crate) solids: &'a Solids,
     /// Which solids are around a place.
     pub(crate) index: &'a SpatialIndex,
+    /// The water areas of the running world ([`crate::water`]).
+    pub(crate) water: &'a Waters,
     /// How many solids were tested: the work, counted (AGENTS.md rule 18).
     pub(crate) tests: &'a Cell<u64>,
 }
@@ -215,6 +218,36 @@ impl Surroundings<'_> {
         p.iter().all(|v| v.is_finite()).then_some(p)
     }
 
+    /// The wanted velocity (x, z) of a character standing with its feet at `y0` by
+    /// (`x0`, `z0`), scaled by the share it keeps in the water it stands in (1 on dry land and
+    /// up to the knee: then the very numbers it was given).
+    fn wading(&self, x0: f64, z0: f64, y0: f64, vx: f64, vz: f64) -> (f64, f64) {
+        if self.water.is_empty() {
+            return (vx, vz);
+        }
+        let share = wade_share(self.water.depth_at(x0, z0, y0));
+        if share == 1.0 {
+            (vx, vz)
+        } else {
+            (vx * share, vz * share)
+        }
+    }
+
+    /// Whether the step from (`x0`, `z0`), feet at `y0`, to (`x`, `z`) enters water too deep to
+    /// wade: the character was on dry or wadeable ground and the ground under the place it
+    /// would step to lies more than [`crate::water::WADE_MAX_DEPTH_M`] under the surface. A
+    /// character already in deep water may move (to get out).
+    fn deep_water(&self, x0: f64, z0: f64, y0: f64, x: f64, z: f64, y: f64) -> bool {
+        if self.water.is_empty() {
+            return false;
+        }
+        if refused(self.water.depth_at(x0, z0, y0)) {
+            return false;
+        }
+        let ground = self.ground(x, z, y0.max(y) + STEP_HEIGHT_M);
+        refused(self.water.depth_at(x, z, ground))
+    }
+
     /// Advances one character one tick.
     pub(crate) fn step(&self, state: State, character: &Character, input: Option<&Input>) -> State {
         let [x0, y0, z0] = state.position;
@@ -222,6 +255,7 @@ impl Surroundings<'_> {
             Some(i) => (i.yaw_deg, wanted_velocity(i, character), i.jump),
             None => (state.rotation_y_deg, (0.0, 0.0), false),
         };
+        let (vx, vz) = self.wading(x0, z0, y0, vx, vz);
         let mut grounded = state.body.grounded;
         let mut vy = state.body.velocity[1];
         let mut y = y0;
@@ -238,8 +272,12 @@ impl Surroundings<'_> {
             y = y0 + vy * DT;
         }
 
-        // Horizontal: the wanted step, the slope limit, the solids, the edge of the world.
+        // Horizontal: the wanted step, deep water, the slope limit, the solids, the edge of
+        // the world.
         let (mut x, mut z) = self.clamp_horizontal(x0 + vx * DT, z0 + vz * DT);
+        if self.deep_water(x0, z0, y0, x, z, y) {
+            (x, z) = (x0, z0);
+        }
         if grounded && self.slope_blocks((x0, z0), (x, z), y, character.max_slope_deg) {
             (x, z) = (x0, z0);
         }
