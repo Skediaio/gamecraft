@@ -1,5 +1,6 @@
 //! Rays, lines of sight and simulation steps on a world of about 300 000 entities: boxes and
-//! prefab instances with their children spread over 8 km. What each of them costs is counted
+//! prefab instances with their children spread over 8 km, and 300 roads crossing it (as a
+//! real place has). What each of them costs is counted
 //! (entities looked at: a number a machine can check) and timed (a number for the report; not
 //! asserted, since a shared build server's clock is not).
 
@@ -16,8 +17,8 @@ use common::{add_character, pos, walk};
 use gamecraft_math::{Portable, Rng, deg_to_rad};
 use gamecraft_sim::{Sim, ray};
 use gamecraft_world::{
-    Component, EntityDraft, Prefab, PrefabChild, Shape, ShapeKind, Spawn, Terrain, TerrainSource,
-    World,
+    Component, EntityDraft, Prefab, PrefabChild, Road, Shape, ShapeKind, Spawn, Terrain,
+    TerrainSource, World,
 };
 use std::time::Instant;
 
@@ -29,9 +30,11 @@ const BOXES: usize = 60_000;
 const LOTS: usize = 40_000;
 /// Characters that walk while the world is stepped.
 const WALKERS: usize = 8;
+/// Roads that cross the world, each with forty segments.
+const ROADS: usize = 300;
 
-/// A world of `BOXES` boxes and `LOTS` instances of a prefab with five children, spread over
-/// the square of `SIZE_M`, on flat ground: 300 000 entities.
+/// A world of `BOXES` boxes, `LOTS` instances of a prefab with five children and `ROADS` roads,
+/// spread over the square of `SIZE_M`, on flat ground: 300 000 entities.
 pub fn world_at_scale() -> World {
     let mut world = World::new("at scale", 2026);
     world.terrain = Some(Terrain {
@@ -93,6 +96,39 @@ pub fn world_at_scale() -> World {
             )
             .unwrap();
     }
+    // Roads that cross the world: forty segments of 220 m from a scattered start, each turned a
+    // little, 6 to 14 m wide.
+    for i in 0..ROADS {
+        let mut x = rng.range(-half, half);
+        let mut z = if i.is_multiple_of(2) {
+            -half
+        } else {
+            rng.range(-half, half)
+        };
+        let mut heading = if i.is_multiple_of(2) {
+            rng.range(60.0, 120.0)
+        } else {
+            rng.range(-30.0, 30.0)
+        };
+        let mut points = Vec::with_capacity(40);
+        for _ in 0..40 {
+            points.push([x, z]);
+            let (s, c) = deg_to_rad(heading).psin_cos();
+            x += 220.0 * s;
+            z += 220.0 * c;
+            heading += rng.range(-12.0, 12.0);
+        }
+        world
+            .add_entity(EntityDraft {
+                name: "Road".into(),
+                components: vec![Component::Road(Road {
+                    width_m: rng.range(6.0, 14.0),
+                    ..Road::new(points)
+                })],
+                ..EntityDraft::default()
+            })
+            .unwrap();
+    }
     world
 }
 
@@ -105,6 +141,10 @@ fn per_call(n: usize, elapsed: std::time::Duration) -> f64 {
 /// is "well under a millisecond", and a few hundred tests are. The walk over every entity
 /// looks at 300 000.
 const MAX_LOOKED_AT: usize = 4_000;
+/// Most entities a ray or a line of sight looks at with the roads placed in the cells of their
+/// segments: a few hundred of the world's, and the few roads the ray's cells touch. Found
+/// everywhere, the 300 roads would be looked at by every ray.
+const MAX_LOOKED_AT_WITH_ROADS: usize = 400;
 /// Most solids a tick with eight walkers tests: a few dozen solids around each walker, in a
 /// handful of passes (the first tick, with walkers placed inside boxes, a few hundred). The
 /// walk over every solid tests more than two million.
@@ -114,7 +154,7 @@ const MAX_SOLID_TESTS_PER_TICK: u64 = 10_000;
 fn rays_sight_and_steps_on_three_hundred_thousand_entities() {
     let build = Instant::now();
     let mut world = world_at_scale();
-    assert_eq!(world.entity_count(), BOXES + LOTS * 6);
+    assert_eq!(world.entity_count(), BOXES + LOTS * 6 + ROADS);
     let mut walkers = Vec::new();
     for i in 0..WALKERS {
         let x = -3000.0 + i as f64 * 700.0;
@@ -128,9 +168,11 @@ fn rays_sight_and_steps_on_three_hundred_thousand_entities() {
     let start = Instant::now();
     let mut sim = Sim::new(world).unwrap();
     println!("sim.start: {:.0} ms", per_call(1, start.elapsed()));
-    // The instances themselves have no shape, nor have the walkers: only the boxes and the
-    // instances' five children each are something a ray can meet.
-    assert_eq!(sim.index().len(), BOXES + LOTS * 5);
+    // The instances themselves have no shape, nor have the walkers: only the boxes, the
+    // instances' five children each and the roads are something a ray can meet. Each road is
+    // in the cells of its segments: none of the 300 is found everywhere.
+    assert_eq!(sim.index().len(), BOXES + LOTS * 5 + ROADS);
+    assert_eq!(sim.index().found_everywhere(), 0, "a road found everywhere");
     let (world, heights, index) = (sim.world(), sim.heights(), sim.index());
     let mut rng = Rng::new(99);
     // Rays from 100 m up, sloping down over a kilometre, from scattered places.
@@ -157,8 +199,30 @@ fn rays_sight_and_steps_on_three_hundred_thousand_entities() {
         per_call(rays, start.elapsed()),
         looked / rays
     );
-    assert!(looked / rays < MAX_LOOKED_AT, "{} per ray", looked / rays);
+    assert!(
+        looked / rays < MAX_LOOKED_AT_WITH_ROADS,
+        "{} per ray",
+        looked / rays
+    );
     assert!(most < MAX_LOOKED_AT, "{most}");
+    // Forty of them again without the index, over every entity: the same hits, to the bit.
+    let mut rng = Rng::new(99);
+    let mut same = 0;
+    for _ in 0..40 {
+        let half = SIZE_M / 2.0 - 600.0;
+        let origin = [rng.range(-half, half), 100.0, rng.range(-half, half)];
+        let yaw = rng.range(0.0, 360.0);
+        let (s, c) = deg_to_rad(yaw).psin_cos();
+        let dir = [s, -0.1, c];
+        let walked = ray::cast(world, heights, origin, dir, 1000.0, |_| false);
+        let (found, _) =
+            ray::cast_counted(world, heights, Some(index), origin, dir, 1000.0, |_| false);
+        let as_bits =
+            |f: Option<ray::Found>| f.map(|f| (f.hit.distance_m.to_bits(), f.entity.map(|e| e.0)));
+        assert_eq!(as_bits(found), as_bits(walked), "{origin:?} {dir:?}");
+        same += usize::from(found.is_some());
+    }
+    println!("{same} of 40 rays hit something, the same without the index");
     // Lines of sight between two points 300 m apart at eye height.
     let mut clear = 0;
     let mut looked = 0;
@@ -185,7 +249,11 @@ fn rays_sight_and_steps_on_three_hundred_thousand_entities() {
         per_call(rays, start.elapsed()),
         looked / rays
     );
-    assert!(looked / rays < MAX_LOOKED_AT, "{} per line", looked / rays);
+    assert!(
+        looked / rays < MAX_LOOKED_AT_WITH_ROADS,
+        "{} per line",
+        looked / rays
+    );
     assert!(most < MAX_LOOKED_AT, "{most}");
     // Characters walking east among it all: sixty ticks.
     for &id in &walkers {

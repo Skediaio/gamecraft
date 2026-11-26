@@ -278,6 +278,24 @@ impl Road {
         finite.then_some((lo, hi))
     }
 
+    /// The smallest world `[x, z]` box around each segment of the road on `e`, widened on
+    /// every side by the larger of the half widths at its ends: the segment's trapezoid, and
+    /// the round piece at each of its ends, lie inside. One per segment, in order. What the
+    /// spatial index looks for a road in: a long road is found where its segments run.
+    pub fn segment_boxes(&self, e: &Entity) -> Vec<([f64; 2], [f64; 2])> {
+        let nodes = self.nodes(e);
+        let mut out = Vec::with_capacity(nodes.len().saturating_sub(1));
+        for pair in nodes.windows(2) {
+            let &[a, b] = pair else { continue };
+            let half = a.half.max(b.half);
+            out.push((
+                [a.at[0].min(b.at[0]) - half, a.at[1].min(b.at[1]) - half],
+                [a.at[0].max(b.at[0]) + half, a.at[1].max(b.at[1]) + half],
+            ));
+        }
+        out
+    }
+
     /// The road on `e` as convex pieces in world `[x, z]`: a trapezoid per segment, a sector
     /// on the outer side of every bend and, with round ends, a half disc at each end.
     pub fn footprint(&self, e: &Entity) -> Vec<Vec<[f64; 2]>> {

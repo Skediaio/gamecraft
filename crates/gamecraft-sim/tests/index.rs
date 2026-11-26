@@ -371,6 +371,127 @@ fn an_index_updated_in_place_is_one_made_again() {
     }
 }
 
+/// A flat world of 8 km with three roads: one winding for six kilometres (more cells than a
+/// footprint may touch), one short, and one with more cells than any road is placed in.
+fn roads_world() -> (
+    World,
+    gamecraft_world::HeightField,
+    [gamecraft_world::EntityId; 3],
+) {
+    let mut world = World::new("roads", 5);
+    world.terrain = Some(Terrain {
+        size_m: 8192.0,
+        cell_m: 8.0,
+        source: TerrainSource::Flat { height_m: 0.0 },
+        ..Default::default()
+    });
+    let field = world.terrain.clone().unwrap().build().unwrap();
+    let winding = Road::new(
+        (0..200_usize)
+            .map(|i| {
+                let x = -3000.0 + 30.0 * i as f64;
+                let z = if i.is_multiple_of(2) { -60.0 } else { 60.0 };
+                [x, z]
+            })
+            .collect(),
+    );
+    let short = Road::new(vec![[1500.0, 1500.0], [1540.0, 1500.0]]);
+    let huge = Road::new(
+        (0..40_usize)
+            .map(|i| {
+                let x = 20_000.0 * i as f64;
+                let z = if i.is_multiple_of(2) { -5000.0 } else { 5000.0 };
+                [x, z]
+            })
+            .collect(),
+    );
+    let mut ids = [gamecraft_world::EntityId(0); 3];
+    for (slot, road) in [winding, short, huge].into_iter().enumerate() {
+        ids[slot] = world
+            .add_entity(EntityDraft {
+                name: "Road".into(),
+                components: vec![Component::Road(road)],
+                ..EntityDraft::default()
+            })
+            .unwrap();
+    }
+    (world, field, ids)
+}
+
+#[test]
+fn a_long_road_is_found_in_the_cells_of_its_segments_not_everywhere() {
+    let (world, field, [long, short, huge]) = roads_world();
+    let index = SpatialIndex::build(&world);
+    assert_eq!(index.len(), 3);
+    // The winding road touches more cells than a footprint may hold, and is placed all the
+    // same: only the road with more cells than any road is placed in is found everywhere.
+    let (e, r) = (
+        world.entity(long).unwrap(),
+        world.entity(long).unwrap().road().unwrap(),
+    );
+    let (lo, hi) = r.bounds(e).unwrap();
+    let across = ((hi[0] - lo[0]) / 32.0).ceil() * ((hi[1] - lo[1]) / 32.0 + 1.0).ceil();
+    assert!(across > 256.0, "{across}");
+    assert_eq!(index.found_everywhere(), 1);
+    // Three kilometres from the first point the road runs: it is found there, and nothing
+    // else is within 200 m.
+    let line = r.centre_line(e);
+    let on = line.get(100).copied().expect("points");
+    assert_eq!(index.near(on, 1.0), vec![long, huge]);
+    assert_eq!(index.near([on[0], on[1] + 200.0], 1.0), vec![huge]);
+    assert_eq!(index.near([on[0], on[1] - 200.0], 1.0), vec![huge]);
+    // Far from every road: nothing but the road found everywhere.
+    assert_eq!(index.near([0.0, 3900.0], 2.0), vec![huge]);
+    assert_eq!(
+        index.ray_candidates([0.0, 1.0, 3900.0], [1.0, 0.0, 0.0], 200.0),
+        Some(vec![huge])
+    );
+    // A ray across the road looks at it; one that runs 200 m beside it for a kilometre does
+    // not; the short road is found where it is.
+    let crossing = index
+        .ray_candidates([on[0], 1.0, on[1] - 500.0], [0.0, 0.0, 1.0], 1000.0)
+        .unwrap();
+    assert!(crossing.contains(&long), "{crossing:?}");
+    let beside = index
+        .ray_candidates([on[0] - 500.0, 1.0, on[1] + 200.0], [1.0, 0.0, 0.0], 1000.0)
+        .unwrap();
+    assert_eq!(beside, vec![huge], "{beside:?}");
+    let at_short = index
+        .ray_candidates([1400.0, 1.0, 1500.0], [1.0, 0.0, 0.0], 200.0)
+        .unwrap();
+    assert_eq!(at_short, vec![short, huge], "{at_short:?}");
+    // Near the roads the hits are the ones of a walk over every entity, to the bit.
+    let mut checked = 0;
+    let mut rng = Rng::new(77);
+    // Rays from above, sloping down along or across the winding road.
+    for _ in 0..300 {
+        let k = rng.range(0.0, 199.0).floor();
+        let a = line.get(k as usize).copied().expect("points");
+        let origin = [
+            a[0] + rng.range(-150.0, 150.0),
+            20.0 + rng.range(0.0, 200.0),
+            a[1] - 400.0,
+        ];
+        let yaw = deg_to_rad(rng.range(-20.0, 20.0)).psin_cos();
+        let dir = [yaw.0, -0.05, yaw.1];
+        let max_m = 900.0;
+        let walked = ray::cast(&world, Some(&field), origin, dir, max_m, |_| false);
+        let (found, seen) = ray::cast_counted(
+            &world,
+            Some(&field),
+            Some(&index),
+            origin,
+            dir,
+            max_m,
+            |_| false,
+        );
+        assert_eq!(bits(found), bits(walked), "{origin:?} {dir:?}");
+        assert!(seen <= 2, "{seen} looked at");
+        checked += usize::from(walked.is_some());
+    }
+    assert!(checked > 30, "the rays meet the road: {checked}");
+}
+
 #[test]
 fn what_is_around_a_place_holds_every_solid_that_could_meet_it() {
     let (world, field) = mixed(14);
@@ -381,16 +502,19 @@ fn what_is_around_a_place_holds_every_solid_that_could_meet_it() {
         let reach = [0.0, 0.5, 2.0, 33.0][i % 4];
         let near = index.near(p, reach);
         // Every entity whose footprint meets the square is a candidate: by the footprint
-        // itself, walked over every entity.
-        for e in world.entities() {
-            let Some((lo, hi)) = gamecraft_sim::index::footprint(&world, e) else {
-                continue;
-            };
-            let meets = lo[0] <= p[0] + reach
+        // itself, walked over every entity (a road by the boxes of its segments).
+        let meets = |(lo, hi): ([f64; 2], [f64; 2])| {
+            lo[0] <= p[0] + reach
                 && hi[0] >= p[0] - reach
                 && lo[1] <= p[1] + reach
-                && hi[1] >= p[1] - reach;
-            assert!(!meets || near.contains(&e.id), "{p:?} {reach}: {:?}", e.id);
+                && hi[1] >= p[1] - reach
+        };
+        for e in world.entities() {
+            let could = match e.road() {
+                Some(road) => road.segment_boxes(e).iter().any(|b| meets(*b)),
+                None => gamecraft_sim::index::footprint(&world, e).is_some_and(meets),
+            };
+            assert!(!could || near.contains(&e.id), "{p:?} {reach}: {:?}", e.id);
         }
         assert!(near.windows(2).all(|w| w[0] < w[1]), "sorted, each once");
     }

@@ -4,8 +4,11 @@
 //! Every entity with a shape, a model's collider boxes or a road is a member, entered in each
 //! cell of the grid its footprint touches. A ray visits the cells its ground projection
 //! crosses and tests only their members; a character takes the members of the cells around it.
-//! An entity whose footprint touches more cells than [`MAX_CELLS`] (a long road) is tested
-//! always, as is a character (it moves every tick): both are few.
+//! A road is entered in the cells its own segments touch ([`Entity::road`],
+//! `Road::segment_boxes`), so a road that crosses a whole town is looked at only where it
+//! runs. An entity whose shape or collider touches more cells than [`MAX_CELLS`], or whose
+//! road more than [`MAX_ROAD_CELLS`], is tested always, as is a character (it moves every
+//! tick): all three are few.
 //!
 //! The index changes nothing in what is found: the candidates are a superset of what a walk
 //! over every entity would hit, the test of each is the same code, and ties are settled by
@@ -22,14 +25,40 @@ use std::collections::BTreeMap;
 /// surroundings look at a few hundred entities in a district, large enough that a 8 km world
 /// is a few ten thousand cells.
 pub const CELL_M: f64 = 32.0;
-/// Most cells one footprint may touch before the entity is tested always.
+/// Most cells the box around an entity's shape and model collider may touch before the entity
+/// is tested always.
 pub const MAX_CELLS: usize = 256;
+/// Most cells a road is entered in (those its segments' boxes touch, each once) before it is
+/// tested always: a road of the longest line the file allows (4096 points), run so that it
+/// turns back through more cells than any road of a place. Length alone does not reach it: a
+/// straight road of ten kilometres is some three hundred cells.
+pub const MAX_ROAD_CELLS: usize = 16_384;
 
 /// The smallest box around what an entity's shape, model collider or road occupies on the
 /// ground plane: `(min [x, z], max [x, z])`, or `None` for an entity nothing can meet (no
 /// shape, no model with bounds, no road with points), or with a number that is not finite.
-/// Conservative: what the simulation collides with and the renderer draws lies inside.
+/// Conservative: what the simulation collides with and the renderer draws lies inside. A road
+/// counts by the box around its whole line here; the index enters it by segment
+/// ([`MAX_ROAD_CELLS`]).
 pub fn footprint(world: &World, e: &Entity) -> Option<([f64; 2], [f64; 2])> {
+    let parts = parts_box(world, e);
+    let road = e.road().and_then(|road| road.bounds(e));
+    let box_ = match (parts, road) {
+        (None, None) => return None,
+        (Some(b), None) | (None, Some(b)) => b,
+        (Some((plo, phi)), Some((rlo, rhi))) => (
+            [plo[0].min(rlo[0]), plo[1].min(rlo[1])],
+            [phi[0].max(rhi[0]), phi[1].max(rhi[1])],
+        ),
+    };
+    let (lo, hi) = box_;
+    (lo.iter().chain(&hi).all(|v| v.is_finite()) && lo[0] <= hi[0] && lo[1] <= hi[1])
+        .then_some(box_)
+}
+
+/// The smallest box around an entity's shape and model collider on the ground plane:
+/// `(min [x, z], max [x, z])`, or `None` when it has neither.
+fn parts_box(world: &World, e: &Entity) -> Option<([f64; 2], [f64; 2])> {
     let mut lo = [f64::INFINITY; 2];
     let mut hi = [f64::NEG_INFINITY; 2];
     let mut grow = |x0: f64, z0: f64, x1: f64, z1: f64| {
@@ -66,11 +95,6 @@ pub fn footprint(world: &World, e: &Entity) -> Option<([f64; 2], [f64; 2])> {
         let (x0, z0, x1, z1) = turned(cx, cz, b.half[0], b.half[2], b.yaw_deg);
         grow(x0, z0, x1, z1);
     });
-    if let Some(road) = e.road()
-        && let Some((rlo, rhi)) = road.bounds(e)
-    {
-        grow(rlo[0], rlo[1], rhi[0], rhi[1]);
-    }
     let finite = lo.iter().chain(&hi).all(|v| v.is_finite()) && lo[0] <= hi[0] && lo[1] <= hi[1];
     finite.then_some((lo, hi))
 }
@@ -98,12 +122,32 @@ fn cell_count(from: [i64; 2], to: [i64; 2]) -> usize {
     usize::try_from(w.saturating_mul(h)).unwrap_or(usize::MAX)
 }
 
+/// Every cell of the range `from` to `to`, inclusive, in `cells`.
+fn push_cells(cells: &mut Vec<[i64; 2]>, from: [i64; 2], to: [i64; 2]) {
+    for cx in from[0]..=to[0] {
+        for cz in from[1]..=to[1] {
+            cells.push([cx, cz]);
+        }
+    }
+}
+
+/// Where an entity goes into the index.
+enum Placed {
+    /// Nothing a ray or a character can meet: not a member.
+    Nothing,
+    /// A candidate for every query.
+    Everywhere,
+    /// In these cells, sorted, each once.
+    Cells(Vec<[i64; 2]>),
+}
+
 /// Where a member is found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Place {
     /// In the cells its footprint touches.
     Cells,
-    /// Its footprint touches too many cells, or it is a character (which moves every tick):
+    /// Its footprint touches too many cells (a shape's or collider's more than [`MAX_CELLS`],
+    /// a road's more than [`MAX_ROAD_CELLS`]), or it is a character (which moves every tick):
     /// a candidate for every query.
     Everywhere,
 }
@@ -176,30 +220,22 @@ impl SpatialIndex {
         self.cells.len()
     }
 
+    /// How many members are found everywhere: the characters, and what is too large for the
+    /// grid. A large world should have few: every ray and every step looks at each of them.
+    pub fn found_everywhere(&self) -> usize {
+        self.everywhere().count()
+    }
+
     /// Puts `e` in (replacing what it had).
     fn insert(&mut self, world: &World, e: &Entity) {
-        let Some(box_) = footprint(world, e) else {
-            return;
-        };
         self.remove(e.id);
-        // A character moves every tick, and a footprint over more cells than the grid holds
-        // for it has no place: both are found everywhere.
-        let placed = if e.character().is_some() {
-            None
-        } else {
-            cells_of(box_).filter(|&(from, to)| cell_count(from, to) <= MAX_CELLS)
-        };
-        let (place, cells) = match placed {
-            Some((from, to)) => {
-                let mut cells = Vec::with_capacity(cell_count(from, to));
-                for cx in from[0]..=to[0] {
-                    for cz in from[1]..=to[1] {
-                        cells.push([cx, cz]);
-                    }
-                }
-                (Place::Cells, cells)
-            }
-            None => (Place::Everywhere, Vec::new()),
+        // A character moves every tick, and what has more cells than the grid holds for it
+        // has no place: both are found everywhere.
+        let (place, cells) = match Self::cells_of_entity(world, e) {
+            Placed::Nothing => return,
+            _ if e.character().is_some() => (Place::Everywhere, Vec::new()),
+            Placed::Everywhere => (Place::Everywhere, Vec::new()),
+            Placed::Cells(cells) => (Place::Cells, cells),
         };
         // The world holds at most a million entities: a member always fits.
         let Some(slot) = self
@@ -223,6 +259,49 @@ impl SpatialIndex {
             });
             self.by_entity.insert(e.id, slot);
         }
+    }
+
+    /// Where `e` goes: nothing to meet, everywhere, or in these cells sorted and each once.
+    /// The box around its shape and model collider counts as one footprint, at most
+    /// [`MAX_CELLS`] cells. A road counts by its segments: the cells each segment's box
+    /// ([`gamecraft_world::Road::segment_boxes`]) touches, at most [`MAX_ROAD_CELLS`] in all.
+    fn cells_of_entity(world: &World, e: &Entity) -> Placed {
+        let mut cells = Vec::new();
+        if let Some((lo, hi)) = parts_box(world, e) {
+            let Some((from, to)) = cells_of((lo, hi)) else {
+                return Placed::Everywhere;
+            };
+            if cell_count(from, to) > MAX_CELLS {
+                return Placed::Everywhere;
+            }
+            push_cells(&mut cells, from, to);
+        }
+        let Some(road) = e.road() else {
+            return if cells.is_empty() {
+                Placed::Nothing
+            } else {
+                Placed::Cells(cells)
+            };
+        };
+        // The work is bounded before the cells are counted once: a road of many long segments
+        // is found everywhere after a few of them.
+        let mut work = 0usize;
+        for (lo, hi) in road.segment_boxes(e) {
+            let Some((from, to)) = cells_of((lo, hi)) else {
+                return Placed::Everywhere;
+            };
+            work = work.saturating_add(cell_count(from, to));
+            if work > MAX_ROAD_CELLS.saturating_mul(4) {
+                return Placed::Everywhere;
+            }
+            push_cells(&mut cells, from, to);
+        }
+        cells.sort_unstable();
+        cells.dedup();
+        if cells.len() > MAX_ROAD_CELLS {
+            return Placed::Everywhere;
+        }
+        Placed::Cells(cells)
     }
 
     /// Takes the entity `id` out.

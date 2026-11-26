@@ -427,6 +427,75 @@ fn the_entity_places_turns_and_scales_the_road() {
 }
 
 #[test]
+fn the_boxes_of_the_segments_hold_the_road_and_its_round_pieces() {
+    // A road with a width per point, a sharp bend and round ends, turned and scaled by its
+    // entity: one box per segment, each the segment's ends widened by the larger half width.
+    let road = Road {
+        widths_m: vec![2.0, 6.0, 4.0, 10.0],
+        ..Road::new(vec![[0.0, 0.0], [40.0, 0.0], [40.0, 30.0], [10.0, 30.0]])
+    };
+    let mut world = World::new("boxes", 1);
+    let id = world
+        .add_entity(EntityDraft {
+            position: [100.0, 0.0, -50.0],
+            rotation_y_deg: 30.0,
+            scale: crate::Scale::per_axis(2.0, 1.0, 3.0),
+            components: vec![Component::Road(road)],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    let (e, r) = road_of(&world, id);
+    let boxes = r.segment_boxes(e);
+    assert_eq!(boxes.len(), 3);
+    let line = r.centre_line(e);
+    let middle = e.scale.middle();
+    for (i, (lo, hi)) in boxes.iter().enumerate() {
+        let (a, b) = (line[i], line[i + 1]);
+        let half = r.width_at(i).max(r.width_at(i + 1)) * middle / 2.0;
+        for axis in 0..2 {
+            assert!(
+                (lo[axis] - (a[axis].min(b[axis]) - half)).abs() < 1e-9
+                    && (hi[axis] - (a[axis].max(b[axis]) + half)).abs() < 1e-9,
+                "segment {i}, axis {axis}: {lo:?} {hi:?} around {a:?} {b:?}"
+            );
+        }
+    }
+    // Every piece of the footprint (the trapezoids, the joins at the bends, the round ends)
+    // lies in the boxes: the spatial index looks for a road there.
+    let inside = |p: [f64; 2]| {
+        boxes.iter().any(|(lo, hi)| {
+            p[0] >= lo[0] - 1e-9
+                && p[0] <= hi[0] + 1e-9
+                && p[1] >= lo[1] - 1e-9
+                && p[1] <= hi[1] + 1e-9
+        })
+    };
+    let pieces = r.footprint(e);
+    assert!(pieces.len() >= 3 + 2 + 2, "{}", pieces.len());
+    for piece in &pieces {
+        assert!(!piece.is_empty());
+        for p in piece {
+            assert!(inside(*p), "{p:?} outside {boxes:?}");
+        }
+    }
+    // A road of two points has one box, and the road's bounds lie in the boxes together.
+    let (world, _, ids) = world_with(hilly(), vec![Road::new(vec![[10.0, 10.0], [30.0, 60.0]])]);
+    let (e, r) = road_of(&world, ids[0]);
+    let boxes = r.segment_boxes(e);
+    assert_eq!(boxes.len(), 1);
+    let (lo, hi) = r.bounds(e).unwrap();
+    for p in [lo, hi, [lo[0], hi[1]], [hi[0], lo[1]]] {
+        assert!(inside_in(&boxes, p), "{p:?}");
+    }
+}
+
+fn inside_in(boxes: &[([f64; 2], [f64; 2])], p: [f64; 2]) -> bool {
+    boxes.iter().any(|(lo, hi)| {
+        p[0] >= lo[0] - 1e-9 && p[0] <= hi[0] + 1e-9 && p[1] >= lo[1] - 1e-9 && p[1] <= hi[1] + 1e-9
+    })
+}
+
+#[test]
 fn a_road_survives_the_cooked_cache() {
     let road = Road {
         widths_m: vec![3.0, 4.5],

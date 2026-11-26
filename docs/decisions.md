@@ -160,16 +160,22 @@ spec asked for well under a millisecond and a tick well under its step.
 
 - **A uniform grid of 32 m cells** (`gamecraft_sim::index`, `SpatialIndex`): every entity with
   a shape, a model's collider box or a road is a member of each cell its footprint touches
-  (the smallest box around what the simulation collides with and the renderer draws). A ray
-  walks the cells its ground projection crosses (Amanatides and Woo) and tests only their
-  members; a character takes the members of the cells around it. Chosen over a BVH (a grid is
-  rebuilt and updated in place far more simply, and the world is flat: two dimensions are
-  enough) and over trees of bounding boxes per entity (the same). 32 m because a kilometre of
-  ray then crosses some 40 cells and holds about 215 entities on that world, and a character's
-  square touches one to four.
-- **What the index cannot place is found everywhere**: a footprint over more than 256 cells (a
-  long road), a character, a footprint without a box. All are few. A ray that would cross
-  more cells than there are members to look at looks at every member instead (a small world).
+  (the smallest box around what the simulation collides with and the renderer draws). A road
+  is a member of the cells its own segments touch: the box of each segment widened on every
+  side by the larger of the half widths at its ends, so that a road crossing a whole town is
+  looked at only where it runs (2026-11-26, on a review of the first version, where the box
+  around a road's whole line touched more cells than the grid holds and every ray tested
+  every road). A ray walks the cells its ground projection crosses (Amanatides and Woo) and
+  tests only their members; a character takes the members of the cells around it. Chosen over
+  a BVH (a grid is rebuilt and updated in place far more simply, and the world is flat: two
+  dimensions are enough) and over trees of bounding boxes per entity (the same). 32 m because
+  a kilometre of ray then crosses some 40 cells and holds about 215 entities on that world
+  (225 with 300 roads crossing it), and a character's square touches one to four.
+- **What the index cannot place is found everywhere**: a shape's or collider's footprint over
+  more than 256 cells, a road over more than 16 384 cells (none of a place: a straight road of
+  ten kilometres is some three hundred), a character, a footprint without a box. All are few.
+  A ray that would cross more cells than there are members to look at looks at every member
+  instead (a small world).
 - **It changes no result.** The candidates are a superset of what a walk hits, each is tested by
   the same code, and the two places where order decided something are settled as the walk in
   id order settled them: a ray keeps the first of equal distances, which was the lowest id;

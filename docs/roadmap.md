@@ -261,9 +261,11 @@ from the engine, as mechanisms with no game in them, in the order they are sched
    before any simulation. On 300 000 entities over 8 km (release): a kilometre of ray 0.6 ms
    (44 ms before, 215 entities looked at instead of 260 000), a line of sight of 300 m 0.5 ms
    (43 ms), a tick with eight walkers 7 ms (52 ms, 66 solids tested instead of millions);
-   the same hits to the bit (`decisions.md`). Open: the per-tick walks that find characters,
-   zones and interactables; `sim.start` on that world takes 1.4 s (validation, the state
-   hash and the solids, all once).
+   the same hits to the bit (`decisions.md`). Roads are entered by their segments (the review
+   fix of the same day): 300 roads crossing that world take a ray from 215 entities looked at
+   to 225, where found everywhere they took it to 515. Open: the per-tick walks that find
+   characters, zones and interactables; `sim.start` on that world takes 1.4 s (validation,
+   the state hash and the solids, all once).
 9. **Filtered shadows** (PCF, soft edges) instead of stair-stepped shadow edges at eye level.
 10. ~~**Water as a surface kind in the simulation**~~: done 2026-11-26: a `water` component (an
     outline and a level, or the sea everywhere), `water.add`/`water.set`, `query.ground` and
