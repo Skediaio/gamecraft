@@ -290,17 +290,15 @@ from the engine, as mechanisms with no game in them, in the order they are sched
     All of it is render-side: the simulation only gives the moment of the event, so the pinned
     hashes stay. The keyframe playback in the renderer may need VisionCraft, as the shadow
     filter did. Skinned characters stay in M6.
-14. **Attachments as separate models on sockets:** a weapon (or any model) names its mount points
-    as glTF nodes, for example `socket_rail_top`, `socket_rail_left` and `socket_muzzle`.
-    An attachment (a sight, a light, a grip, a suppressor) is a model of its own with its own
-    bounds and LOD levels, placed on a socket and drawn as its own item.
-    Attachments carry `socket_*` nodes of their own, so a mount is a tree: weapon -> socket ->
-    attachment -> socket -> attachment (a riser mount holding an optic, a muzzle adapter holding
-    a suppressor). Each model's origin is where it meets its parent's socket.
-    An attachment can be added, swapped or removed at run time at any depth (removing one takes
-    its own attachments with it, or refuses while it holds any, by choice) without touching the
-    weapon's model.
-    The simulation can read what an attachment changes (weight, a suppressor's sound range).
+14. ~~**Attachments as separate models on sockets**~~: done 2026-11-26: a model's mount points
+    are glTF nodes `socket_<name>` (position and full rotation), measured by the host as the
+    bounds are; an attachment is a model of its own on the `model` component (`attachments`, a
+    tree readably nested, at most 8 levels and 64 per entity, written only when there is one),
+    placed by the composed transform and drawn as its own item at the socket's full rotation,
+    following its entity between ticks. `attachment.add`, `.set`, `.remove` (refuses while the
+    attachment holds any, or `cascade`) and `.list` (`design/attachments.md`). The simulation
+    treats an attachment as part of its root entity. Open: a collider and a mass of its own, what
+    an attachment changes (a suppressor's sound range), attachments in the far levels of a cell.
 
 ## M4: Physics
 

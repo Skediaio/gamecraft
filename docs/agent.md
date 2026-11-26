@@ -267,6 +267,10 @@ drops the earlier layer of its name).
   `SELECT e.name FROM entities e JOIN entity_tags t ON t.entity_id = e.id WHERE t.tag = 'enemy'
   AND (e.x - 4) * (e.x - 4) + (e.z + 54) * (e.z + 54) <= 10000`. The index is rebuilt from the
   world when it changed; it cannot be written to, and change the world with commands instead.
+- `attachment.list` shows the mount trees of a world (`{entity, path, socket, asset, position,
+  rotation, sockets, attachments}`), `attachment.add {entity, socket, asset, path?, scale?}` mounts
+  a model on a socket at any depth, `attachment.set` swaps one and `attachment.remove {entity, path,
+  cascade?}` takes one off (`docs/design/attachments.md`).
 - `project.export {path}` writes the resolved world as one `.gamecraft` file, the format for
   tests and exchange; its answer names the pack that has the world's models (`pack`), the files
   it needs of one (`needs`) and the models none has (`missing`). The file draws its models when it

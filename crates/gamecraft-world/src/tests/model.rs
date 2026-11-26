@@ -14,6 +14,7 @@ fn model(asset: &str) -> Model {
         collider: ModelCollider::Box,
         lod_distances_m: None,
         draw_distance_m: None,
+        attachments: Vec::new(),
     }
 }
 

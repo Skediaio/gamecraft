@@ -31,6 +31,10 @@
 //! - **Water**: the `water` component as VisionCraft's water surface (`water`): the sea
 //!   everywhere or the largest area, with waves from the wind; the other areas are named in
 //!   the problems.
+//! - **Attachments** ([`gamecraft_world::attachments`]): a model mounted on a named socket of
+//!   another model (a sight on a rail, an optic on a riser on the rail) is drawn as its own
+//!   item, with its own levels of detail, at the socket's full rotation, and follows its
+//!   entity between ticks.
 //! - **Characters**: a body (cylinder and head) with a small dark visor at eye height on the
 //!   side the character faces.
 //! - **Sky and light**: the physical sky, the sun from the environment, clouds, mist, rain, wind
@@ -53,6 +57,7 @@
 // so the platform's sines and powers are fine here.
 #![allow(clippy::disallowed_methods)]
 
+mod attachments;
 mod blit;
 mod camera;
 mod culling;

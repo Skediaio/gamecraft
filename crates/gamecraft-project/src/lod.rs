@@ -1175,6 +1175,55 @@ pub fn colliders<'a>(document: &'a Document, plan: &Plan) -> Result<Vec<Visit<'a
     Ok(out)
 }
 
+/// The sockets of a model: every node of the default scene named `socket_<name>`
+/// ([`gamecraft_world::attachments::socket_name_of`]) with its position and full rotation in
+/// the asset's own axes, by name. A name used twice keeps the first; a node outside the scene
+/// has no place and is no socket. An error, never a panic, for a file without a scene or a node
+/// tree that is too deep or loops.
+pub fn sockets(document: &Document) -> Result<BTreeMap<String, gamecraft_world::Socket>, String> {
+    use gamecraft_world::attachments::socket_name_of;
+    let scene = document
+        .default_scene()
+        .or_else(|| document.scenes().next())
+        .ok_or("the file has no scene")?;
+    let nodes: Vec<gltf::Node<'_>> = document.nodes().collect();
+    let mut stack: Vec<(usize, [f64; 16], usize)> =
+        scene.nodes().map(|n| (n.index(), IDENTITY, 0)).collect();
+    let mut visits = 0usize;
+    // Every socket with its node, then the first node of a name in the file wins.
+    let mut found: Vec<(usize, String, gamecraft_world::Socket)> = Vec::new();
+    while let Some((index, parent, depth)) = stack.pop() {
+        visits += 1;
+        if visits > MAX_NODE_VISITS || depth > MAX_NODE_DEPTH {
+            return Err("the scene's node tree is too deep or loops".into());
+        }
+        let Some(node) = nodes.get(index) else {
+            continue;
+        };
+        let world = mul(&parent, &to_f64(&node.transform().matrix()));
+        let name = node.name().unwrap_or("");
+        if let Some(socket) = socket_name_of(name) {
+            let (_, rotation, position) =
+                DMat4::from_cols_array(&world).to_scale_rotation_translation();
+            found.push((
+                index,
+                socket.to_string(),
+                gamecraft_world::Socket {
+                    position: position.to_array(),
+                    rotation: rotation.to_array(),
+                },
+            ));
+        }
+        stack.extend(node.children().map(|c| (c.index(), world, depth + 1)));
+    }
+    found.sort_by_key(|(index, _, _)| *index);
+    let mut out: BTreeMap<String, gamecraft_world::Socket> = BTreeMap::new();
+    for (_, name, socket) in found {
+        out.entry(name).or_insert(socket);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

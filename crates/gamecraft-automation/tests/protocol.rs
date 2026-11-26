@@ -314,6 +314,13 @@ fn every_listed_example_runs() {
         {
             ok(&mut fresh, "sim.start", json!({}));
         }
+        // The attachment commands' examples name a model with measured sockets
+        // and a mount on it (derived data a bare world lacks): the engine's test world.
+        if id.starts_with("attachment.") {
+            fresh
+                .session_mut()
+                .replace_document(common::mounts::world());
+        }
         ok(&mut fresh, id, c["example"].clone());
         ran += 1;
     }

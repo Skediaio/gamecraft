@@ -838,6 +838,7 @@ impl Host {
                 let count = catalog.len();
                 world.set_model_bounds(crate::assets::bounds(&catalog));
                 world.set_model_parts(crate::assets::parts(&catalog));
+                world.set_model_sockets(crate::assets::sockets(&catalog));
                 let dir_text = dir.display().to_string();
                 (
                     json!({"path": dir_text, "id": root, "packs": packs, "found": found, "assets": count}),

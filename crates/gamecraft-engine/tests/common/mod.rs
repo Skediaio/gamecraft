@@ -5,6 +5,8 @@ use gamecraft_engine::{CommandError, Session, example_world};
 use gamecraft_world::World;
 use serde_json::Value;
 
+pub mod mounts;
+
 /// A fresh session of the example world.
 pub fn example() -> Session {
     Session::new(example_world())
@@ -15,6 +17,16 @@ pub fn playing() -> Session {
     let mut s = example();
     s.run("sim.start", &Value::Null).unwrap();
     s
+}
+
+/// A fresh session of the example world with a mounted model (`mounts`).
+pub fn example_with_mounts() -> Session {
+    mounts::session()
+}
+
+/// A fresh session of the example world with a mounted model (`mounts`), playing.
+pub fn playing_with_mounts() -> Session {
+    mounts::playing()
 }
 
 /// Everything a failed command must leave unchanged.

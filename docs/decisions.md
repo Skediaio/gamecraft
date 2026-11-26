@@ -8,6 +8,39 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-26: Attachments are a tree on the model component, placed through sockets the host measures
+
+Roadmap item 14 asked for attachments as separate models on nested sockets, with the full rotation
+of a socket applied on the render side only. Decisions:
+
+- **The recipe is data of the `model` component**: `attachments: [{socket, asset, scale?,
+  attachments: [...]}]`, a tree readably nested, written only when there is one, so a world without
+  attachments keeps its text and its hash. Chosen over entities of their own (an attachment is not
+  a thing an agent places or finds: it is part of its root entity, moves with it and is removed with
+  it; ids, layers and undo for every screw would be noise) and over a flat list with parent
+  references (a tree reads as it mounts, and the file is the format people edit).
+- **A socket holds one attachment**, so a path (the chain of socket names from the entity's model)
+  names one attachment, and a command can act at any depth. `attachment.add` to a mounted socket is
+  refused, with the command that swaps; a file with two on one socket is refused.
+- **Sockets are derived data** like the bounds: the glTF nodes `socket_<name>` of a model (position
+  and full rotation in the asset's axes) are measured by `gamecraft_project::inspect` and handed to
+  the session (`Session::set_model_sockets`). The world document never reads the asset. An asset
+  whose sockets were not measured (a world opened alone, without its pack) gives no place, and
+  `attachment.add` says so instead of guessing.
+- **Where an attachment lands** is composed in `f64` through `glam`'s `libm` maths, operation for
+  operation, on every platform: the entity's frame (position, yaw, scale and the model's scale), then
+  for each attachment of the chain the socket's frame and the attachment's scale. An attachment's
+  origin meets its socket and its axes are the socket's: +Y is the outward normal, +Z runs along the
+  parent's length.
+- **Removing one that holds attachments refuses** unless `cascade` is given: the safe default is the
+  one that loses nothing by surprise; an agent that means to take a branch off says so.
+- **The simulation treats an attachment as part of its root entity**: no collider, no mass, nothing
+  it changes yet; the state hash covers the document, so a world with attachments hashes as it
+  reads. The renderer draws each as its own item at the socket's full rotation, following its
+  entity between ticks as the entity's own model does; on a downed character it lies with the
+  character's model. A hidden character (a first-person view's own body) keeps its attachments: they
+  are what the player holds.
+
 ### 2026-11-26: Collision from a model's own geometry by `*_collider` nodes or a box per mesh, and hidden shapes
 
 A model collided as its bounding box, so a doorway in a building model was cosmetic. Most

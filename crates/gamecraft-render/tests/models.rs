@@ -135,6 +135,7 @@ fn add_model(world: &mut World, name: &str, asset: &str, at: [f64; 3], yaw: f64,
                 collider: ModelCollider::Box,
                 lod_distances_m: None,
                 draw_distance_m: None,
+                attachments: Vec::new(),
             })],
             ..EntityDraft::default()
         })
@@ -330,6 +331,7 @@ fn add_walker(world: &mut World, asset: &str, scale: f64) -> gamecraft_world::En
                     collider: ModelCollider::Box,
                     lod_distances_m: None,
                     draw_distance_m: None,
+                    attachments: Vec::new(),
                 }),
             ],
             ..EntityDraft::default()

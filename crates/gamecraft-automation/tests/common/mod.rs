@@ -5,6 +5,11 @@
 
 pub mod models;
 
+/// The engine's example world with a mounted model, the same one the engine's own tests run
+/// the attachment commands' examples on.
+#[path = "../../../gamecraft-engine/tests/common/mounts.rs"]
+pub mod mounts;
+
 use gamecraft_automation::{Access, Host, Pictures, RenderRequest, Rendered, mcp, rpc};
 use gamecraft_world::{HeightField, World};
 use serde_json::{Value, json};

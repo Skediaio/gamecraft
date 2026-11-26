@@ -14,7 +14,7 @@
 
 mod common;
 
-use common::{example, playing, refuse, snapshot, undo_depth};
+use common::{example, playing, playing_with_mounts, refuse, snapshot, undo_depth};
 use gamecraft_engine::{Scope, Session};
 use gamecraft_sim::MAX_STEP_TICKS;
 use gamecraft_world::{EntityId, World};
@@ -295,7 +295,8 @@ fn undo_and_redo_are_refused_while_playing_with_the_reason() {
 }
 
 /// Every World command, run with its example while playing, changes the running world and
-/// leaves the document untouched (rule 6).
+/// leaves the document untouched (rule 6). The attachment commands' examples name a model
+/// with measured sockets and a mount on it (`common::mounts`).
 #[test]
 fn every_world_command_acts_on_the_running_world() {
     let base = example();
@@ -307,7 +308,11 @@ fn every_world_command_acts_on_the_running_world() {
         .collect();
     assert!(specs.len() >= 10);
     for (name, example) in specs {
-        let mut s = playing();
+        let mut s = if name.starts_with("attachment.") {
+            playing_with_mounts()
+        } else {
+            playing()
+        };
         let doc = s.document().clone();
         let running = s.live().unwrap().world().clone();
         let (rev, view) = (s.revision(), s.view_revision());

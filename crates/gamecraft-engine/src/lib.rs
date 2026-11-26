@@ -30,7 +30,7 @@
 //! Commands live in one module per area, each with its own `SPECS` list of
 //! `Registration { spec, handler }`: `world_cmds.rs`, `entity_cmds.rs`, `play_cmds.rs`,
 //! `inspect_cmds.rs`, `scenario_cmds.rs`, `aim_cmds.rs`, `gm_cmds.rs`, `terrain_cmds.rs`,
-//! `road_cmds.rs`, `water_cmds.rs`, .... A handler is a `fn` of its scope: a World handler
+//! `road_cmds.rs`, `water_cmds.rs`, `attachment_cmds.rs`, .... A handler is a `fn` of its scope: a World handler
 //! edits a copy of the world (`fn(&mut Edit, Params)`), a Query handler reads the session
 //! (`fn(&Session, Params)`),
 //! a Play handler works on the play state (`fn(&mut Session, Params)`). Add the command to its
@@ -39,6 +39,7 @@
 //! panic hunt picks the new command up by itself.
 
 mod aim_cmds;
+mod attachment_cmds;
 mod catalog_cmds;
 mod combat_cmds;
 mod entity_cmds;

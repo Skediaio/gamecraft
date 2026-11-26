@@ -54,6 +54,9 @@ pub struct ModelSummary {
     pub lod_source: Option<crate::lod::LodSource>,
     /// The collision parts of the `mesh` collider, and where they come from.
     pub collider: Collider,
+    /// The sockets of the model (its glTF nodes `socket_<name>`) with their frames in the
+    /// asset's own axes, by name: where attachments mount ([`gamecraft_world::attachments`]).
+    pub sockets: BTreeMap<String, gamecraft_world::Socket>,
 }
 
 /// Where a model's collision parts come from.
@@ -238,6 +241,7 @@ pub fn inspect(
     let (document, blob) = open(bytes)?;
     let doc = &document;
     let plan = crate::lod::plan(doc, split_glb(bytes)?.0);
+    let sockets = crate::lod::sockets(doc)?;
     let mut buffers: Vec<Option<Vec<u8>>> = Vec::new();
     for buffer in doc.buffers() {
         let data =
@@ -408,6 +412,7 @@ pub fn inspect(
         triangles,
         bounds,
         collider,
+        sockets,
         meshes: doc.meshes().len(),
         materials: doc.materials().len(),
         images: doc.images().len(),

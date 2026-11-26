@@ -153,15 +153,23 @@ fn assets_base() -> Option<String> {
     })
 }
 
-/// Fetches the files of every model `world` shows (a `.gltf` with the files it refers to, and
-/// the textures of the pack's store a `.glb` or a `.gltf` refers to by `../textures/...`) from
-/// [`assets_base`], measures each model and gives `world` their bounding boxes, as a native
-/// host does from a project (so solid models collide in the browser too). A model that cannot
-/// be fetched or read is told on the console and left out: the renderer draws its stand-in.
+/// Fetches the files of every model `world` shows, its attachments included (a `.gltf` with the
+/// files it refers to, and the textures of the pack's store a `.glb` or a `.gltf` refers to by
+/// `../textures/...`) from [`assets_base`], measures each model and gives `world` their bounding
+/// boxes, collision parts and sockets, as a native host does from a project (so solid models
+/// collide in the browser too). A model that cannot be fetched or read is told on the console
+/// and left out: the renderer draws its stand-in.
 pub async fn load_assets(world: &mut World) -> Vec<(String, Vec<u8>)> {
     let used: std::collections::BTreeSet<String> = world
         .entities()
-        .filter_map(|e| e.model().map(|m| m.asset.clone()))
+        .filter_map(|e| e.model())
+        .flat_map(|m| {
+            std::iter::once(m.asset.clone()).chain(
+                gamecraft_world::attachments::shown(m)
+                    .into_iter()
+                    .map(|a| a.asset.clone()),
+            )
+        })
         .collect();
     let Some(base) = assets_base().filter(|_| !used.is_empty()) else {
         return Vec::new();
@@ -169,6 +177,7 @@ pub async fn load_assets(world: &mut World) -> Vec<(String, Vec<u8>)> {
     let mut files = Vec::new();
     let mut bounds = std::collections::BTreeMap::new();
     let mut collider_parts = std::collections::BTreeMap::new();
+    let mut sockets = std::collections::BTreeMap::new();
     for asset in used {
         let fetched = async {
             let bytes = fetch_bytes(&format!("{base}{asset}")).await?;
@@ -195,6 +204,7 @@ pub async fn load_assets(world: &mut World) -> Vec<(String, Vec<u8>)> {
             Ok((bytes, fetched, summary)) => {
                 bounds.insert(asset.clone(), summary.bounds);
                 collider_parts.insert(asset.clone(), summary.collider.parts.clone());
+                sockets.insert(asset.clone(), summary.sockets.clone());
                 files.push((asset, bytes));
                 files.extend(fetched.into_iter().map(|(_, path, data)| (path, data)));
             }
@@ -203,6 +213,7 @@ pub async fn load_assets(world: &mut World) -> Vec<(String, Vec<u8>)> {
     }
     world.set_model_bounds(bounds);
     world.set_model_parts(collider_parts);
+    world.set_model_sockets(sockets);
     files
 }
 

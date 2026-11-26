@@ -26,7 +26,7 @@ use gamecraft_project::{
     ASSETS_DIR, AssetRecord, License, ModelSummary, PackAsset, Project, credits, inspect,
     record_path,
 };
-use gamecraft_world::{EntityId, ModelBounds, ModelBox, World, is_model_path};
+use gamecraft_world::{EntityId, ModelBounds, ModelBox, Socket, World, is_model_path};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -131,6 +131,17 @@ pub(crate) fn parts(catalog: &Catalog) -> BTreeMap<String, Vec<ModelBox>> {
         .iter()
         .filter_map(|(path, a)| match &a.summary {
             Some(Ok(s)) => Some((path.clone(), s.collider.parts.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The sockets of the catalog's models that could be read: where attachments mount.
+pub(crate) fn sockets(catalog: &Catalog) -> BTreeMap<String, BTreeMap<String, Socket>> {
+    catalog
+        .iter()
+        .filter_map(|(path, a)| match &a.summary {
+            Some(Ok(s)) => Some((path.clone(), s.sockets.clone())),
             _ => None,
         })
         .collect()
@@ -244,7 +255,8 @@ pub(crate) fn asset_specs() -> Vec<CommandSpec> {
             vec![],
             "{assets: [{path, pack, kind, license, author, source_url, title, changes, bytes, \
              files, triangles, bounds: {min, max} | null, collider: {source: \"colliders\" | \
-             \"meshes\" | \"box\", parts, boxes: [{center, half}], note}, lods: [{level, \
+             \"meshes\" | \"box\", parts, boxes: [{center, half}], note}, sockets: [names], lods: \
+             [{level, \
              triangles, until_m}], draw_distance_m, lod_source, lod_warnings, problem, \
              used_by}], textures: [{path, \
              pack, bytes, license, author, source_url, title, changes, used_by: [models]}], \
@@ -488,6 +500,10 @@ impl Host {
                 "triangles": triangles,
                 "bounds": bounds,
                 "collider": collider,
+                "sockets": match &a.summary {
+                    Some(Ok(s)) => s.sockets.keys().cloned().collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                },
                 "lods": lods,
                 "draw_distance_m": draw_distance_m,
                 "lod_source": lod_source,
@@ -820,6 +836,8 @@ impl Host {
         self.session.set_model_bounds(all);
         self.session
             .set_model_parts(crate::assets::parts(&self.assets));
+        self.session
+            .set_model_sockets(crate::assets::sockets(&self.assets));
         Ok(answer)
     }
 }

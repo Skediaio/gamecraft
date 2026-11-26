@@ -10,6 +10,7 @@
 //! no bounds is not solid and is not hit by rays; one with the `mesh` collider collides as its
 //! bounding box until its parts are handed over.
 
+use crate::attachments::Attachment;
 use crate::error::Ctx;
 use crate::limits::{SCALE_MAX, SCALE_MIN};
 use crate::{Entity, WorldError};
@@ -119,11 +120,18 @@ pub struct Model {
     /// drawn. Left out: the asset's own, else from its size. Not written when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draw_distance_m: Option<f64>,
+    /// Models mounted on this model's named sockets (glTF nodes `socket_<name>`), in the order
+    /// given, each with what is mounted on its own sockets ([`crate::attachments`]): a mount
+    /// tree at most [`MAX_ATTACHMENT_DEPTH`] deep. Default none; written only when there is one,
+    /// so a world without attachments keeps its text and its hash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
 }
 
 impl Model {
     /// The component that shows `asset` (a path inside a pack's `assets/` folder) as it comes:
-    /// scale 1, not solid, its bounding box as the collider, the asset's own distances.
+    /// scale 1, not solid, its bounding box as the collider, the asset's own distances, no
+    /// attachments.
     pub fn of(asset: impl Into<String>) -> Model {
         Model {
             asset: asset.into(),
@@ -132,7 +140,41 @@ impl Model {
             collider: ModelCollider::Box,
             lod_distances_m: None,
             draw_distance_m: None,
+            attachments: Vec::new(),
         }
+    }
+
+    /// The attachment at `path` below this model (each name a socket of the attachment it is
+    /// on; the first one of this model's own attachments).
+    pub fn attachment(&self, path: &[String]) -> Option<&Attachment> {
+        crate::attachments::walk(self, path).and_then(|chain| chain.last().copied())
+    }
+
+    /// The attachment at `path` below this model, to change.
+    pub fn attachment_mut(&mut self, path: &[String]) -> Option<&mut Attachment> {
+        // Where each step lies in its list, found by a shared read; then one mutable walk.
+        let mut steps = Vec::with_capacity(path.len());
+        let mut list: &[Attachment] = &self.attachments;
+        for socket in path {
+            let i = list.iter().position(|a| a.socket == *socket)?;
+            steps.push(i);
+            list = &list.get(i)?.attachments;
+        }
+        let (&first, rest) = steps.split_first()?;
+        let mut at = self.attachments.get_mut(first)?;
+        for &i in rest {
+            at = at.attachments.get_mut(i)?;
+        }
+        Some(at)
+    }
+
+    /// The list of attachments that holds the one at `path`: the list of the attachment at
+    /// `path` itself (what is mounted on it), the model's own list for an empty `path`.
+    pub fn attachments_at_mut(&mut self, path: &[String]) -> Option<&mut Vec<Attachment>> {
+        if path.is_empty() {
+            return Some(&mut self.attachments);
+        }
+        Some(&mut self.attachment_mut(path)?.attachments)
     }
 
     pub(crate) fn validate(&self, ctx: Ctx) -> Result<(), WorldError> {
@@ -149,9 +191,20 @@ impl Model {
             ));
         }
         ctx.range("model.scale", self.scale, SCALE_MIN, SCALE_MAX, "")?;
-        self.validate_lod(ctx)
+        self.validate_lod(ctx)?;
+        self.validate_attachments(ctx)
     }
 
+    /// The attachments: at most [`MAX_ATTACHMENTS`] on one entity, every socket of one list of
+    /// siblings used once (a socket holds one attachment, so a path names one).
+    fn validate_attachments(&self, ctx: Ctx) -> Result<(), WorldError> {
+        let mut count = 0usize;
+        for (i, a) in self.attachments.iter().enumerate() {
+            a.validate(ctx, 1, &format!("model.attachments[{i}]"), &mut count)?;
+        }
+        check_siblings(ctx, "model.attachments", &self.attachments)?;
+        Ok(())
+    }
     /// The level-of-detail distances: at most one fewer than a model may have levels, each
     /// finite and above 0, each farther than the one before, and the last nearer than the draw
     /// distance when the component gives one (a level past it would never be drawn).
@@ -207,6 +260,26 @@ impl Model {
         }
         Ok(())
     }
+}
+
+/// No two attachments of one list share a socket: `attachment.add` to a mounted socket is
+/// refused, and a file that does it is refused too, so a path names one attachment.
+fn check_siblings(ctx: Ctx, field: &str, list: &[Attachment]) -> Result<(), WorldError> {
+    for (i, a) in list.iter().enumerate() {
+        if list.iter().take(i).any(|b| b.socket == a.socket) {
+            return Err(ctx.invalid(
+                format!("{field}[{i}].socket"),
+                format!("{:?}", a.socket),
+                format!(
+                    "the socket `{}` already holds an attachment of this list; a socket holds one \
+                     attachment (swap it with attachment.set)",
+                    a.socket
+                ),
+            ));
+        }
+        check_siblings(ctx, &format!("{field}[{i}].attachments"), &a.attachments)?;
+    }
+    Ok(())
 }
 
 /// The local bounding box of a model asset, metres, in the asset's own axes (Y up; the origin

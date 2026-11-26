@@ -12,15 +12,21 @@
 
 mod common;
 
-use common::{example, playing};
+use common::{example, example_with_mounts, playing};
 use gamecraft_engine::{Scope, Session};
 
 /// Play commands whose example runs without a simulation.
 const RUN_WITHOUT_SIMULATION: [&str; 2] = ["sim.start", "sim.state"];
 
+/// Commands whose example needs a model with measured sockets (derived data a bare world
+/// lacks): they run on the example world with a mounted model.
+const NEEDS_SOCKETS: &str = "attachment.";
+
 fn session_for(name: &str, scope: Scope) -> Session {
     if scope == Scope::Play && !RUN_WITHOUT_SIMULATION.contains(&name) {
         playing()
+    } else if name.starts_with(NEEDS_SOCKETS) {
+        example_with_mounts()
     } else {
         example()
     }
@@ -58,7 +64,7 @@ fn every_world_example_is_one_exact_undo_step() {
         .cloned()
         .collect();
     for spec in specs {
-        let mut s = example();
+        let mut s = session_for(&spec.name, spec.scope);
         let before = s.document().clone();
         let rev = s.revision();
         s.run(&spec.name, &spec.example).unwrap();

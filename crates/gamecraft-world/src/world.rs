@@ -1,5 +1,6 @@
 //! The world document and its `.gamecraft` JSON format.
 
+use crate::attachments::{Socket, Sockets};
 use crate::error::Ctx;
 use crate::instance::{ChildEdit, Lookup, Pending, Written, mark_written, place_derived};
 use crate::limits::{MAX_ENTITIES, MAX_HIERARCHY_DEPTH, MAX_PREFABS};
@@ -59,6 +60,9 @@ pub struct World {
     /// boxes in the asset's own axes, derived from the assets by the host, never written to the
     /// file.
     model_parts: BTreeMap<String, Vec<ModelBox>>,
+    /// The sockets of model assets the host measured (glTF nodes `socket_<name>`): by asset
+    /// path, then by name. Derived data, never written to the file.
+    model_sockets: BTreeMap<String, BTreeMap<String, Socket>>,
 }
 
 /// The file layout, in the order the fields are written.
@@ -282,6 +286,7 @@ impl World {
             next_entity_id: EntityId(1),
             model_bounds: BTreeMap::new(),
             model_parts: BTreeMap::new(),
+            model_sockets: BTreeMap::new(),
         }
     }
 
@@ -357,6 +362,34 @@ impl World {
                 None => 0,
             },
         }
+    }
+
+    /// The sockets of the model asset `asset`, as the host measured them; `None` when the host
+    /// gave none (a world opened alone, without its pack).
+    pub fn model_sockets(&self, asset: &str) -> Option<&BTreeMap<String, Socket>> {
+        self.model_sockets.get(asset)
+    }
+
+    /// Every socket of every model asset the host measured, by asset path, then by name.
+    pub fn all_model_sockets(&self) -> &Sockets {
+        &self.model_sockets
+    }
+
+    /// Hands over the sockets of the model assets (by asset path), which the host derived from
+    /// the assets' glTF nodes `socket_<name>`. Derived data: it is not written to the file and
+    /// does not change the document's text. A socket whose position or rotation is not finite
+    /// is left out.
+    pub fn set_model_sockets(&mut self, sockets: Sockets) {
+        self.model_sockets = sockets
+            .into_iter()
+            .map(|(asset, map)| {
+                let map = map
+                    .into_iter()
+                    .filter(|(_, s)| s.position.iter().chain(&s.rotation).all(|v| v.is_finite()))
+                    .collect();
+                (asset, map)
+            })
+            .collect();
     }
 
     /// The samples of the terrain's heightmap when its source is one; `None` otherwise.
@@ -1205,6 +1238,7 @@ impl World {
             next_entity_id,
             model_bounds: BTreeMap::new(),
             model_parts: BTreeMap::new(),
+            model_sockets: BTreeMap::new(),
         };
         world.validate()?;
         Ok(world)

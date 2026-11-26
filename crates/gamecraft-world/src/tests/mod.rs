@@ -1,5 +1,6 @@
 //! Unit tests of the crate, one file per area.
 
+mod attachments;
 mod combat;
 mod cooked;
 mod document;

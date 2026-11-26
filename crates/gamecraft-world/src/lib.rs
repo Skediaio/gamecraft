@@ -20,6 +20,8 @@
 //!
 //! A `model` component names a glTF asset of a pack; the asset's bounding box is derived data
 //! that the host computes and hands over with [`World::set_model_bounds`] ([`ModelBounds`]).
+//! Attachments, models mounted on a model's named sockets, are [`attachments`]: a tree on the
+//! component, placed by sockets the host measures ([`World::set_model_sockets`]).
 //!
 //! A `water` component is an area covered by a flat surface at one level; where it is water and
 //! how deep follows from its outline, its level and the ground ([`water`]).
@@ -27,6 +29,7 @@
 //! No GPU, no files, no clock: everything here is deterministic. Conventions: metres, Y up,
 //! the ground plane is x and z, north is -Z and east is +X; an entity's position is its base.
 
+pub mod attachments;
 mod combat;
 mod component;
 pub mod cooked;
@@ -52,6 +55,10 @@ mod world;
 #[cfg(test)]
 mod tests;
 
+pub use attachments::{
+    Attachment, MAX_ATTACHMENT_DEPTH, MAX_ATTACHMENTS, MAX_SOCKET_NAME_CHARS, SOCKET_PREFIX,
+    Socket, Sockets, is_socket_name, is_socket_node, list_sockets, place, socket_name_of, walk,
+};
 pub use combat::{Behaviour, BehaviourMode, Health, Launcher};
 pub use component::{
     Character, Component, Interactable, Light, Plant, Shape, ShapeKind, Tags, Zone, ZoneShape,

@@ -46,6 +46,7 @@ fn with_model(
                 collider,
                 lod_distances_m: None,
                 draw_distance_m: None,
+                attachments: Vec::new(),
             })],
             layer: None,
         })

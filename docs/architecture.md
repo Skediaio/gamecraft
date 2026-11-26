@@ -61,7 +61,9 @@ Since then: scenario data (zones, objectives, triggers; `design/scenarios.md`), 
 measures and the world carries as derived data, so the simulation can collide without reading a
 file), terrain edits (sculpting and painting as an ordered list of recipes over the source),
 water (`water` components: an outline and a level, derived into where it is water and how deep;
-`design/water.md`) and projects of packs layered by id are in (`design/projects.md`). Planned: full orientation,
+`design/water.md`), attachments (models mounted on a model's named sockets: a tree on the
+`model` component, placed through sockets the host measures; `design/attachments.md`) and
+projects of packs layered by id are in (`design/projects.md`). Planned: full orientation,
 layers, generators (forests, roads, rivers) (M3); rigid bodies and colliders (M4); scripts (M5).
 
 ### Axes and units
@@ -101,7 +103,8 @@ and the steps with their ticks and hashes, so a directed session replays to the 
 (the CLI's is `gamecraft-render` on a headless wgpu device) to draw the world of the running
 simulation, or else the document. The adapter turns the height field into terrain chunks, each
 plant into meshes and textures from VisionCraft's generator, each shape into a mesh, and the
-environment into sun, sky, clouds, mist and wind, then reads the frame back and encodes a PNG.
+environment into sun, sky, clouds, mist and wind, each attachment at its socket's full
+rotation, then reads the frame back and encodes a PNG.
 
 ## Determinism
 

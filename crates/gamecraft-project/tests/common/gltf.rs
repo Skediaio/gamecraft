@@ -62,6 +62,12 @@ impl Node {
         self
     }
 
+    /// Turned by a quaternion `[x, y, z, w]`.
+    pub fn rotated(mut self, q: [f64; 4]) -> Node {
+        self.rotation = q;
+        self
+    }
+
     pub fn at(mut self, x: f64, y: f64, z: f64) -> Node {
         self.translation = [x, y, z];
         self

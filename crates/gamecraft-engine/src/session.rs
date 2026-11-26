@@ -15,7 +15,9 @@ use crate::spec::{CommandSpec, Scope, nearest};
 use crate::triggers::PlayLog;
 use gamecraft_sim::Sim;
 use gamecraft_sim::SpatialIndex;
-use gamecraft_world::{HeightField, Heightmap, ModelBounds, ModelBox, Terrain, World, WorldError};
+use gamecraft_world::{
+    HeightField, Heightmap, ModelBounds, ModelBox, Socket, Terrain, World, WorldError,
+};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
@@ -140,6 +142,7 @@ const MODULES: &[&[Registration]] = &[
     crate::terrain_cmds::SPECS,
     crate::road_cmds::SPECS,
     crate::water_cmds::SPECS,
+    crate::attachment_cmds::SPECS,
 ];
 
 /// The spec and scope of the built-in command `name`, without a session (for checking the
@@ -751,6 +754,24 @@ impl Session {
             running.set_model_parts(parts);
             // The running world was valid and only its derived data changed, so this cannot
             // fail; if it did, the simulation would keep the parts it had.
+            let _ = sim.replace_world(running);
+        }
+    }
+
+    /// Hands over the sockets of the model assets (by asset path, then by name), which the host
+    /// derived from the assets' glTF nodes `socket_<name>`: they replace those of the document,
+    /// of every world in the history and of the running world, so attachments can be mounted
+    /// and placed. Derived data: neither revision changes and nothing is undone by it.
+    pub fn set_model_sockets(&mut self, sockets: BTreeMap<String, BTreeMap<String, Socket>>) {
+        self.document.set_model_sockets(sockets.clone());
+        for world in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            world.set_model_sockets(sockets.clone());
+        }
+        if let Some(sim) = self.live.as_mut() {
+            let mut running = sim.world().clone();
+            running.set_model_sockets(sockets);
+            // The running world was valid and only its derived data changed, so this cannot
+            // fail; if it did, the simulation would keep the sockets it had.
             let _ = sim.replace_world(running);
         }
     }

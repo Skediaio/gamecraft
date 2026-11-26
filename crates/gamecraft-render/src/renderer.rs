@@ -1,6 +1,7 @@
 //! The world renderer: the only module that touches VisionCraft's renderer
 //! (`visioncraft-render`). A VisionCraft API change lands here.
 
+use crate::attachments;
 use crate::blit::Blit;
 use crate::culling;
 use crate::effects::{self, Effects, Segment};
@@ -297,10 +298,33 @@ impl HlodPlan {
     }
 }
 
+/// What shows a model asset: an entity's own model, or one of its attachments at `path`.
+#[derive(Clone)]
+struct Source<'a> {
+    entity: &'a Entity,
+    /// The chain of socket names from the entity's model; empty for the entity's own model.
+    path: Vec<String>,
+}
+
+impl Source<'_> {
+    /// The entity's model component.
+    fn model(&self) -> Option<&Model> {
+        self.entity.model()
+    }
+
+    /// The scale the levels of detail follow: the model's, the entity's largest, and every
+    /// attachment's of the chain.
+    fn scale(&self, model: &Model) -> f64 {
+        gamecraft_world::attachments::chain_scale(self.entity, model, &self.path)
+    }
+}
+
 /// One character item: the characters it draws, in instance order, and where it drew them.
 struct CharacterGroup {
     item: vc::ItemId,
     ids: Vec<EntityId>,
+    /// For each of `ids`, the attachment shown (its path), or the entity's own model (empty).
+    paths: Vec<Vec<String>>,
     instances: Vec<Mat4>,
     body: Body,
     /// Its row among [`Built::models`] when it draws a model.
@@ -402,6 +426,26 @@ enum Body {
     /// The character's model, or its magenta stand-in: `size` times the model's scale times
     /// the entity's, as a model without a character is placed.
     Model { size: f64 },
+}
+
+/// Where a character item draws a source: the entity's own model standing at its position and
+/// turned to its facing (lying when it is down), or an attachment on that frame.
+fn source_pose(world: &World, s: &Source<'_>, body: Body) -> Mat4 {
+    on_frame(world, s.entity, &s.path, || character_pose(s.entity, body))
+}
+
+/// Where a model of `e` is drawn on the frame `own`, in which the item draws the entity's own
+/// model: that frame for the entity's own model (`path` empty), or the attachment at `path`
+/// on it, at its socket's full rotation ([`attachments::pose`]). An attachment whose chain
+/// has a socket nobody measured (a world opened without its pack) has no place of its own and
+/// is drawn on the entity's frame.
+fn on_frame(world: &World, e: &Entity, path: &[String], own: impl Fn() -> Mat4) -> Mat4 {
+    if path.is_empty() {
+        return own();
+    }
+    e.model()
+        .and_then(|model| attachments::pose(world, e, model, path, own()))
+        .unwrap_or_else(own)
 }
 
 /// Where a character item draws `e`: standing at its position, turned to its facing, or
@@ -1057,12 +1101,15 @@ impl WorldRenderer {
             characters, models, ..
         } = &mut self.built;
         for group in characters {
+            // A hidden character (a first-person view's own body) keeps its attachments: they
+            // are what the player holds.
             let instances: Vec<Mat4> = group
                 .ids
                 .iter()
-                .filter(|&&id| Some(id) != hidden)
-                .filter_map(|&id| world.entity(id))
-                .map(|e| character_pose(e, group.body))
+                .zip(&group.paths)
+                .filter(|(id, path)| Some(**id) != hidden || !path.is_empty())
+                .filter_map(|(&id, path)| world.entity(id).map(|e| (e, path)))
+                .map(|(e, path)| on_frame(world, e, path, || character_pose(e, group.body)))
                 .collect();
             if instances != group.instances {
                 self.renderer.set_instances(group.item, &instances);
@@ -1384,6 +1431,9 @@ fn upload_missing(
     for e in world.entities() {
         if let Some(m) = e.model() {
             wanted.insert(m.asset.clone());
+            for shown in gamecraft_world::attachments::shown(m) {
+                wanted.insert(shown.asset.clone());
+            }
         }
     }
     for asset in wanted {
@@ -2168,14 +2218,26 @@ impl Scene<'_> {
         followed: Option<EntityId>,
         plan: &HlodPlan,
     ) {
-        let mut by_asset: BTreeMap<String, Vec<&Entity>> = BTreeMap::new();
+        // Every model shown, by asset: the entities' own models and their attachments.
+        let mut by_asset: BTreeMap<String, Vec<Source<'_>>> = BTreeMap::new();
         for e in world.entities() {
-            if let Some(m) = e.model() {
-                by_asset.entry(m.asset.clone()).or_default().push(e);
+            let Some(m) = e.model() else { continue };
+            by_asset.entry(m.asset.clone()).or_default().push(Source {
+                entity: e,
+                path: Vec::new(),
+            });
+            for shown in gamecraft_world::attachments::shown(m) {
+                by_asset
+                    .entry(shown.asset.clone())
+                    .or_default()
+                    .push(Source {
+                        entity: e,
+                        path: shown.path,
+                    });
             }
         }
         let mut missing: Vec<Mat4> = Vec::new();
-        let mut missing_characters: Vec<&Entity> = Vec::new();
+        let mut missing_characters: Vec<Source<'_>> = Vec::new();
         for (asset, entities) in by_asset {
             let Some(Ok(m)) = resident.get(&asset) else {
                 let Some(Err(failed)) = resident.get(&asset) else {
@@ -2185,7 +2247,7 @@ impl Scene<'_> {
                 let named: Vec<String> = entities
                     .iter()
                     .take(MAX_NAMED_ENTITIES)
-                    .map(|e| format!("{} \"{}\"", e.id, e.name))
+                    .map(|s| format!("{} \"{}\"", s.entity.id, s.entity.name))
                     .collect();
                 let more = match entities.len().saturating_sub(MAX_NAMED_ENTITIES) {
                     0 => String::new(),
@@ -2196,17 +2258,30 @@ impl Scene<'_> {
                      drawn as a small magenta box.",
                     named.join(", ")
                 ));
-                missing.extend(
-                    entities
-                        .iter()
-                        .filter(|e| e.character().is_none())
-                        .map(|e| {
-                            let size = e.model().map_or(1.0, |m| MISSING_MODEL_SIZE_M * m.scale);
-                            placement(e.position, e.rotation_y_deg, e.scale.times([size; 3]))
-                        }),
-                );
-                missing_characters
-                    .extend(entities.iter().copied().filter(|e| e.character().is_some()));
+                for s in &entities {
+                    let e = s.entity;
+                    let Some(model) = e.model() else { continue };
+                    // A small magenta box where the model would stand: at the entity, or at
+                    // its socket when the socket is known.
+                    let stand_in = if s.path.is_empty() {
+                        let size = MISSING_MODEL_SIZE_M * model.scale;
+                        Some(placement(
+                            e.position,
+                            e.rotation_y_deg,
+                            e.scale.times([size; 3]),
+                        ))
+                    } else {
+                        attachments::pose(world, e, model, &s.path, Mat4::IDENTITY).map(|at| {
+                            at * Mat4::from_scale(Vec3::splat(MISSING_MODEL_SIZE_M as f32))
+                        })
+                    };
+                    let Some(pose) = stand_in else { continue };
+                    if e.character().is_some() {
+                        missing_characters.push(s.clone());
+                    } else {
+                        missing.push(pose);
+                    }
+                }
                 continue;
             };
             if let Some(note) = &m.note {
@@ -2217,15 +2292,21 @@ impl Scene<'_> {
             }
             // By what decides the levels, in a map: a thousand scattered copies, each its
             // own size, are a handful of items, found without a search per entity.
-            let mut sets: BTreeMap<ModelKey, Vec<&Entity>> = BTreeMap::new();
-            for &e in &entities {
+            let mut sets: BTreeMap<ModelKey, Vec<Source<'_>>> = BTreeMap::new();
+            for s in &entities {
+                let e = s.entity;
                 let Some(model) = e.model() else { continue };
-                let component = LodOverride {
-                    switch_m: model.lod_distances_m.clone(),
-                    draw_m: model.draw_distance_m,
-                    coverage: None,
+                // An attachment has no distances of its own: the file's, else the rule.
+                let component = if s.path.is_empty() {
+                    LodOverride {
+                        switch_m: model.lod_distances_m.clone(),
+                        draw_m: model.draw_distance_m,
+                        coverage: None,
+                    }
+                } else {
+                    LodOverride::default()
                 };
-                let scale = model.scale * e.scale.largest();
+                let scale = s.scale(model);
                 let key = ModelKey {
                     lod_distances_m: component
                         .switch_m
@@ -2239,11 +2320,11 @@ impl Scene<'_> {
                     followed: Some(e.id) == followed && e.character().is_some(),
                     cell_near: plan.end_of(e.id).unwrap_or(f64::INFINITY).to_bits(),
                 };
-                sets.entry(key).or_default().push(e);
+                sets.entry(key).or_default().push(s.clone());
             }
             // In the order of the first entity that shows the set, as the entities come.
-            let mut sets: Vec<(ModelKey, Vec<&Entity>)> = sets.into_iter().collect();
-            sets.sort_by_key(|(_, entities)| entities.first().map(|e| e.id));
+            let mut sets: Vec<(ModelKey, Vec<Source<'_>>)> = sets.into_iter().collect();
+            sets.sort_by_key(|(_, entities)| entities.first().map(|s| s.entity.id));
             // What the distances say of this asset is said once, whatever the number of sets.
             let mut said: BTreeSet<String> = BTreeSet::new();
             for (key, entities) in sets {
@@ -2307,16 +2388,18 @@ impl Scene<'_> {
                             .map(move |&(mesh, material)| (mesh, material, end as f32))
                     })
                     .collect();
-                let (characters, statics): (Vec<&Entity>, Vec<&Entity>) = entities
+                let (characters, statics): (Vec<Source<'_>>, Vec<Source<'_>>) = entities
                     .iter()
-                    .copied()
-                    .partition(|e| e.character().is_some());
+                    .cloned()
+                    .partition(|s| s.entity.character().is_some());
                 if !statics.is_empty() {
                     let instances: Vec<Mat4> = statics
                         .iter()
-                        .filter_map(|e| {
-                            let m = e.model()?;
-                            Some(placement(e.position, e.rotation_y_deg, model_size(e, m)))
+                        .filter_map(|s| {
+                            let (e, model) = (s.entity, s.model()?);
+                            Some(on_frame(world, e, &s.path, || {
+                                placement(e.position, e.rotation_y_deg, model_size(e, model))
+                            }))
                         })
                         .collect();
                     self.add_model_item(
@@ -2330,8 +2413,10 @@ impl Scene<'_> {
                 }
                 if !characters.is_empty() {
                     let body = Body::Model { size: 1.0 };
-                    let instances: Vec<Mat4> =
-                        characters.iter().map(|e| character_pose(e, body)).collect();
+                    let instances: Vec<Mat4> = characters
+                        .iter()
+                        .map(|s| source_pose(world, s, body))
+                        .collect();
                     let item = self.add_model_item(
                         &asset,
                         &parts,
@@ -2342,7 +2427,8 @@ impl Scene<'_> {
                     );
                     self.built.characters.push(CharacterGroup {
                         item,
-                        ids: characters.iter().map(|e| e.id).collect(),
+                        ids: characters.iter().map(|s| s.entity.id).collect(),
+                        paths: characters.iter().map(|s| s.path.clone()).collect(),
                         instances,
                         body,
                         model: Some(self.built.models.len().saturating_sub(1)),
@@ -2362,12 +2448,13 @@ impl Scene<'_> {
             };
             let instances: Vec<Mat4> = missing_characters
                 .iter()
-                .map(|e| character_pose(e, body))
+                .map(|s| source_pose(world, s, body))
                 .collect();
             let item = self.add_item(&[(units.cube, material)], &instances);
             self.built.characters.push(CharacterGroup {
                 item,
-                ids: missing_characters.iter().map(|e| e.id).collect(),
+                ids: missing_characters.iter().map(|s| s.entity.id).collect(),
+                paths: missing_characters.iter().map(|s| s.path.clone()).collect(),
                 instances,
                 body,
                 model: None,
@@ -2438,9 +2525,11 @@ impl Scene<'_> {
                     &[(body, body_material), (visor, visor_material)],
                     &instances,
                 );
+                let paths = ids.iter().map(|_| Vec::new()).collect();
                 self.built.characters.push(CharacterGroup {
                     item,
                     ids,
+                    paths,
                     instances,
                     body: Body::Capsule {
                         radius_m: character.radius_m,
@@ -2628,6 +2717,7 @@ mod tests {
             collider: ModelCollider::Box,
             lod_distances_m: None,
             draw_distance_m: None,
+            attachments: Vec::new(),
         })
     }
 
