@@ -153,6 +153,20 @@ impl EntityDraft {
 
 impl Entity {
     /// The shape component, if any.
+    /// The shape component if it is drawn (`visible`), as the renderer and the far levels of
+    /// a cell take it; the simulation and the rays take [`Entity::shape`], hidden or not.
+    pub fn visible_shape(&self) -> Option<&Shape> {
+        self.shape().filter(|s| s.visible)
+    }
+
+    /// The shape component, if any, to change.
+    pub fn shape_mut(&mut self) -> Option<&mut Shape> {
+        self.components.iter_mut().find_map(|c| match c {
+            Component::Shape(s) => Some(s),
+            _ => None,
+        })
+    }
+
     pub fn shape(&self) -> Option<&Shape> {
         self.components.iter().find_map(|c| match c {
             Component::Shape(s) => Some(s),

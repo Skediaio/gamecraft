@@ -162,6 +162,13 @@ const SHAPE_FIELDS: &[Field] = &[
         None,
         "Whether characters collide with it. Rays hit it either way.",
     ),
+    field(
+        "visible",
+        "boolean",
+        None,
+        "Whether it is drawn. false: a collision helper inside a model, drawn nowhere (not in \
+         the far levels of a cell either) that still collides and counts for rays.",
+    ),
 ];
 
 const PLANT_FIELDS: &[Field] = &[
@@ -326,7 +333,9 @@ const MODEL_FIELDS: &[Field] = &[
         "string",
         None,
         "`box` (the asset's bounding box: rays hit it, and with `solid` characters are \
-         blocked) or `none`.",
+         blocked), `mesh` (the asset's own geometry: a box per `*_collider` or `*-collider` node \
+         else per mesh, so a doorway is walked through and a balcony stood on; its bounding \
+         box until the host measured it) or `none`.",
     ),
     field(
         "lod_distances_m",
@@ -572,7 +581,7 @@ const KINDS: &[Kind] = &[
                   centre): box, sphere or cylinder.",
         fields: SHAPE_FIELDS,
         minimal: || json!({"type": "shape", "kind": "box"}),
-        example: || json!({"type": "shape", "kind": "box", "size": [2, 1, 1], "color": [0.6, 0.4, 0.2], "solid": true}),
+        example: || json!({"type": "shape", "kind": "box", "size": [2, 1, 1], "color": [0.6, 0.4, 0.2], "solid": true, "visible": false}),
     },
     Kind {
         kind: "plant",

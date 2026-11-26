@@ -1,15 +1,31 @@
-//! What a host needs to know of a model asset without drawing it: its triangle count and its
-//! local bounding box (for a solid model in the simulation), and the files a `.gltf` refers to.
+//! What a host needs to know of a model asset without drawing it: its triangle count, its
+//! local bounding box and its collision parts (for a solid model in the simulation), and the
+//! files a `.gltf` refers to.
+//!
+//! **Collision parts** ([`Collider`]): the boxes a model with the `mesh` collider collides as,
+//! in the asset's own axes. A glTF file may carry its collision geometry as nodes named
+//! `*_collider` or `*-collider` ([`crate::lod::is_collider_name`]; the letters in any case, on
+//! the node or on its mesh): their meshes are the parts, one box per node, and nothing of them
+//! is drawn, counted or measured in the bounds. A file without such nodes gets one box per mesh of the
+//! finest level that draws, in the entity's frame (the smallest box around each mesh's
+//! vertices where its node places them). More parts than [`MAX_MODEL_PARTS`] fall back to the
+//! bounding box, with a sentence.
 //!
 //! Read with the `gltf` crate's parser (no import feature: the bytes are given). The bounding box
 //! is computed in `f64` with plain multiplications and additions over the node transforms the
 //! file gives, so it is the same bits on every platform: the simulation's state hash depends on
 //! it.
 
-use gamecraft_world::{ModelBounds, is_asset_path};
+use crate::lod::{self, colliders, levels_of};
+pub use crate::lod::{COLLIDER_SUFFIXES, is_collider_name};
+use gamecraft_world::{ModelBounds, ModelBox, is_asset_path};
+use std::collections::BTreeMap;
 
 /// Deepest chain of nodes followed below a scene's roots.
 pub const MAX_NODE_DEPTH: usize = 64;
+/// Most collision parts a model has before its bounding box is its collider instead: a
+/// character or a ray tests them all.
+pub const MAX_MODEL_PARTS: usize = 256;
 /// Most node visits while walking a scene (a node used by many parents counts each time).
 pub const MAX_NODE_VISITS: usize = 100_000;
 /// Most vertex positions read from one model.
@@ -36,6 +52,74 @@ pub struct ModelSummary {
     pub lod: crate::lod::Levels,
     /// How the levels were found; `None` for a model with one level.
     pub lod_source: Option<crate::lod::LodSource>,
+    /// The collision parts of the `mesh` collider, and where they come from.
+    pub collider: Collider,
+}
+
+/// Where a model's collision parts come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColliderSource {
+    /// The file's `*_collider` (or `*-collider`) nodes, one box each.
+    Colliders,
+    /// One box per mesh of the finest level that draws (the file has no collider nodes).
+    Meshes,
+    /// The bounding box alone: the model has more meshes than [`MAX_MODEL_PARTS`].
+    Box,
+}
+
+impl ColliderSource {
+    /// Its name in `asset.list`.
+    pub fn name(self) -> &'static str {
+        match self {
+            ColliderSource::Colliders => "colliders",
+            ColliderSource::Meshes => "meshes",
+            ColliderSource::Box => "box",
+        }
+    }
+}
+
+/// What a model with the `mesh` collider collides as: boxes in the asset's own axes, placed by
+/// the entity as its bounding box is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Collider {
+    /// Where the parts come from.
+    pub source: ColliderSource,
+    /// The parts, in the file's node order, each axis-aligned in the entity's frame (a mesh
+    /// turned in the file gets the smallest box around it there). One part for a model with
+    /// one mesh: its bounding box, the collider every model had before.
+    pub parts: Vec<ModelBox>,
+    /// Why the parts are the bounding box (too many meshes), as a sentence; `None` otherwise.
+    pub note: Option<String>,
+}
+
+impl Collider {
+    /// The bounding box alone.
+    fn the_box(bounds: &ModelBounds, note: Option<String>) -> Collider {
+        Collider {
+            source: ColliderSource::Box,
+            parts: vec![box_of(bounds.min, bounds.max)],
+            note,
+        }
+    }
+}
+
+/// The box from `min` to `max`.
+fn box_of(min: [f64; 3], max: [f64; 3]) -> ModelBox {
+    let (mut center, mut half) = ([0.0; 3], [0.0; 3]);
+    for k in 0..3 {
+        let (Some(lo), Some(hi)) = (min.get(k), max.get(k)) else {
+            continue;
+        };
+        if let (Some(c), Some(h)) = (center.get_mut(k), half.get_mut(k)) {
+            *c = (lo + hi) / 2.0;
+            *h = (hi - lo) / 2.0;
+        }
+    }
+    ModelBox {
+        center,
+        half,
+        yaw_deg: 0.0,
+    }
 }
 
 impl ModelSummary {
@@ -197,6 +281,10 @@ pub fn inspect(
     let mut level_triangles = vec![0u64; plan.levels];
     let mut level_lo = vec![[f64::INFINITY; 3]; plan.levels];
     let mut level_hi = vec![[f64::NEG_INFINITY; 3]; plan.levels];
+    // The collision parts: by node, the box of its mesh's vertices where the node places them.
+    let from_colliders = !plan.colliders.is_empty();
+    let mut part_lo: BTreeMap<usize, [f64; 3]> = BTreeMap::new();
+    let mut part_hi: BTreeMap<usize, [f64; 3]> = BTreeMap::new();
     for visit in crate::lod::walk(doc, &plan)? {
         let p = visit.primitive;
         let count_of = |n: u64| match p.mode() {
@@ -235,7 +323,7 @@ pub fn inspect(
         if drawn == 0 {
             continue;
         }
-        for k in crate::lod::levels_of(visit.drawn_at) {
+        for k in levels_of(visit.drawn_at) {
             if let (Some(slot), Some(lo), Some(hi)) = (
                 level_triangles.get_mut(k),
                 level_lo.get_mut(k),
@@ -244,6 +332,26 @@ pub fn inspect(
                 *slot = slot.saturating_add(drawn);
                 crate::lod::extend_bounds(&visit.world, &positions, lo, hi);
             }
+        }
+        // Without collider nodes every mesh of the finest level is a part.
+        if !from_colliders && visit.drawn_at & 1 == 1 {
+            let lo = part_lo.entry(visit.node).or_insert([f64::INFINITY; 3]);
+            let hi = part_hi.entry(visit.node).or_insert([f64::NEG_INFINITY; 3]);
+            lod::extend_bounds(&visit.world, &positions, lo, hi);
+        }
+    }
+    if from_colliders {
+        for visit in colliders(doc, &plan)? {
+            let p = visit.primitive;
+            check_primitive(&p)?;
+            let r = p.reader(data);
+            let Some(positions) = r.read_positions() else {
+                continue;
+            };
+            let positions: Vec<[f32; 3]> = positions.collect();
+            let lo = part_lo.entry(visit.node).or_insert([f64::INFINITY; 3]);
+            let hi = part_hi.entry(visit.node).or_insert([f64::NEG_INFINITY; 3]);
+            lod::extend_bounds(&visit.world, &positions, lo, hi);
         }
     }
     let lod = plan.finish(&level_triangles);
@@ -262,9 +370,44 @@ pub fn inspect(
     if !bounds.is_valid() {
         return Err("the model's vertices are not finite numbers".into());
     }
+    // A node's mesh is a part when its vertices gave a usable box.
+    let parts: Vec<ModelBox> = part_lo
+        .iter()
+        .filter_map(|(node, lo)| Some((lo, part_hi.get(node)?)))
+        .filter(|(lo, hi)| {
+            lo.iter()
+                .zip(hi.iter())
+                .all(|(l, h)| l.is_finite() && h.is_finite() && l <= h)
+        })
+        .map(|(lo, hi)| box_of(*lo, *hi))
+        .collect();
+    let collider = if parts.len() > MAX_MODEL_PARTS {
+        Collider::the_box(
+            &bounds,
+            Some(format!(
+                "the model has {} collision meshes, more than {MAX_MODEL_PARTS}; its bounding box \
+                 is its collider",
+                parts.len()
+            )),
+        )
+    } else if parts.is_empty() {
+        // No mesh with a position: the box is the collider, as for every model before.
+        Collider::the_box(&bounds, None)
+    } else {
+        Collider {
+            source: if from_colliders {
+                ColliderSource::Colliders
+            } else {
+                ColliderSource::Meshes
+            },
+            parts,
+            note: None,
+        }
+    };
     Ok(ModelSummary {
         triangles,
         bounds,
+        collider,
         meshes: doc.meshes().len(),
         materials: doc.materials().len(),
         images: doc.images().len(),

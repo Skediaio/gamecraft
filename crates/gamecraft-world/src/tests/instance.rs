@@ -7,6 +7,7 @@ use serde_json::Value;
 
 fn boxed(size: [f64; 3]) -> Vec<Component> {
     vec![Component::Shape(Shape {
+        visible: true,
         kind: ShapeKind::Box,
         size,
         color: [0.58, 0.54, 0.48],

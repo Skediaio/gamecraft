@@ -326,7 +326,17 @@ models of a pack share stored once (`gamecraft-project/src/textures.rs`;
   asset's origin stands on the entity's position, turned by its yaw and sized by `scale` times
   the entity's scale. With the collider `box` rays hit the asset's bounding box (solid or not,
   as they hit any shape), and with `solid` characters are blocked by it like a solid shape box
-  (steps included).
+  (steps included). With the collider `mesh` the asset's own geometry is the collider
+  (2026-11-26; `decisions.md`, *Collision from a model's own geometry*): the host measures it
+  (`gamecraft_project::model::Collider`) as one box per node named `*_collider` or `*-collider`
+  in the file (both spellings, the letters in any case, the name on the node or its mesh; never
+  drawn, counted or measured in the bounds), else one box per mesh of the finest level that
+  draws, in the entity's frame;
+  more than 256 fall back to the bounding box with a sentence. The parts are derived data like
+  the bounds ([`World::set_model_parts`]), placed by the entity's yaw and scale as its box is,
+  held by the spatial index with the entity's footprint, and used by rays, lines of sight,
+  projectiles and character collision. Until the host hands them over (or for a model opened
+  alone) the model collides as its bounding box. `asset.list` says what each model's are.
 - **Bounds are derived data of the world.** The simulation needs each asset's local bounding
   box and must not read files or glTF. So `World` carries `model_bounds` (asset path to
   `ModelBounds {min, max}`), never written to a file and not part of the document's text:

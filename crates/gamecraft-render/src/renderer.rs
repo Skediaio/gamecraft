@@ -223,7 +223,7 @@ impl HlodPlan {
                 });
                 content.model(e, m);
                 (end, model.coarsest.iter().map(|p| p.positions.len()).sum())
-            } else if let Some(shape) = e.shape() {
+            } else if let Some(shape) = e.visible_shape() {
                 content.shape(e, shape);
                 // A shape alone never gave way: the cell's plan says where it stops.
                 (
@@ -267,7 +267,9 @@ impl HlodPlan {
                 ));
                 for &id in &members {
                     if let Some(end) = plan.ends.get_mut(&id)
-                        && world.entity(id).is_some_and(|e| e.shape().is_some())
+                        && world
+                            .entity(id)
+                            .is_some_and(|e| e.visible_shape().is_some())
                     {
                         *end = f64::INFINITY;
                     }
@@ -434,9 +436,10 @@ struct DrawnEntity {
     road: Option<Road>,
 }
 
-/// Whether an entity draws anything (a zone, a light or tags alone draw nothing).
+/// Whether an entity draws anything (a zone, a light or tags alone draw nothing; a shape with
+/// `visible: false` neither, in anything: items, far levels).
 fn draws(e: &Entity) -> bool {
-    e.shape().is_some()
+    e.visible_shape().is_some()
         || e.plant().is_some()
         || e.character().is_some()
         || e.model().is_some()
@@ -446,7 +449,7 @@ fn draws(e: &Entity) -> bool {
 impl DrawnEntity {
     /// What of `e` is drawn; `None` when it draws nothing (a zone, a light, tags).
     fn of(e: &Entity) -> Option<DrawnEntity> {
-        let (shape, plant, character) = (e.shape(), e.plant(), e.character());
+        let (shape, plant, character) = (e.visible_shape(), e.plant(), e.character());
         if !draws(e) {
             return None;
         }
@@ -468,7 +471,7 @@ impl DrawnEntity {
         let walks = self.pose.is_none();
         self.id == e.id
             && self.scale == e.scale
-            && self.shape.as_ref() == e.shape()
+            && self.shape.as_ref() == e.visible_shape()
             && self.plant.as_ref() == e.plant()
             && self.character.as_ref() == e.character()
             && self.model.as_ref() == e.model()
@@ -1958,7 +1961,7 @@ impl Scene<'_> {
         // far the item draws (a cell's diagonal past that); otherwise never.
         let mut groups: ShapeGroups = BTreeMap::new();
         for e in world.entities() {
-            let Some(s) = e.shape() else { continue };
+            let Some(s) = e.visible_shape() else { continue };
             let order = match s.kind {
                 ShapeKind::Box => 0,
                 ShapeKind::Sphere => 1,
@@ -2042,7 +2045,7 @@ impl Scene<'_> {
             let mut over = false;
             for &id in members {
                 let Some(e) = world.entity(id) else { continue };
-                if let Some(shape) = e.shape() {
+                if let Some(shape) = e.visible_shape() {
                     let unit = match shape.kind {
                         ShapeKind::Box => mesh::unit_box(),
                         ShapeKind::Sphere => mesh::unit_sphere(),

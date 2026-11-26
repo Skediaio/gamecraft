@@ -7,9 +7,10 @@
 //! When a project opens, or a world file finds its pack (`file.open`: the nearest `pack.json`
 //! above the file, the pack the command names, or the host's own), the host reads every model
 //! asset of its packs (each has passed the licence gate of `gamecraft-project`), measures it
-//! ([`gamecraft_project::inspect`]: triangles and bounding box) and hands the bounding boxes to
-//! the session as derived data ([`gamecraft_engine::Session::set_model_bounds`]): the simulation
-//! never reads a file. Before a picture, the host hands the renderer the files of the models
+//! ([`gamecraft_project::inspect`]: triangles, bounding box and collision parts) and hands the
+//! bounding boxes and the parts to the session as derived data
+//! ([`gamecraft_engine::Session::set_model_bounds`], [`gamecraft_engine::Session::set_model_parts`]):
+//! the simulation never reads a file. Before a picture, the host hands the renderer the files of the models
 //! the world shows ([`crate::Pictures::provide_asset`]) and says, in one sentence, which models
 //! no pack provides.
 
@@ -25,7 +26,7 @@ use gamecraft_project::{
     ASSETS_DIR, AssetRecord, License, ModelSummary, PackAsset, Project, credits, inspect,
     record_path,
 };
-use gamecraft_world::{EntityId, ModelBounds, World, is_model_path};
+use gamecraft_world::{EntityId, ModelBounds, ModelBox, World, is_model_path};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -124,6 +125,32 @@ pub(crate) fn bounds(catalog: &Catalog) -> BTreeMap<String, ModelBounds> {
         .collect()
 }
 
+/// The collision parts of the catalog's models that could be read (the `mesh` collider's).
+pub(crate) fn parts(catalog: &Catalog) -> BTreeMap<String, Vec<ModelBox>> {
+    catalog
+        .iter()
+        .filter_map(|(path, a)| match &a.summary {
+            Some(Ok(s)) => Some((path.clone(), s.collider.parts.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// What a model collides as with the `mesh` collider, for `asset.list`.
+fn collider_json(s: &ModelSummary) -> Value {
+    json!({
+        "source": s.collider.source.name(),
+        "parts": s.collider.parts.len(),
+        "boxes": s
+            .collider
+            .parts
+            .iter()
+            .map(|b| json!({"center": b.center, "half": b.half}))
+            .collect::<Vec<_>>(),
+        "note": s.collider.note,
+    })
+}
+
 /// The model assets `world` refers to, each with the entities that use it, in id order.
 fn used(world: &World) -> BTreeMap<String, Vec<EntityId>> {
     let mut out: BTreeMap<String, Vec<EntityId>> = BTreeMap::new();
@@ -206,15 +233,20 @@ pub(crate) fn asset_specs() -> Vec<CommandSpec> {
              file (a later pack's asset replaces an earlier one's of the same path): licence, \
              author, source, size, and for a model its triangle count, bounding box (metres, \
              the asset's own axes) and levels of detail (triangles per level, where each ends \
-             and how far it is drawn as its file says, else from its size), or the problem \
-             that kept it from being read; how many entities of the world shown use it. The \
+             and how far it is drawn as its file says, else from its size), what it collides as \
+             with the `mesh` collider (`collider`: a box per `*_collider` or `*-collider` node or \
+             per mesh, and \
+             where they come from), or the problem that kept it from being read; how many \
+             entities of the world shown use it. The \
              textures of the packs' store (`textures`) are listed apart, each once, with the \
              models that refer to it. And the model assets the world refers to that no pack \
              has.",
             vec![],
             "{assets: [{path, pack, kind, license, author, source_url, title, changes, bytes, \
-             files, triangles, bounds: {min, max} | null, lods: [{level, triangles, until_m}], \
-             draw_distance_m, lod_source, lod_warnings, problem, used_by}], textures: [{path, \
+             files, triangles, bounds: {min, max} | null, collider: {source: \"colliders\" | \
+             \"meshes\" | \"box\", parts, boxes: [{center, half}], note}, lods: [{level, \
+             triangles, until_m}], draw_distance_m, lod_source, lod_warnings, problem, \
+             used_by}], textures: [{path, \
              pack, bytes, license, author, source_url, title, changes, used_by: [models]}], \
              missing: [{asset, entities}]}",
             json!({}),
@@ -438,6 +470,10 @@ impl Host {
                 Some(Ok(s)) => lods_json(s),
                 _ => (Value::Null, Value::Null, Value::Null, Value::Null),
             };
+            let collider = match &a.summary {
+                Some(Ok(s)) => collider_json(s),
+                _ => Value::Null,
+            };
             assets.push(json!({
                 "path": path,
                 "pack": a.pack,
@@ -451,6 +487,7 @@ impl Host {
                 "files": a.asset.files,
                 "triangles": triangles,
                 "bounds": bounds,
+                "collider": collider,
                 "lods": lods,
                 "draw_distance_m": draw_distance_m,
                 "lod_source": lod_source,
@@ -781,6 +818,8 @@ impl Host {
         self.provided.remove(to);
         let all = bounds(&self.assets);
         self.session.set_model_bounds(all);
+        self.session
+            .set_model_parts(crate::assets::parts(&self.assets));
         Ok(answer)
     }
 }

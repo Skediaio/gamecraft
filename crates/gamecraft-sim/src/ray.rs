@@ -1,7 +1,7 @@
 //! Ray maths, one implementation for the engine's queries (`query.raycast`,
 //! `query.line_of_sight`) and the simulation (projectile hits, perception): a ray against a box
 //! turned about Y, a sphere, an upright capped cylinder and a capsule, and [`cast`] and
-//! [`line_of_sight`] against the terrain, every entity's `shape`, every model's collider box
+//! [`line_of_sight`] against the terrain, every entity's `shape`, every model's collider boxes
 //! and the surface of every `road` ([`gamecraft_world::raycast_roads`]). Pure `f64` functions,
 //! deterministic (sines through [`gamecraft_math::Portable`]), never panicking: every division
 //! and square root is guarded and a non-finite result is a miss.
@@ -322,7 +322,7 @@ pub struct Found {
 /// The nearest hit within `max_m` of a ray with a unit `dir`, among the terrain (the
 /// triangles of `heights`) and `entities`: the surface of every `road` on it (the ground
 /// lifted by the road's offset over its footprint, exactly as drawn), and the `shape` and the
-/// model's collider box ([`World::model_box`]) of every entity, solid or not, except those
+/// model's collider boxes ([`World::model_boxes`]) of every entity, solid or not, except those
 /// `skip` names; on a tie the terrain, then the lowest id (an entity's shape before its
 /// model). A hit whose point is not finite is no hit. With how many entities were looked
 /// at: the work, counted.
@@ -362,13 +362,10 @@ fn cast_among<'w>(
         if e.shape().is_none() && e.model().is_none() {
             continue;
         }
-        let shape_hit = e.shape().and_then(|shape| ray_shape(origin, dir, e, shape));
-        let model_hit = world
-            .model_box(e)
-            .and_then(|b| ray_box(origin, dir, b.center, b.half, b.yaw_deg));
-        for hit in [shape_hit, model_hit].into_iter().flatten() {
+        let consider = |hit: Option<RayHit>, best: &mut Option<Found>| {
+            let Some(hit) = hit else { return };
             if hit.distance_m > max_m {
-                continue;
+                return;
             }
             // A walk in id order kept the first of equal distances: the lowest id. The
             // terrain's is kept over any entity's.
@@ -377,12 +374,20 @@ fn cast_among<'w>(
                     || (hit.distance_m == b.hit.distance_m && b.entity.is_some_and(|id| e.id < id))
             });
             if nearer {
-                best = Some(Found {
+                *best = Some(Found {
                     hit,
                     entity: Some(e.id),
                 });
             }
-        }
+        };
+        consider(
+            e.shape().and_then(|shape| ray_shape(origin, dir, e, shape)),
+            &mut best,
+        );
+        // The model's collider: its bounding box, or each part of its own geometry.
+        world.model_boxes(e, &mut |b| {
+            consider(ray_box(origin, dir, b.center, b.half, b.yaw_deg), &mut best)
+        });
     }
     if let Some(field) = heights
         && !roads.is_empty()

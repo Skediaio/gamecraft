@@ -72,6 +72,7 @@ fn build() -> Result<World, WorldError> {
         name: "Crate".into(),
         position: [-6.0, 0.0, 4.0],
         components: vec![Component::Shape(Shape {
+            visible: true,
             kind: ShapeKind::Box,
             size: [1.0, 1.0, 1.0],
             color: [0.55, 0.4, 0.25],
@@ -104,6 +105,7 @@ fn build() -> Result<World, WorldError> {
         name: "Marker".into(),
         components: vec![
             Component::Shape(Shape {
+                visible: true,
                 kind: ShapeKind::Cylinder,
                 size: [0.4, 1.5, 0.4],
                 color: [0.9, 0.8, 0.1],

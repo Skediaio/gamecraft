@@ -1,7 +1,7 @@
 //! A spatial index: a uniform grid over the ground plane of what a ray or a character can
 //! meet, so that neither walks every entity of a large world.
 //!
-//! Every entity with a shape, a model's collider box or a road is a member, entered in each
+//! Every entity with a shape, a model's collider boxes or a road is a member, entered in each
 //! cell of the grid its footprint touches. A ray visits the cells its ground projection
 //! crosses and tests only their members; a character takes the members of the cells around it.
 //! An entity whose footprint touches more cells than [`MAX_CELLS`] (a long road) is tested
@@ -60,11 +60,12 @@ pub fn footprint(world: &World, e: &Entity) -> Option<([f64; 2], [f64; 2])> {
         };
         grow(x0, z0, x1, z1);
     }
-    if let Some(b) = world.model_box(e) {
+    // The model's collider: its bounding box, or each part of its own geometry.
+    world.model_boxes(e, &mut |b| {
         let [cx, _, cz] = b.center;
         let (x0, z0, x1, z1) = turned(cx, cz, b.half[0], b.half[2], b.yaw_deg);
         grow(x0, z0, x1, z1);
-    }
+    });
     if let Some(road) = e.road()
         && let Some((rlo, rhi)) = road.bounds(e)
     {
@@ -400,6 +401,7 @@ mod tests {
                     position: [10.0, 0.0, -4.0],
                     rotation_y_deg: yaw,
                     components: vec![Component::Shape(Shape {
+                        visible: true,
                         kind,
                         size,
                         ..Shape::default()
@@ -441,6 +443,7 @@ mod tests {
             .add_entity(EntityDraft {
                 position: [0.0, 0.0, 0.0],
                 components: vec![Component::Shape(Shape {
+                    visible: true,
                     kind: ShapeKind::Box,
                     size: [4.0, 3.0, 4.0],
                     ..Shape::default()
@@ -476,6 +479,7 @@ mod tests {
                 .add_entity(EntityDraft {
                     position: [x, 0.0, 20.0 * ((i % 3) as f64 - 1.0)],
                     components: vec![Component::Shape(Shape {
+                        visible: true,
                         kind: ShapeKind::Box,
                         size: [4.0, 3.0, 4.0],
                         ..Shape::default()

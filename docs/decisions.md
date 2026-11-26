@@ -8,6 +8,42 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-26: Collision from a model's own geometry by `*_collider` nodes or a box per mesh, and hidden shapes
+
+A model collided as its bounding box, so a doorway in a building model was cosmetic. Most
+engines let the asset say what it collides with (Unreal's `UCX_`/`UBX_` meshes, Godot's `-col`
+suffix, Unity's colliders per mesh) and otherwise take each mesh as a box or a convex hull.
+
+- **The collider is the component's choice**: `collider: "box"` (as before), `"mesh"` (new) or
+  `"none"`. Chosen over finer collision for every model automatically: a world that does not use
+  the new collider keeps its file text and its hash, to the bit, and a tree of leaf cards or a
+  vehicle's mirrors keep their one box. A file may later carry a default for its asset
+  (`asset.extras.gamecraft.collider`), as the levels of detail do.
+- **`*_collider` nodes when the file has them** (`is_collider_name`: the suffix in any case, on
+  the node or on its mesh; the node and everything below it is never drawn, counted or measured
+  in the bounds): one box per node. **Both spellings of the suffix are read, `_collider` and
+  `-collider`** (the orchestrator's decision: packs already use both, and refusing one would
+  make a pack's collision helpers drawn and its colliders the whole box without a word).
+- **Else a box per mesh of the finest level that draws**, axis-aligned in the entity's frame: the
+  simplest deterministic thing (the same `f64` products as the bounds, on every platform), cheap
+  for the spatial index (boxes are what it holds) and enough for a building made of wall, floor
+  and lintel meshes. Chosen over convex hulls (a hull needs a new dependency or a solver, and a
+  hull of an L-shaped wall fills the corner again) and over trimesh collision (character against
+  triangles is M4). A mesh turned in its file gets the box around it there, so collider nodes
+  are best drawn as axis-aligned boxes. More than 256 parts fall back to the bounding box with a
+  sentence, and until the host hands the parts over the model collides as its bounding box:
+  never less collision than before.
+- **The parts are derived data** like the bounds: measured by `gamecraft_project::inspect`,
+  handed to the session (`Session::set_model_parts`: the document, the history and the running
+  world), placed by the entity's yaw and scale, one solid per part, in the index with the
+  entity's footprint, hit by rays as the nearest part. The static hash writes them (a mark of
+  their own) only for models with the `mesh` collider, so no hash made before moves.
+- **A shape with `visible: false`** is a collision helper: written only when false (so no file
+  or hash moves), drawn nowhere (items, far levels), and kept by everything that collides or
+  casts. It takes `entity.add`, `entity.set`, `entity.set_component` and prefab children like
+  any field of a shape. Chosen over a separate "collider" component (a shape already is the
+  collider: only its drawing is unwanted).
+
 ### 2026-11-26: Water is a component, an outline and a level; wading slows by depth and deep water is refused
 
 The roadmap promised "water: sea level, lakes, rivers, through VisionCraft's water". What

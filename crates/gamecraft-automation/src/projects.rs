@@ -834,6 +834,7 @@ impl Host {
         let assets = crate::assets::catalog(&project);
         let mut world = world;
         world.set_model_bounds(crate::assets::bounds(&assets));
+        world.set_model_parts(crate::assets::parts(&assets));
         // The heightmap's samples: the session's when they are the ones this world names (a
         // project made from the session), else the folder's.
         let heightmap = crate::heightmap::load(

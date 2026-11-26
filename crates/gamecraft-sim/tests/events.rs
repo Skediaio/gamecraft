@@ -45,6 +45,7 @@ fn add_interactable(world: &mut World, position: [f64; 3], reach_m: f64) -> Enti
             position,
             components: vec![
                 Component::Shape(Shape {
+                    visible: true,
                     kind: ShapeKind::Cylinder,
                     size: [0.2, 1.2, 0.2],
                     color: [0.5, 0.5, 0.5],

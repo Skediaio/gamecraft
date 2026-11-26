@@ -32,6 +32,7 @@ fn round_trip_keeps_awkward_floats_bit_for_bit() {
         position: [1e-7, -123_456.789_012_345_6, 999_999.999_999_9],
         rotation_y_deg: -0.0,
         components: vec![Component::Shape(Shape {
+            visible: true,
             kind: ShapeKind::Box,
             size: [0.001, 9999.999, 1.0 / 7.0],
             color: [0.1, 0.2, 1.0 / 3.0],

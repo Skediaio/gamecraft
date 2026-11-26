@@ -142,7 +142,13 @@ fn default_true() -> bool {
     true
 }
 
-/// A simple solid standing on the entity's position (its base is the bottom centre).
+/// Bit equality: only the exact default (`true`) is left out, so `false` reads back the same.
+fn is_true(v: &bool) -> bool {
+    *v
+}
+
+/// A simple solid standing on the entity's position (its base is the bottom centre), drawn
+/// unless `visible` is false (a collision helper inside a model).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Shape {
@@ -159,6 +165,11 @@ pub struct Shape {
     /// Whether it collides. Default true.
     #[serde(default = "default_true")]
     pub solid: bool,
+    /// Whether it is drawn. `false`: a collision helper, drawn nowhere (not by the renderer,
+    /// not in the far levels of a cell), that still collides and still counts for rays, lines
+    /// of sight and projectiles. Default true; written only when it is false.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
 }
 
 impl Default for Shape {
@@ -169,6 +180,7 @@ impl Default for Shape {
             size: default_shape_size(),
             color: default_shape_color(),
             solid: true,
+            visible: true,
         }
     }
 }

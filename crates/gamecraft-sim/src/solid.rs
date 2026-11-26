@@ -1,5 +1,6 @@
-//! Solid shapes and solid models as the simulation sees them: footprints, tops, and pushing a character's circle
-//! out of them.
+//! Solid shapes and solid models as the simulation sees them: footprints, tops, and pushing a
+//! character's circle out of them. A solid model is one solid per box of its collider: its
+//! bounding box, or with the `mesh` collider each part of its own geometry.
 
 use gamecraft_math::{Portable, deg_to_rad};
 use gamecraft_world::{Entity, EntityId, ModelBox, ShapeKind, World};
@@ -39,8 +40,8 @@ pub(crate) struct Solid {
 }
 
 /// Every solid shape and solid model of a world, in id order (an entity's shape before its
-/// model), each knowing the entity it is on. Shapes and models on character entities are left
-/// out: characters do not collide with each other in M0.
+/// model's boxes), each knowing the entity it is on. Shapes and models on character entities are
+/// left out: characters do not collide with each other in M0.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Solids {
     /// The solids, in id order, an entity's shape before its model.
@@ -54,10 +55,11 @@ impl Solids {
     pub(crate) fn of(world: &World) -> Solids {
         let mut solids = Solids::default();
         for e in world.entities() {
-            for solid in [Solid::from_entity(e), Solid::from_model(world, e)]
-                .into_iter()
-                .flatten()
-            {
+            if let Some(solid) = Solid::from_entity(e) {
+                solids.solids.push(solid);
+                solids.owners.push(e.id);
+            }
+            for solid in Solid::from_model(world, e) {
                 solids.solids.push(solid);
                 solids.owners.push(e.id);
             }
@@ -134,18 +136,29 @@ impl Solid {
         finite.then_some(solid)
     }
 
-    /// The solid of an entity's model: a solid model with a `box` collider whose asset has
-    /// bounds, on an entity that is not a character. Its box is the asset's bounding box
-    /// scaled and turned by the entity's yaw ([`ModelBox`]).
-    fn from_model(world: &World, entity: &Entity) -> Option<Solid> {
-        if !entity.model()?.solid || entity.character().is_some() {
-            return None;
+    /// The solid of an entity's model: a solid model on an entity that is not a character, one
+    /// per box of its collider ([`World::model_boxes`]: the asset's bounding box, or each part
+    /// of its own geometry with the `mesh` collider), scaled and turned by the entity.
+    pub(crate) fn from_model(world: &World, entity: &Entity) -> Vec<Solid> {
+        let solid = entity.model().is_some_and(|m| m.solid) && entity.character().is_none();
+        let mut out: Vec<Solid> = Vec::new();
+        if solid {
+            world.model_boxes(entity, &mut |b| {
+                if let Some(s) = Self::from_box(&b) {
+                    out.push(s);
+                }
+            });
         }
+        out
+    }
+
+    /// The solid of one collider box: a turned box standing from its bottom to its top.
+    fn from_box(b: &ModelBox) -> Option<Solid> {
         let ModelBox {
             center,
             half,
             yaw_deg,
-        } = world.model_box(entity)?;
+        } = *b;
         let (sin, cos) = deg_to_rad(yaw_deg).psin_cos();
         let [cx, cy, cz] = center;
         let [hx, hy, hz] = half;

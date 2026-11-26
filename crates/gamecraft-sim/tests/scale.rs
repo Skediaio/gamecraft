@@ -33,6 +33,7 @@ fn solid(
             position,
             scale,
             components: vec![Component::Shape(Shape {
+                visible: true,
                 kind,
                 size,
                 color: [0.5, 0.5, 0.5],

@@ -144,6 +144,7 @@ fn the_middle_and_the_largest_of_a_scale() {
 fn prefabs() -> Vec<Prefab> {
     let shape = |size: [f64; 3]| {
         Component::Shape(Shape {
+            visible: true,
             kind: ShapeKind::Box,
             size,
             ..Shape::default()

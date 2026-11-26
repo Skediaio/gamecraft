@@ -58,6 +58,7 @@ fn mixed(seed: u64) -> (World, gamecraft_world::HeightField) {
                 name: "Post".into(),
                 offset: [-2.0, 0.0, 0.0],
                 components: vec![Component::Shape(Shape {
+                    visible: true,
                     kind: ShapeKind::Cylinder,
                     size: [0.4, 3.0, 0.4],
                     ..Shape::default()
@@ -69,6 +70,7 @@ fn mixed(seed: u64) -> (World, gamecraft_world::HeightField) {
                 name: "Post".into(),
                 offset: [2.0, 0.0, 0.0],
                 components: vec![Component::Shape(Shape {
+                    visible: true,
                     kind: ShapeKind::Cylinder,
                     size: [0.4, 3.0, 0.4],
                     ..Shape::default()
@@ -80,6 +82,7 @@ fn mixed(seed: u64) -> (World, gamecraft_world::HeightField) {
                 name: "Beam".into(),
                 offset: [0.0, 3.0, 0.0],
                 components: vec![Component::Shape(Shape {
+                    visible: true,
                     kind: ShapeKind::Box,
                     size: [4.4, 0.4, 0.4],
                     ..Shape::default()
@@ -99,6 +102,7 @@ fn mixed(seed: u64) -> (World, gamecraft_world::HeightField) {
     };
     let shape = |kind, size: [f64; 3], solid| {
         Component::Shape(Shape {
+            visible: true,
             kind,
             size,
             solid,
@@ -319,6 +323,7 @@ fn an_index_updated_in_place_is_one_made_again() {
                         .add_entity(EntityDraft {
                             position: [rng.range(-200.0, 200.0), 0.0, rng.range(-200.0, 200.0)],
                             components: vec![Component::Shape(Shape {
+                                visible: true,
                                 kind: ShapeKind::Box,
                                 size: [3.0, 2.0, 3.0],
                                 ..Shape::default()

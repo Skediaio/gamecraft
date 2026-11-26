@@ -169,6 +169,8 @@ const HASH_MARK_INSIDE: u64 = 0x5A0E_5A0E_5A0E_5A0E;
 const HASH_MARK_HELD: u64 = 0x1A7E_1A7E_1A7E_1A7E;
 /// Marks the bounds of the model assets in the static hash.
 const HASH_MARK_MODELS: u64 = 0x30DE_130D_E130_DE13;
+/// Marks the collision parts of the model assets that collide as their own geometry.
+const HASH_MARK_PARTS: u64 = 0x9A47_09A4_709A_4709;
 /// Marks the held facings in the state hash.
 const HASH_MARK_FACE: u64 = 0xFACE_FACE_FACE_FACE;
 
@@ -1269,7 +1271,7 @@ fn static_hash(world: &World) -> Result<u64, SimError> {
     let used: BTreeSet<&str> = world
         .entities()
         .filter_map(|e| e.model())
-        .filter(|m| m.collider == gamecraft_world::ModelCollider::Box)
+        .filter(|m| m.collider.collides())
         .map(|m| m.asset.as_str())
         .collect();
     let bounded: Vec<(&str, &gamecraft_world::ModelBounds)> = used
@@ -1282,6 +1284,25 @@ fn static_hash(world: &World) -> Result<u64, SimError> {
             hasher.write_str(asset);
             for v in b.min.iter().chain(&b.max) {
                 hasher.write_f64(*v);
+            }
+        }
+    }
+    // The parts of the assets that collide as their own geometry (written only when there are
+    // any, so every world made before hashes as it did).
+    let meshed: Vec<(&str, &[gamecraft_world::ModelBox])> = world
+        .entities()
+        .filter_map(|e| e.model())
+        .filter(|m| m.collider == gamecraft_world::ModelCollider::Mesh)
+        .filter_map(|m| world.model_parts(&m.asset).map(|p| (m.asset.as_str(), p)))
+        .collect();
+    if !meshed.is_empty() {
+        hasher.write_u64(HASH_MARK_PARTS);
+        for (asset, parts) in meshed {
+            hasher.write_str(asset);
+            for b in parts {
+                for v in b.center.iter().chain(&b.half) {
+                    hasher.write_f64(*v);
+                }
             }
         }
     }

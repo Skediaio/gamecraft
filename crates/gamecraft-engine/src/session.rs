@@ -15,7 +15,7 @@ use crate::spec::{CommandSpec, Scope, nearest};
 use crate::triggers::PlayLog;
 use gamecraft_sim::Sim;
 use gamecraft_sim::SpatialIndex;
-use gamecraft_world::{HeightField, Heightmap, ModelBounds, Terrain, World, WorldError};
+use gamecraft_world::{HeightField, Heightmap, ModelBounds, ModelBox, Terrain, World, WorldError};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
@@ -732,6 +732,25 @@ impl Session {
             running.set_model_bounds(bounds);
             // The running world was valid and only its derived data changed, so this cannot
             // fail; if it did, the simulation would keep the bounds it had.
+            let _ = sim.replace_world(running);
+        }
+    }
+
+    /// Hands over the collision parts of the model assets (by asset path), which the host
+    /// derived from the assets' bytes for the `mesh` collider: they replace those of the
+    /// document, of every world in the history and of the running world, where a solid model
+    /// collides with its own geometry from the next tick. Derived data: neither revision
+    /// changes and nothing is undone by it.
+    pub fn set_model_parts(&mut self, parts: BTreeMap<String, Vec<ModelBox>>) {
+        self.document.set_model_parts(parts.clone());
+        for world in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            world.set_model_parts(parts.clone());
+        }
+        if let Some(sim) = self.live.as_mut() {
+            let mut running = sim.world().clone();
+            running.set_model_parts(parts);
+            // The running world was valid and only its derived data changed, so this cannot
+            // fail; if it did, the simulation would keep the parts it had.
             let _ = sim.replace_world(running);
         }
     }

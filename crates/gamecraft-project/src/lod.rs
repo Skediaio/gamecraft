@@ -435,6 +435,9 @@ pub struct Plan {
     pub source: Option<LodSource>,
     /// `extras.MSFT_screencoverage` of the finest node of the first group that has it.
     coverage: Option<Vec<f64>>,
+    /// The nodes named `*_collider` or `*-collider` (or whose mesh is): collision geometry,
+    /// never drawn. [`colliders`] walks them for [`crate::inspect`].
+    pub colliders: BTreeSet<usize>,
     /// `asset.extras.gamecraft`: what of it could be read.
     pub settings: LodOverride,
     /// What is broken in the file, as sentences.
@@ -448,6 +451,7 @@ impl Default for Plan {
             groups: Vec::new(),
             member: BTreeMap::new(),
             left_out: BTreeSet::new(),
+            colliders: BTreeSet::new(),
             source: None,
             coverage: None,
             settings: LodOverride::default(),
@@ -944,6 +948,15 @@ pub fn plan(document: &Document, json: &[u8]) -> Plan {
     let reachable = tree.reachable();
     plan.read_extension(&tree, &nodes, &reachable);
     plan.read_names(&tree, &reachable);
+    for node in &tree.nodes {
+        let collider = is_collider_name(node.name().unwrap_or(""))
+            || node
+                .mesh()
+                .is_some_and(|m| is_collider_name(m.name().unwrap_or("")));
+        if collider {
+            plan.colliders.insert(node.index());
+        }
+    }
     plan.levels = plan
         .groups
         .iter()
@@ -954,17 +967,35 @@ pub fn plan(document: &Document, json: &[u8]) -> Plan {
     plan
 }
 
-/// One primitive of the scene to draw: where it is in the file, its model-to-world matrix
-/// and the levels that draw it.
+/// One primitive of the scene: where it is in the file (the node that shows it), its
+/// model-to-world matrix and the levels that draw it.
 #[derive(Clone, Debug)]
 pub struct Visit<'a> {
     /// The primitive.
     pub primitive: gltf::Primitive<'a>,
+    /// The index of the node that shows the primitive in the scene.
+    pub node: usize,
     /// Model-to-world, column-major, as [`crate::inspect`] measures it (the same products
     /// in the same order, so the two readers agree to the bit).
     pub world: [f64; 16],
     /// Bit `k` is set when the primitive is drawn at level `k`.
     pub drawn_at: u8,
+}
+
+/// The ends of the name of a collision node: a node (or a mesh) named `<something>_collider` or
+/// `<something>-collider`, in any case, is collision geometry ([`is_collider_name`]). Both
+/// spellings are read because packs use both.
+pub const COLLIDER_SUFFIXES: [&str; 2] = ["_collider", "-collider"];
+
+/// Whether a node's or a mesh's name marks collision geometry: it ends in one of
+/// [`COLLIDER_SUFFIXES`], the letters in any case, with something in front of it.
+pub fn is_collider_name(name: &str) -> bool {
+    COLLIDER_SUFFIXES.iter().any(|suffix| {
+        name.len() > suffix.len()
+            && name
+                .get(name.len() - suffix.len()..)
+                .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+    })
 }
 
 /// The levels `k` for which bit `k` of `mask` is set, lowest first.
@@ -1033,6 +1064,7 @@ pub fn walk<'a>(document: &'a Document, plan: &Plan) -> Result<Vec<Visit<'a>>, S
                 for primitive in mesh.primitives() {
                     out.push(Visit {
                         primitive,
+                        node: node.index(),
                         world,
                         drawn_at,
                     });
@@ -1058,7 +1090,8 @@ pub fn walk<'a>(document: &'a Document, plan: &Plan) -> Result<Vec<Visit<'a>>, S
             draw(node, world, lo, hi, &mut out);
             continue;
         }
-        if plan.left_out.contains(&index) {
+        // A level named twice, or collision geometry (and everything below it): never drawn.
+        if plan.left_out.contains(&index) || plan.colliders.contains(&index) {
             continue;
         }
         let world = mul(&parent, &to_f64(&node.transform().matrix()));
@@ -1097,6 +1130,47 @@ pub fn walk<'a>(document: &'a Document, plan: &Plan) -> Result<Vec<Visit<'a>>, S
                 .map(|c| (c.index(), world, depth + 1, lo, hi, false)),
         );
         draw(node, world, lo, hi, &mut out);
+    }
+    Ok(out)
+}
+
+/// Walks the default scene of `document` and gives every primitive of its **collision nodes**
+/// (those of [`Plan::colliders`], [`is_collider_name`]) with its model-to-world matrix: what
+/// [`crate::inspect`] measures as a model's collision parts. Every node is met where it stands
+/// in the file, whatever level-of-detail group it belongs to. An error, never a panic, for a
+/// file without a scene or a node tree that is too deep or loops.
+pub fn colliders<'a>(document: &'a Document, plan: &Plan) -> Result<Vec<Visit<'a>>, String> {
+    let scene = document
+        .default_scene()
+        .or_else(|| document.scenes().next())
+        .ok_or("the file has no scene")?;
+    let nodes: Vec<gltf::Node<'a>> = document.nodes().collect();
+    let mut stack: Vec<(usize, [f64; 16], usize)> =
+        scene.nodes().map(|n| (n.index(), IDENTITY, 0)).collect();
+    let mut visits = 0usize;
+    let mut out = Vec::new();
+    while let Some((index, parent, depth)) = stack.pop() {
+        visits += 1;
+        if visits > MAX_NODE_VISITS || depth > MAX_NODE_DEPTH {
+            return Err("the scene's node tree is too deep or loops".into());
+        }
+        let Some(node) = nodes.get(index) else {
+            continue;
+        };
+        let world = mul(&parent, &to_f64(&node.transform().matrix()));
+        if plan.colliders.contains(&index)
+            && let Some(mesh) = node.mesh()
+        {
+            for primitive in mesh.primitives() {
+                out.push(Visit {
+                    primitive,
+                    node: index,
+                    world,
+                    drawn_at: 1,
+                });
+            }
+        }
+        stack.extend(node.children().map(|c| (c.index(), world, depth + 1)));
     }
     Ok(out)
 }

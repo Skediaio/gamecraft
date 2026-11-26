@@ -90,6 +90,7 @@ fn flat(size_m: f64) -> (World, HeightField) {
 
 fn shape(kind: ShapeKind, size: [f64; 3], color: [f32; 3]) -> Component {
     Component::Shape(Shape {
+        visible: true,
         kind,
         size,
         color,

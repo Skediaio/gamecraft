@@ -3,6 +3,7 @@
 use crate::error::Ctx;
 use crate::instance::{ChildEdit, Lookup, Pending, Written, mark_written, place_derived};
 use crate::limits::{MAX_ENTITIES, MAX_HIERARCHY_DEPTH, MAX_PREFABS};
+use crate::model::{MAX_MODEL_PARTS, ModelCollider};
 use crate::prefab::{check_components, place_child, relative};
 use crate::store::EntityMap;
 use crate::{
@@ -54,6 +55,10 @@ pub struct World {
     /// The local bounding boxes of model assets, by asset path: derived from the assets by the
     /// host, never written to the file.
     model_bounds: BTreeMap<String, ModelBounds>,
+    /// The collision parts of model assets, by asset path (what the `mesh` collider uses):
+    /// boxes in the asset's own axes, derived from the assets by the host, never written to the
+    /// file.
+    model_parts: BTreeMap<String, Vec<ModelBox>>,
 }
 
 /// The file layout, in the order the fields are written.
@@ -276,6 +281,7 @@ impl World {
             entities: EntityMap::default(),
             next_entity_id: EntityId(1),
             model_bounds: BTreeMap::new(),
+            model_parts: BTreeMap::new(),
         }
     }
 
@@ -295,6 +301,62 @@ impl World {
     /// number that is not finite, or a minimum above the maximum, are left out.
     pub fn set_model_bounds(&mut self, bounds: BTreeMap<String, ModelBounds>) {
         self.model_bounds = bounds.into_iter().filter(|(_, b)| b.is_valid()).collect();
+    }
+
+    /// The collision parts of the model asset `asset`, as the host derived them for the `mesh`
+    /// collider; `None` when the host gave none.
+    pub fn model_parts(&self, asset: &str) -> Option<&[ModelBox]> {
+        self.model_parts.get(asset).map(Vec::as_slice)
+    }
+
+    /// Replaces the derived collision parts of the model assets (by asset path). Derived data:
+    /// it is not written to the file and does not change the document's text. An empty list,
+    /// one with a part that is not finite or with a half extent below 0, or one longer than
+    /// [`MAX_MODEL_PARTS`], is left out (the model then collides with nothing as `mesh`).
+    pub fn set_model_parts(&mut self, parts: BTreeMap<String, Vec<ModelBox>>) {
+        self.model_parts = parts
+            .into_iter()
+            .filter(|(_, list)| !list.is_empty() && list.len() <= MAX_MODEL_PARTS)
+            .filter(|(_, list)| {
+                list.iter().all(|p| {
+                    p.center.iter().chain(&p.half).all(|v| v.is_finite())
+                        && p.half.iter().all(|h| *h >= 0.0)
+                })
+            })
+            .collect();
+    }
+
+    /// The boxes the collider of `entity`'s model meets: the bounding box for `box`; every
+    /// part placed for the entity for `mesh` (its bounding box until the host handed the parts
+    /// over); nothing for `none` or without a model. Each usable box goes to `visit`; how many
+    /// were given is returned.
+    pub fn model_boxes(&self, entity: &Entity, visit: &mut impl FnMut(ModelBox)) -> usize {
+        let Some(model) = entity.model() else {
+            return 0;
+        };
+        match model.collider {
+            ModelCollider::None => 0,
+            ModelCollider::Mesh if self.model_parts.contains_key(&model.asset) => {
+                let Some(parts) = self.model_parts.get(&model.asset) else {
+                    return 0;
+                };
+                let mut given = 0;
+                for part in parts {
+                    if let Some(b) = ModelBox::part(entity, part.center, part.half) {
+                        visit(b);
+                        given += 1;
+                    }
+                }
+                given
+            }
+            _ => match self.model_box(entity) {
+                Some(b) => {
+                    visit(b);
+                    1
+                }
+                None => 0,
+            },
+        }
     }
 
     /// The samples of the terrain's heightmap when its source is one; `None` otherwise.
@@ -1142,6 +1204,7 @@ impl World {
             entities: entities.into_iter().collect(),
             next_entity_id,
             model_bounds: BTreeMap::new(),
+            model_parts: BTreeMap::new(),
         };
         world.validate()?;
         Ok(world)

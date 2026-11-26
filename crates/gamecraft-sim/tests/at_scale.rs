@@ -51,6 +51,7 @@ pub fn world_at_scale() -> World {
                 rotation_y_deg: 0.0,
                 prefab: None,
                 components: vec![Component::Shape(Shape {
+                    visible: true,
                     kind: ShapeKind::Box,
                     size: [6.0, 4.0 + i as f64, 6.0],
                     color: [0.7, 0.6, 0.5],
@@ -70,6 +71,7 @@ pub fn world_at_scale() -> World {
                 position: at(&mut rng),
                 rotation_y_deg: rng.range(0.0, 360.0),
                 components: vec![Component::Shape(Shape {
+                    visible: true,
                     kind: ShapeKind::Box,
                     size: [size, size / 2.0, size],
                     color: [0.5, 0.5, 0.55],

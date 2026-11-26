@@ -214,7 +214,7 @@ fn add_spec() -> CommandSpec {
                 T::Array,
                 "Components as in the file format, at most one of each type: {\"type\": \
                  \"shape\", \"kind\": \"box\"|\"sphere\"|\"cylinder\", \"size\", \"color\", \
-                 \"solid\"}, {\"type\": \"plant\", \"species\", \"seed\", \"growth\"}, \
+                 \"solid\", \"visible\"}, {\"type\": \"plant\", \"species\", \"seed\", \"growth\"}, \
                  {\"type\": \"character\", \"height_m\", ...}, {\"type\": \"water\", \
                  \"level_m\", \"outline\"} (water.add takes world points); fields left out \
                  take their defaults.",
@@ -327,6 +327,13 @@ fn set_spec() -> CommandSpec {
             )
             .unit("deg"),
             param("scale", T::Scale, &scale_param_doc()),
+            param(
+                "visible",
+                T::Boolean,
+                "Show or hide the entity's shape: a hidden shape (visible: false) is drawn \
+                 nowhere and still collides and counts for rays. An error when the entity has no \
+                 shape.",
+            ),
             layer_param("The layer it goes to, with the entities that belong to it."),
         ],
         "{id, position}",
@@ -365,6 +372,16 @@ fn set(edit: &mut Edit<'_>, p: Params<'_>) -> Result<Value, CommandError> {
             entity.layer.clone_from(&layer);
             entity.validate().map_err(|e| bad(e.to_string()))?;
         }
+    }
+    if let Some(visible) = p.bool("visible")? {
+        let entity = entity_mut(edit, id)?;
+        let shape = entity.shape_mut().ok_or_else(|| {
+            failed(format!(
+                "entity {id} has no shape to show or hide (a model, a plant, a character: \
+                 nothing with `visible`)"
+            ))
+        })?;
+        shape.visible = visible;
     }
     Ok(json!({"id": id.0, "position": position}))
 }

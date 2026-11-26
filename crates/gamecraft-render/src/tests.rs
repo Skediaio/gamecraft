@@ -264,6 +264,7 @@ fn a_shape_draws_to_its_scaled_size_on_every_axis() {
                 rotation_y_deg: 90.0,
                 scale,
                 components: vec![Component::Shape(Shape {
+                    visible: true,
                     kind,
                     size,
                     ..Shape::default()
@@ -463,6 +464,7 @@ fn framing_sees_every_corner_of_the_terrain() {
         .add_entity(EntityDraft {
             position: [100.0, 0.0, -40.0],
             components: vec![Component::Shape(Shape {
+                visible: true,
                 kind: ShapeKind::Box,
                 size: [2.0, 6.0, 2.0],
                 color: [1.0, 0.0, 0.0],
@@ -805,6 +807,7 @@ fn lit_world() -> World {
         0.0,
         vec![
             Component::Shape(Shape {
+                visible: true,
                 kind: ShapeKind::Box,
                 size: [1.0, 3.0, 1.0],
                 color: [0.5; 3],
@@ -829,6 +832,7 @@ fn lit_world() -> World {
         [3.0, 0.0, 3.0],
         0.0,
         vec![Component::Shape(Shape {
+            visible: true,
             kind: ShapeKind::Sphere,
             size: [1.0; 3],
             color: [0.5; 3],

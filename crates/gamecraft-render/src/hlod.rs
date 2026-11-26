@@ -421,6 +421,7 @@ mod tests {
     fn the_content_hash_follows_every_change() {
         let mut w = gamecraft_world::World::new("c", 1);
         let shape = gamecraft_world::Shape {
+            visible: true,
             kind: gamecraft_world::ShapeKind::Box,
             size: [1.0, 2.0, 3.0],
             color: [0.5, 0.5, 0.5],
@@ -454,6 +455,7 @@ mod tests {
         w.entity_mut(id)
             .unwrap()
             .set_component(gamecraft_world::Component::Shape(gamecraft_world::Shape {
+                visible: true,
                 size: [1.0, 2.0, 4.0],
                 ..shape
             }));

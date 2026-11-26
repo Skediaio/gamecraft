@@ -1237,6 +1237,7 @@ fn boxes(n: usize, spacing: f64) -> World {
             name: format!("Box {i}"),
             position: [x, 0.0, z],
             components: vec![Component::Shape(Shape {
+                visible: true,
                 kind: ShapeKind::Box,
                 size: [4.0, 3.0, 4.0],
                 color: [0.6, 0.5, 0.4],
@@ -1426,6 +1427,7 @@ fn a_model_is_merged_at_its_coarsest_level_and_a_reupload_builds_its_cells_again
         name: "Slab".into(),
         position: [0.0, 0.0, 300.0],
         components: vec![Component::Shape(Shape {
+            visible: true,
             kind: ShapeKind::Box,
             size: [8.0, 1.0, 8.0],
             color: [0.9, 0.1, 0.1],

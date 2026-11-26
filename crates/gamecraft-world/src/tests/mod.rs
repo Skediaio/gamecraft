@@ -141,6 +141,7 @@ pub(crate) fn example_world() -> World {
             rotation_y_deg: 30.0,
             scale: crate::Scale::ONE,
             components: vec![Component::Shape(Shape {
+                visible: true,
                 kind: ShapeKind::Box,
                 size: [1.0, 1.0, 1.0],
                 color: [0.6, 0.5, 0.4],
@@ -179,6 +180,7 @@ pub(crate) fn full_world() -> World {
     w.add_entity(EntityDraft {
         name: "Ball".into(),
         components: vec![Component::Shape(Shape {
+            visible: true,
             kind: ShapeKind::Sphere,
             size: [2.0, 2.0, 2.0],
             color: [1.0, 0.0, 0.0],
@@ -190,6 +192,7 @@ pub(crate) fn full_world() -> World {
     w.add_entity(EntityDraft {
         name: "Pillar".into(),
         components: vec![Component::Shape(Shape {
+            visible: true,
             kind: ShapeKind::Cylinder,
             size: [0.5, 3.0, 0.5],
             color: [0.5, 0.5, 0.5],

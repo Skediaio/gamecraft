@@ -216,6 +216,7 @@ fn a_character_entity_with_its_own_shape_is_not_blocked_by_it() {
         .entity_mut(a)
         .unwrap()
         .set_component(gamecraft_world::Component::Shape(gamecraft_world::Shape {
+            visible: true,
             kind: ShapeKind::Cylinder,
             size: [0.6, 1.8, 0.6],
             color: [1.0, 0.0, 0.0],

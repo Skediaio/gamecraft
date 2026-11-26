@@ -49,6 +49,7 @@ fn add_with_position_and_components_with_defaults() {
         e.components,
         vec![
             Component::Shape(Shape {
+                visible: true,
                 kind: ShapeKind::Cylinder,
                 size: [2.0, 6.0, 2.0],
                 color: [0.8, 0.8, 0.8],

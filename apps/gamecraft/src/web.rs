@@ -168,6 +168,7 @@ pub async fn load_assets(world: &mut World) -> Vec<(String, Vec<u8>)> {
     };
     let mut files = Vec::new();
     let mut bounds = std::collections::BTreeMap::new();
+    let mut collider_parts = std::collections::BTreeMap::new();
     for asset in used {
         let fetched = async {
             let bytes = fetch_bytes(&format!("{base}{asset}")).await?;
@@ -191,15 +192,17 @@ pub async fn load_assets(world: &mut World) -> Vec<(String, Vec<u8>)> {
         }
         .await;
         match fetched {
-            Ok((bytes, parts, summary)) => {
+            Ok((bytes, fetched, summary)) => {
                 bounds.insert(asset.clone(), summary.bounds);
+                collider_parts.insert(asset.clone(), summary.collider.parts.clone());
                 files.push((asset, bytes));
-                files.extend(parts.into_iter().map(|(_, path, data)| (path, data)));
+                files.extend(fetched.into_iter().map(|(_, path, data)| (path, data)));
             }
             Err(e) => console(&format!("The model {asset} is not loaded: {e}")),
         }
     }
     world.set_model_bounds(bounds);
+    world.set_model_parts(collider_parts);
     files
 }
 

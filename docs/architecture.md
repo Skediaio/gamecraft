@@ -83,8 +83,9 @@ field), then one body per character. `sim.input` stores an input record for an e
 until replaced. `sim.step` advances whole ticks of 1/60 s: for each character in id order, the
 input gives a wanted velocity, gravity and the ground give the vertical motion, the solid shapes
 around it (found through the spatial index) push the body out, and in water it wades: slower by
-the depth at its feet, and it does not step into water deeper than 1.5 m. The answer carries the
-tick and the state hash. `sim.stop` drops the
+the depth at its feet, and it does not step into water deeper than 1.5 m. A solid model is one
+solid per box of its collider: its bounding box, or with the `mesh` collider each part of its
+own geometry. The answer carries the tick and the state hash. `sim.stop` drops the
 simulation, or with `keep` makes the running world the document, as one undo step.
 
 **Direct.** A world command that arrives while a simulation runs (`entity.add`,

@@ -25,6 +25,7 @@ fn crate_draft(i: u64) -> EntityDraft {
         name: format!("b-{i}"),
         position: [(i % 100) as f64 * 3.0, 0.0, (i / 100) as f64 * 3.0],
         components: vec![Component::Shape(Shape {
+            visible: true,
             kind: ShapeKind::Box,
             size: [1.0, 1.0, 1.0],
             color: [0.5, 0.5, 0.5],
@@ -182,6 +183,7 @@ fn checking_a_change_finds_the_same_first_error_as_a_whole_check() {
             id: "crate".into(),
             name: "Crate".into(),
             components: vec![Component::Shape(Shape {
+                visible: true,
                 kind: ShapeKind::Box,
                 size: [1.0, 1.0, 1.0],
                 color: [0.5, 0.5, 0.5],

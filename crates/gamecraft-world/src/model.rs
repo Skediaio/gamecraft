@@ -1,12 +1,14 @@
-//! Models: an entity that shows a glTF asset of a pack, and the bounding boxes of the assets
-//! that the host derives for the simulation.
+//! Models: an entity that shows a glTF asset of a pack, and the bounding boxes and collision
+//! parts of the assets that the host derives for the simulation.
 //!
 //! A `model` component names an asset by its path inside the pack's `assets/` folder
 //! (`models/crate.glb`). The world document never reads the asset: what the simulation needs of
-//! it (its local bounding box, for a solid model and for rays) is derived data that the host
-//! computes from the asset's bytes and hands to the world with [`crate::World::set_model_bounds`].
-//! It is not written to the file; a model whose asset has no bounds is not solid and is not hit
-//! by rays.
+//! it (its local bounding box, for a solid model and for rays, and with the `mesh` collider its
+//! parts: a box per `*_collider` node or per mesh of the file) is derived data that the host
+//! computes from the asset's bytes and hands to the world with [`crate::World::set_model_bounds`]
+//! and [`crate::World::set_model_parts`]. It is not written to the file; a model whose asset has
+//! no bounds is not solid and is not hit by rays; one with the `mesh` collider collides as its
+//! bounding box until its parts are handed over.
 
 use crate::error::Ctx;
 use crate::limits::{SCALE_MAX, SCALE_MIN};
@@ -23,6 +25,9 @@ pub const MODEL_EXTENSIONS: [&str; 2] = ["glb", "gltf"];
 /// Most levels of detail a model draws: the levels its asset has, or those its switch
 /// distances name (one fewer than this).
 pub const MAX_MODEL_LOD_LEVELS: usize = 8;
+/// Most collision parts an asset has (the host hands over no more; beyond, the asset's
+/// bounding box is its collider).
+pub const MAX_MODEL_PARTS: usize = 256;
 
 /// Whether `path` is a valid asset path: 1 to [`MAX_ASSET_PATH_CHARS`] ASCII letters, digits,
 /// `-`, `_`, `.` and `/`, parts separated by single `/` (none empty, none `.` or `..`, no `/`
@@ -54,6 +59,12 @@ pub enum ModelCollider {
     /// characters are blocked by it.
     #[default]
     Box,
+    /// Its asset's own geometry, as the host measured it ([`crate::World::set_model_parts`]):
+    /// one box per `*_collider` node of the file, else one per mesh, in the entity's frame. So
+    /// a doorway in a wall is walked through and a balcony stood on. Rays hit each part and a
+    /// solid model blocks with each; until the parts arrive (or when the asset has more than
+    /// [`MAX_MODEL_PARTS`]) the model collides as its bounding box, as `box` does.
+    Mesh,
     /// Nothing: rays pass and characters walk through, solid or not.
     None,
 }
@@ -63,8 +74,14 @@ impl ModelCollider {
     pub fn name(self) -> &'static str {
         match self {
             ModelCollider::Box => "box",
+            ModelCollider::Mesh => "mesh",
             ModelCollider::None => "none",
         }
+    }
+
+    /// Whether the model collides with anything at all (rays or characters).
+    pub fn collides(self) -> bool {
+        self != ModelCollider::None
     }
 }
 
@@ -87,7 +104,8 @@ pub struct Model {
     /// Whether characters are blocked by its collider. Default false.
     #[serde(default)]
     pub solid: bool,
-    /// `box` (the asset's bounding box) or `none`. Default `box`.
+    /// `box` (the asset's bounding box), `mesh` (the asset's own geometry, a box per
+    /// `*_collider` node or per mesh of the file) or `none`. Default `box`.
     #[serde(default)]
     pub collider: ModelCollider,
     /// Where the asset's levels of detail give way to the next one, metres from the camera:
@@ -232,19 +250,39 @@ impl ModelBox {
         if model.collider == ModelCollider::None || !bounds.is_valid() {
             return None;
         }
-        let [sx, sy, sz] = entity.scale.times([model.scale; 3]);
         let [x0, y0, z0] = bounds.min;
         let [x1, y1, z1] = bounds.max;
-        let (lx, ly, lz) = (
-            (x0 + x1) / 2.0 * sx,
-            (y0 + y1) / 2.0 * sy,
-            (z0 + z1) / 2.0 * sz,
-        );
-        let half = [
-            (x1 - x0) / 2.0 * sx,
-            (y1 - y0) / 2.0 * sy,
-            (z1 - z0) / 2.0 * sz,
-        ];
+        let [sx, sy, sz] = entity.scale.times([model.scale; 3]);
+        // The same products in the same order as before the parts existed: a model with the
+        // `box` collider hashes as it did.
+        let (cx, cy, cz) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (z0 + z1) / 2.0);
+        let (hx, hy, hz) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0, (z1 - z0) / 2.0);
+        Self::placed(entity, [cx, cy, cz], [hx, hy, hz], [sx, sy, sz])
+    }
+
+    /// A box of the asset's own axes, centred on `center` with half extents `half`, placed for
+    /// `entity`'s model: times `model.scale` and the entity's scale, axis by axis, turned by
+    /// the entity's yaw about its position. `None` when the entity has no model or a number is
+    /// not finite.
+    pub fn part(entity: &Entity, center: [f64; 3], half: [f64; 3]) -> Option<ModelBox> {
+        let model = entity.model()?;
+        let scale = entity.scale.times([model.scale; 3]);
+        Self::placed(entity, center, half, scale)
+    }
+
+    /// `center` and `half` of the asset's axes, each times its scale, turned by the entity's
+    /// yaw about its position; the box's own turn stays 0 (its axes are the entity's).
+    fn placed(
+        entity: &Entity,
+        center: [f64; 3],
+        half: [f64; 3],
+        scale: [f64; 3],
+    ) -> Option<ModelBox> {
+        let [sx, sy, sz] = scale;
+        let [cx, cy, cz] = center;
+        let [hx, hy, hz] = half;
+        let (lx, ly, lz) = (cx * sx, cy * sy, cz * sz);
+        let half = [hx * sx, hy * sy, hz * sz];
         let (sin, cos) = deg_to_rad(entity.rotation_y_deg).psin_cos();
         // Local to world: counter-clockwise seen from above, as the simulation's solids turn.
         let (wx, wz) = (lx * cos + lz * sin, -lx * sin + lz * cos);

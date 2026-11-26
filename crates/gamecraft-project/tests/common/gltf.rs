@@ -56,6 +56,12 @@ impl Node {
         self
     }
 
+    /// Scaled by `[x, y, z]`.
+    pub fn scaled3(mut self, s: [f64; 3]) -> Node {
+        self.scale = s;
+        self
+    }
+
     pub fn at(mut self, x: f64, y: f64, z: f64) -> Node {
         self.translation = [x, y, z];
         self

@@ -34,6 +34,7 @@ fn beacon() -> Prefab {
                 offset: [0.0, 0.0, -2.0],
                 rotation_y_deg: 0.0,
                 components: vec![Component::Shape(Shape {
+                    visible: true,
                     kind: ShapeKind::Cylinder,
                     size: [0.2, 2.0, 0.2],
                     color: [0.5, 0.4, 0.3],
@@ -307,6 +308,7 @@ fn changing_a_prefab_changes_its_instances_but_keeps_their_overrides() {
 fn validation_names_the_prefab_and_the_field() {
     let mut bad = soldier();
     bad.components.push(Component::Shape(Shape {
+        visible: true,
         size: [-1.0, 1.0, 1.0],
         ..Shape::default()
     }));
@@ -408,6 +410,7 @@ fn remove_entities_takes_children_along_in_one_pass() {
                 name: format!("Camp {i}"),
                 position: [i as f64 * 10.0, 0.0, 0.0],
                 components: vec![Component::Shape(Shape {
+                    visible: true,
                     kind: ShapeKind::Box,
                     size: [2.0, 1.0, 2.0],
                     color: [0.5; 3],

@@ -76,6 +76,7 @@ pub fn add_shape(
             position,
             rotation_y_deg,
             components: vec![Component::Shape(Shape {
+                visible: true,
                 kind,
                 size,
                 color: [0.5, 0.5, 0.5],

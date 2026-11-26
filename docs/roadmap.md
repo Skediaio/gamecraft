@@ -200,7 +200,9 @@ the project's `ENGINE-WISHLIST.md`):
   `asset.list` lists the levels and `view.render` reports what each model drew per level
   (`docs/design/projects.md`; `decisions.md`). No mesh is simplified yet; plants still have
   one level in the adapter (VisionCraft's application gives them levels and impostors).
-- **Model collision finer than the bounding box:** recessed doorways and balconies are cosmetic.
+- ~~**Model collision finer than the bounding box**~~: done 2026-11-26: a model with the collider
+  `mesh` collides with its own geometry (a box per `*_collider` or `*-collider` node of its
+  file, else per mesh), so recessed doorways are walked through and balconies stood on.
 - **Wires and cables as splines** instead of fixed-length models.
 - **Emissive windows** and a cheap interior suggestion for dusk.
 - ~~**Export that carries assets**~~: done 2026-11-26 as far as one file can: `project.export`
@@ -268,9 +270,12 @@ from the engine, as mechanisms with no game in them, in the order they are sched
     `sim.state` saying where it is water and how deep, a character wading by depth and refused
     beyond 1.5 m, and the renderer's water for one surface (`design/water.md`). Open: swimming,
     projectiles in water, several surfaces in one picture, rivers with a flow.
-11. **Collision from a model's own geometry:** per-mesh or convex-part colliders, or a collision
-    mesh shipped in the glTF (nodes named `*-collider`), so a building can be walked under and
-    onto (see also *Model collision finer than the bounding box* above).
+11. ~~**Collision from a model's own geometry**~~: done 2026-11-26: the `mesh` collider takes a
+    box per node named `*_collider` or `*-collider` in the glTF (not drawn), else a box per mesh
+    of the finest level; the host measures them as the bounds, the spatial index holds them, and rays, lines
+    of sight, projectiles and character collision use them (`decisions.md`). With it, a shape
+    with `visible: false`: a collision helper drawn nowhere. Open: convex parts (a turned mesh
+    gets the box around it), trimesh colliders, a default collider in the file.
 12. ~~**A world finds its pack's assets**~~: done 2026-11-26: a world file finds the nearest
     `pack.json` above it (as engines find the project a scene belongs to), `--pack DIR` /
     `file.open {pack}` names another and the window, `run`, `info`, `render`, `play`, `serve`

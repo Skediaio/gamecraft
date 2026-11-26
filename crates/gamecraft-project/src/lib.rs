@@ -30,6 +30,8 @@
 //! `_LOD<n>` names and the `MSFT_lod` extension of glTF, and the distances the levels change
 //! at) are found there by the same walk for the host and the renderer. The images the models share are the pack's
 //! **texture store** ([`textures`]): an import extracts them into `assets/textures/<hash>.<ext>`.
+//! A model's **collision parts** ([`model::Collider`]): the boxes a `mesh` collider collides as,
+//! from the file's `*_collider` nodes or from its meshes, measured by the same walk.
 //!
 //! Pure: no files, no clock. The host reads and writes the files (`gamecraft-automation`).
 
@@ -70,7 +72,10 @@ pub use lod::{
     extend_bounds, follows_scale, from_coverage, levels_of, lod_name, rule, size_across,
 };
 pub use manifest::{Dependency, MAX_PACKS, Manifest, PACK_FORMAT, dependency_order};
-pub use model::{ModelSummary, inspect};
+pub use model::{
+    COLLIDER_SUFFIXES, Collider, ColliderSource, MAX_MODEL_PARTS, ModelSummary, inspect,
+    is_collider_name,
+};
 pub use pack::{MAX_LAYERS, PackSource};
 pub use paths::{
     MAX_ENTITY_KEY_CHARS, MAX_PLAIN_NAME_CHARS, MAX_PREFAB_FILE_CHARS, is_entity_key,
