@@ -113,7 +113,7 @@ fn export(raw: &[String]) -> Res {
         a.value("--out")?
             .ok_or_else(|| CliError::Usage("give the file to write with --out FILE".into()))?,
     )?;
-    let mut host = opened(dir, Some(folder(&out)))?;
+    let mut host = opened(dir, Some(folder(&out)), None)?;
     print_json(&exec(
         &mut host,
         "project.export",

@@ -2,7 +2,7 @@
 //! came from, so that a changed world is written back to the files it belongs to.
 
 use crate::ProjectError;
-use crate::assets::PackAsset;
+use crate::assets::{PackAsset, check_assets};
 use crate::cells::{Cell, cell_path, check_cell_size};
 use crate::fields::{PROJECT_KEYS, WORLD_FORMAT, WORLD_KEYS, diff, world_fields};
 use crate::layer::{Entry, Layer, LayerEntity};
@@ -170,6 +170,51 @@ pub fn manifests(
     Ok(out)
 }
 
+/// The assets of the project whose root pack is `root`, without loading any world: the packs
+/// in dependency order (a missing pack or a cycle is an error naming the chain), each through
+/// the licence gate as for a project, a later pack's asset replacing an earlier one's of the
+/// same path. What a world file inside a pack needs of it ([`Project::assets`] is the same
+/// map for an open project).
+pub fn pack_assets(
+    root: &str,
+    packs: &BTreeMap<String, PackSource>,
+) -> Result<BTreeMap<String, ProjectAsset>, ProjectError> {
+    let manifests = manifests(packs)?;
+    let order = dependency_order(root, &manifests)?;
+    let mut sources = Vec::with_capacity(order.len());
+    for id in &order {
+        let source = packs
+            .get(id)
+            .ok_or_else(|| ProjectError::new(format!("the pack `{id}` is missing")))?;
+        sources.push((id.as_str(), source.location.as_str(), check_assets(source)?));
+    }
+    Ok(merged_assets(sources.iter().map(
+        |(id, location, assets)| (*id, *location, assets.iter()),
+    )))
+}
+
+/// The assets of packs in load order, by path inside `assets/`: a later pack's replaces an
+/// earlier one's of the same path.
+fn merged_assets<'a>(
+    packs: impl IntoIterator<Item = (&'a str, &'a str, std::slice::Iter<'a, PackAsset>)>,
+) -> BTreeMap<String, ProjectAsset> {
+    packs
+        .into_iter()
+        .flat_map(|(pack, location, assets)| {
+            assets.map(move |a| {
+                (
+                    a.path.clone(),
+                    ProjectAsset {
+                        pack: pack.to_string(),
+                        location: location.to_string(),
+                        asset: a.clone(),
+                    },
+                )
+            })
+        })
+        .collect()
+}
+
 impl Project {
     /// Loads the project whose root pack is `root`: orders `packs` by their dependencies,
     /// layers them and resolves `world` (by default the first world of the root pack, else of
@@ -268,21 +313,11 @@ impl Project {
             saved_fields: world_fields(&world)?,
             saved: world.clone(),
             warnings: resolved.warnings.clone(),
-            assets: parsed
-                .iter()
-                .flat_map(|p| {
-                    p.assets.iter().map(|a| {
-                        (
-                            a.path.clone(),
-                            ProjectAsset {
-                                pack: p.manifest.id.clone(),
-                                location: p.location.clone(),
-                                asset: a.clone(),
-                            },
-                        )
-                    })
-                })
-                .collect(),
+            assets: merged_assets(
+                parsed
+                    .iter()
+                    .map(|p| (p.manifest.id.as_str(), p.location.as_str(), p.assets.iter())),
+            ),
         };
         project.own = project.own_of(root_pack, &world);
         Ok((project, world))

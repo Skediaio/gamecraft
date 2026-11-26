@@ -201,8 +201,10 @@ the project's `ENGINE-WISHLIST.md`):
 - **Model collision finer than the bounding box:** recessed doorways and balconies are cosmetic.
 - **Wires and cables as splines** instead of fixed-length models.
 - **Emissive windows** and a cheap interior suggestion for dusk.
-- **Export that carries assets:** `project.export` yields a file whose models draw as magenta
-  boxes.
+- ~~**Export that carries assets**~~: done 2026-11-26 as far as one file can: `project.export`
+  says which pack has the world's models and which files it needs, and the exported file draws
+  its models from inside that pack or with `--pack DIR`. A bundle that carries its assets is
+  M11.
 - **Cameras as world data**, **prefab children that can be overridden per instance**,
   `entity.scatter` with a layer parameter and a rotation bias, and plants for dry regions
   (a true date palm, dry scrub).
@@ -264,9 +266,12 @@ from the engine, as mechanisms with no game in them, in the order they are sched
 11. **Collision from a model's own geometry:** per-mesh or convex-part colliders, or a collision
     mesh shipped in the glTF (nodes named `*-collider`), so a building can be walked under and
     onto (see also *Model collision finer than the bounding box* above).
-12. **A world finds its pack's assets:** `view.render` and `project.open` of a world file take the
-    pack (`--pack DIR`) or the world records which pack it belongs to, so models do not fall back
-    to placeholder cubes.
+12. ~~**A world finds its pack's assets**~~: done 2026-11-26: a world file finds the nearest
+    `pack.json` above it (as engines find the project a scene belongs to), `--pack DIR` /
+    `file.open {pack}` names another and the window, `run`, `info`, `render`, `play`, `serve`
+    and `mcp` take it; the pack's assets are measured and handed over like a project's, and a
+    world without one is told in one sentence. `project.export` says which pack and files its
+    world needs (`decisions.md`). Open: an export that carries its assets in a bundle (M11).
 13. **Weapon animation without a skeleton:** a model's parts move on keyframes, with no skinning.
     The glTF node animations (translation, rotation, scale) are read and played. Clips are
     started by events: `fire` on a launcher's shot, `reload` on a reload, `dry` on an empty

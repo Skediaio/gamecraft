@@ -6,13 +6,17 @@
 //! `gamecraft-project`, which layers them into one world; saving goes the other way. Every
 //! file read lies inside its pack's folder (a link out is refused) and every pack inside the
 //! read root; every file written lies inside the project's folder, inside the write root.
+//!
+//! A **world file** finds its pack too (`file.open`): the nearest `pack.json` above the file,
+//! the pack the command names, or the host's own; only that chain's assets are read then, not
+//! its worlds ([`open_pack_assets`], [`find_pack_above`]).
 
 use crate::commands::{host_spec, strip_owner};
 use crate::fields::Fields;
 use crate::files::{Direction, RAISE_CAP, mb, resolve, write_whole};
 use crate::host::{Access, Host, ProjectIndex};
 use gamecraft_engine::{CommandSpec, ParamType as T, param};
-use gamecraft_project::{Cell, MAX_PACKS, Manifest, PackSource, Project, Saving};
+use gamecraft_project::{Cell, MAX_PACKS, Manifest, PackSource, Project, ProjectAsset, Saving};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
@@ -36,10 +40,6 @@ pub(crate) struct OpenProject {
     pub indexed: Option<u64>,
     /// The terrain tiles the cache folder holds, by key, as last written or checked.
     pub terrain_keys: crate::terrain_cache::Keys,
-    /// The assets of the project's packs, the models measured.
-    pub assets: crate::assets::Catalog,
-    /// The model assets whose files the renderer was given.
-    pub provided: std::collections::BTreeSet<String>,
 }
 
 /// The text of a `cell_size_m` parameter.
@@ -240,8 +240,11 @@ pub(crate) fn project_specs() -> Vec<CommandSpec> {
             "project.export",
             "Export Project",
             "Writes the open project's world (the document, never the running world) as one \
-             .gamecraft file inside the write root, entities with their layers. Replacing an \
-             existing file needs `overwrite`.",
+             .gamecraft file inside the write root, entities with its layers. The file refers to \
+             its models by their paths inside a pack's assets/ folder: `pack` is the pack that \
+             has them (open the file with --pack DIR, or keep it inside that pack, to draw \
+             them), `needs` the files it needs of a pack and `missing` the models no pack has. \
+             Replacing an existing file needs `overwrite`.",
             vec![
                 param(
                     "path",
@@ -251,7 +254,8 @@ pub(crate) fn project_specs() -> Vec<CommandSpec> {
                 .required(),
                 param("overwrite", T::Boolean, "Replace an existing file.").default(json!(false)),
             ],
-            "{path, bytes, entities}",
+            "{path, bytes, entities, pack: {path, id, packs}, needs: [files inside the pack's \
+             folder], missing: [assets no pack has]}",
             json!({"path": "skirmish.gamecraft"}),
         ),
         host_spec(
@@ -295,7 +299,7 @@ pub(crate) fn project_specs() -> Vec<CommandSpec> {
 /// The folder `given` inside the root of `direction`: `..` is refused, a relative path is
 /// inside the root, and the existing folder (or, when `must_exist` is false and it does not
 /// exist yet, its parent) is resolved with its links and must lie inside the root.
-fn resolve_dir(
+pub(crate) fn resolve_dir(
     access: &Access,
     given: &str,
     direction: Direction,
@@ -379,8 +383,9 @@ pub(crate) fn writable(access: &Access, dir: &Path) -> bool {
 /// `worlds/*/terrain/edits.json` and (for the licence gate) the asset records, the `.gltf`
 /// documents and the JSON chunks of the `.glb` models are read (the terrain's tile cache is
 /// read when the world is built); a file or folder that is a link leading out of the pack is
-/// refused.
-fn read_pack(dir: &Path, budget: &mut u64, cap: u64) -> Result<PackSource, String> {
+/// refused. Without `worlds` the prefabs and worlds are left out: a world file inside the
+/// pack needs its assets only.
+fn read_pack(dir: &Path, budget: &mut u64, cap: u64, worlds: bool) -> Result<PackSource, String> {
     let mut source = PackSource {
         location: dir.display().to_string(),
         files: BTreeMap::new(),
@@ -430,30 +435,8 @@ fn read_pack(dir: &Path, budget: &mut u64, cap: u64) -> Result<PackSource, Strin
         ));
     }
     read("pack.json", &mut source, budget)?;
-    for name in json_files(&dir.join("prefabs"))? {
-        read(&format!("prefabs/{name}"), &mut source, budget)?;
-    }
-    for world in sub_folders(&dir.join("worlds"))? {
-        let base = format!("worlds/{world}");
-        if dir.join(&base).join("world.json").exists() {
-            read(&format!("{base}/world.json"), &mut source, budget)?;
-        }
-        for name in json_files(&dir.join(&base).join("layers"))? {
-            read(&format!("{base}/layers/{name}"), &mut source, budget)?;
-        }
-        // A layer split into cells: layers/<layer>/<cx>_<cz>.json.
-        for layer in sub_folders(&dir.join(&base).join("layers"))? {
-            for name in json_files(&dir.join(&base).join("layers").join(&layer))? {
-                read(
-                    &format!("{base}/layers/{layer}/{name}"),
-                    &mut source,
-                    budget,
-                )?;
-            }
-        }
-        if dir.join(&base).join("terrain").join("edits.json").exists() {
-            read(&format!("{base}/terrain/edits.json"), &mut source, budget)?;
-        }
+    if worlds {
+        read_worlds(dir, &mut source, budget, &read)?;
     }
     let mut listed = Vec::new();
     list_assets(dir, "assets", 0, &mut listed)?;
@@ -476,6 +459,38 @@ fn read_pack(dir: &Path, budget: &mut u64, cap: u64) -> Result<PackSource, Strin
         source.assets.insert(relative, size);
     }
     Ok(source)
+}
+
+/// The prefabs and worlds of the pack in `dir`: `prefabs/*.json`, `worlds/*/world.json`, each
+/// layer file (a layer split in cells too) and `worlds/*/terrain/edits.json`.
+fn read_worlds(
+    dir: &Path,
+    source: &mut PackSource,
+    budget: &mut u64,
+    read: &dyn Fn(&str, &mut PackSource, &mut u64) -> Result<(), String>,
+) -> Result<(), String> {
+    for name in json_files(&dir.join("prefabs"))? {
+        read(&format!("prefabs/{name}"), source, budget)?;
+    }
+    for world in sub_folders(&dir.join("worlds"))? {
+        let base = format!("worlds/{world}");
+        if dir.join(&base).join("world.json").exists() {
+            read(&format!("{base}/world.json"), source, budget)?;
+        }
+        for name in json_files(&dir.join(&base).join("layers"))? {
+            read(&format!("{base}/layers/{name}"), source, budget)?;
+        }
+        // A layer split into cells: layers/<layer>/<cx>_<cz>.json.
+        for layer in sub_folders(&dir.join(&base).join("layers"))? {
+            for name in json_files(&dir.join(&base).join("layers").join(&layer))? {
+                read(&format!("{base}/layers/{layer}/{name}"), source, budget)?;
+            }
+        }
+        if dir.join(&base).join("terrain").join("edits.json").exists() {
+            read(&format!("{base}/terrain/edits.json"), source, budget)?;
+        }
+    }
+    Ok(())
 }
 
 /// The JSON chunk of the GLB file `path`, at most `cap` bytes, for the licence gate: only the
@@ -593,10 +608,69 @@ fn sub_folders(dir: &Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// Reads the root pack in `dir` and every pack it depends on, directly or not.
+/// Most folders [`find_pack_above`] climbs: deeper than any path it is given.
+const MAX_PACK_CLIMB: usize = 255;
+
+/// The nearest pack above the folder `from`: the first ancestor (itself included) that holds
+/// a `pack.json`, resolved with its links; the climb stops at `up_to` (inclusive) and at the
+/// root of the file system. As most engines find the project a scene belongs to.
+pub fn find_pack_above(from: &Path, up_to: Option<&Path>) -> Option<PathBuf> {
+    let mut at = Some(from);
+    let mut climbs = 0usize;
+    while let Some(dir) = at {
+        if dir.join("pack.json").is_file()
+            && let Ok(real) = fs::canonicalize(dir)
+            && real.is_dir()
+        {
+            return Some(real);
+        }
+        if up_to.is_some_and(|top| dir == top) || climbs >= MAX_PACK_CLIMB {
+            return None;
+        }
+        climbs += 1;
+        at = dir.parent();
+    }
+    None
+}
+
+/// The deepest folder that holds both `a` and `b`: their common ancestor (either when one
+/// holds the other, `/` when they share nothing).
+pub fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for (x, y) in a.components().zip(b.components()) {
+        if x != y {
+            break;
+        }
+        out.push(x.as_os_str());
+    }
+    if out.as_os_str().is_empty() {
+        PathBuf::from("/")
+    } else {
+        out
+    }
+}
+
+/// The assets of the pack in `dir` (resolved, inside the read root) and of every pack it
+/// depends on: the host's catalog, the models measured, as for an open project. Only the
+/// packs' manifests and assets are read. Returns the catalog, the root pack's id and the ids
+/// of the packs in load order.
+pub(crate) fn open_pack_assets(
+    access: &Access,
+    dir: &Path,
+) -> Result<(crate::assets::Catalog, String, Vec<String>), String> {
+    let (root, packs) = read_packs(access, dir, false)?;
+    let assets: BTreeMap<String, ProjectAsset> =
+        gamecraft_project::pack_assets(&root, &packs).map_err(|e| e.to_string())?;
+    let ids = packs.keys().cloned().collect();
+    Ok((crate::assets::catalog_of(&assets), root, ids))
+}
+
+/// Reads the root pack in `dir` and every pack it depends on, directly or not; without
+/// `worlds`, the manifests and assets only.
 fn read_packs(
     access: &Access,
     dir: &Path,
+    worlds: bool,
 ) -> Result<(String, BTreeMap<String, PackSource>), String> {
     let real_root = access
         .read_root
@@ -605,7 +679,7 @@ fn read_packs(
         .ok_or("this server may not read files: no read root is set")?;
     let cap = access.max_world_bytes();
     let mut budget = cap.max(MAX_PROJECT_BYTES);
-    let root_source = read_pack(dir, &mut budget, cap)?;
+    let root_source = read_pack(dir, &mut budget, cap, worlds)?;
     let root_text = root_source
         .files
         .get("pack.json")
@@ -652,7 +726,7 @@ fn read_packs(
             if !real.join("pack.json").is_file() {
                 continue;
             }
-            packs.insert(dep.id.clone(), read_pack(&real, &mut budget, cap)?);
+            packs.insert(dep.id.clone(), read_pack(&real, &mut budget, cap, worlds)?);
             queue.push_back(dep.id);
         }
     }
@@ -817,6 +891,9 @@ impl Host {
         };
         self.path = None;
         self.saved_revision = self.session.revision();
+        self.assets = assets;
+        self.provided.clear();
+        self.pack = Some(dir.clone());
         let (index, problem) = self.index_project(&dir);
         self.project = Some(OpenProject {
             project,
@@ -824,8 +901,6 @@ impl Host {
             index,
             indexed: None,
             terrain_keys,
-            assets,
-            provided: std::collections::BTreeSet::new(),
         });
         let index = if problem.is_null() {
             self.refresh_index().unwrap_or_else(|e| json!({"error": e}))
@@ -902,6 +977,7 @@ impl Host {
                 cache_beside_files: self.access.cache_beside_files,
             },
             &dir,
+            true,
         )?;
         let (project, world) =
             Project::load(id, &packs, Some(world_name)).map_err(|e| e.to_string())?;
@@ -921,7 +997,7 @@ impl Host {
         let world = p.str("world").map_err(strip_owner)?;
         let dir = resolve_dir(&self.access, given, Direction::Read, true)?;
         let cells = cells_param(p)?;
-        let (root, packs) = read_packs(&self.access, &dir)?;
+        let (root, packs) = read_packs(&self.access, &dir, true)?;
         let (project, loaded) =
             Project::load_cells(&root, &packs, world, cells.as_ref()).map_err(|e| e.to_string())?;
         let result = json!({
@@ -1011,7 +1087,7 @@ impl Host {
     }
 
     pub(crate) fn project_export(&mut self, p: &Fields) -> Result<Value, String> {
-        self.open_project()?;
+        let open = self.open_project()?;
         let overwrite = p.bool("overwrite").map_err(strip_owner)?.unwrap_or(false);
         let given = p.required_str("path").map_err(strip_owner)?;
         let target = resolve(&self.access, given, Direction::Write, "gamecraft")?;
@@ -1027,10 +1103,24 @@ impl Host {
             .to_json()
             .map_err(|e| format!("the document cannot be written: {e}"))?;
         write_whole(&target, text.as_bytes())?;
+        // What the exported world needs to draw its models: the files, inside a pack's
+        // folder, and the pack that has them now.
+        let (needs, missing) = crate::assets::needed_files(self.session.document(), &self.assets);
+        let packs: Vec<String> = open
+            .project
+            .packs()
+            .iter()
+            .map(|p| p.manifest.id.clone())
+            .collect();
+        let root = open.project.root().to_string();
+        let dir = open.dir.display().to_string();
         Ok(json!({
             "path": target.display().to_string(),
             "bytes": text.len(),
             "entities": self.session.document().entity_count(),
+            "pack": {"path": dir, "id": root, "packs": packs},
+            "needs": needs,
+            "missing": missing,
         }))
     }
 
@@ -1085,7 +1175,7 @@ impl Host {
             .map_err(|e| e.to_string())?;
         let text = manifest.to_text().map_err(|e| e.to_string())?;
         write_whole(&manifest_path, text.as_bytes())?;
-        let reopened = read_packs(&self.access, &dir).and_then(|(root, packs)| {
+        let reopened = read_packs(&self.access, &dir, true).and_then(|(root, packs)| {
             Project::load(&root, &packs, Some(&world)).map_err(|e| e.to_string())
         });
         let (project, loaded) = match reopened {

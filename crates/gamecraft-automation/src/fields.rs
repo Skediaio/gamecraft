@@ -89,6 +89,13 @@ impl<'a> Fields<'a> {
         self.map?.get(key).filter(|value| !value.is_null())
     }
 
+    /// The value as given, JSON null included: for a parameter that means something when it
+    /// is explicitly null (`pack: null`, a native command's).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub fn raw(&self, key: &str) -> Option<&'a Value> {
+        self.map?.get(key)
+    }
+
     /// A string.
     pub fn str(&self, key: &str) -> Result<Option<&'a str>, String> {
         match self.get(key) {

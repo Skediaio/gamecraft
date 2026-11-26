@@ -4,12 +4,14 @@
 //! (`gamecraft_project::textures`): each is stored once, under its content hash, with a licence
 //! record of its own.
 //!
-//! When a project opens, the host reads every model asset of its packs (each has passed the
-//! licence gate of `gamecraft-project`), measures it ([`gamecraft_project::inspect`]: triangles
-//! and bounding box) and hands the bounding boxes to the session as derived data
-//! ([`gamecraft_engine::Session::set_model_bounds`]): the simulation never reads a file. Before
-//! a picture, the host hands the renderer the files of the models the world shows
-//! ([`crate::Pictures::provide_asset`]).
+//! When a project opens, or a world file finds its pack (`file.open`: the nearest `pack.json`
+//! above the file, the pack the command names, or the host's own), the host reads every model
+//! asset of its packs (each has passed the licence gate of `gamecraft-project`), measures it
+//! ([`gamecraft_project::inspect`]: triangles and bounding box) and hands the bounding boxes to
+//! the session as derived data ([`gamecraft_engine::Session::set_model_bounds`]): the simulation
+//! never reads a file. Before a picture, the host hands the renderer the files of the models
+//! the world shows ([`crate::Pictures::provide_asset`]) and says, in one sentence, which models
+//! no pack provides.
 
 use crate::commands::{host_spec, strip_owner};
 use crate::fields::Fields;
@@ -26,6 +28,7 @@ use gamecraft_project::{
 use gamecraft_world::{EntityId, ModelBounds, World, is_model_path};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -86,8 +89,13 @@ fn measure(dir: &Path, path: &str) -> Result<ModelSummary, String> {
 
 /// The catalog of `project`: every asset of its packs, the models read and measured.
 pub(crate) fn catalog(project: &Project) -> Catalog {
-    project
-        .assets()
+    catalog_of(project.assets())
+}
+
+/// The catalog of the assets of a chain of packs ([`gamecraft_project::pack_assets`], or a
+/// project's): every model read and measured.
+pub(crate) fn catalog_of(assets: &BTreeMap<String, gamecraft_project::ProjectAsset>) -> Catalog {
+    assets
         .iter()
         .map(|(path, a)| {
             let dir = PathBuf::from(&a.location);
@@ -194,14 +202,15 @@ pub(crate) fn asset_specs() -> Vec<CommandSpec> {
         host_spec(
             "asset.list",
             "List Assets",
-            "Lists the assets of the open project's packs (a later pack's asset replaces an \
-             earlier one's of the same path): licence, author, source, size, and for a model \
-             its triangle count, bounding box (metres, the asset's own axes) and levels of \
-             detail (triangles per level, where each ends and how far it is drawn as its file \
-             says, else from its size), or the problem that kept it from being read; how \
-             many entities of the world shown use it. The textures of the packs' store (`textures`) are listed apart, each once, \
-             with the models that refer to it. And the model assets the world refers to that \
-             no pack has.",
+            "Lists the assets of the open project's packs, or of the pack of the open world \
+             file (a later pack's asset replaces an earlier one's of the same path): licence, \
+             author, source, size, and for a model its triangle count, bounding box (metres, \
+             the asset's own axes) and levels of detail (triangles per level, where each ends \
+             and how far it is drawn as its file says, else from its size), or the problem \
+             that kept it from being read; how many entities of the world shown use it. The \
+             textures of the packs' store (`textures`) are listed apart, each once, with the \
+             models that refer to it. And the model assets the world refers to that no pack \
+             has.",
             vec![],
             "{assets: [{path, pack, kind, license, author, source_url, title, changes, bytes, \
              files, triangles, bounds: {min, max} | null, lods: [{level, triangles, until_m}], \
@@ -214,9 +223,9 @@ pub(crate) fn asset_specs() -> Vec<CommandSpec> {
             "asset.credits",
             "Asset Credits",
             "The attribution text a game must show: one line for every CC-BY asset of the \
-             open project with its title, author, licence and source (CC0 assets need none; an \
-             empty text when there is no CC-BY asset). A texture of the store is one asset, \
-             credited once however many models use it.",
+             open project, or of the open world file's pack, with its title, author, licence \
+             and source (CC0 assets need none; an empty text when there is no CC-BY asset). A \
+             texture of the store is one asset, credited once however many models use it.",
             vec![],
             "{text, assets: [{path, kind, title, author, license, source_url, changes}]}",
             json!({}),
@@ -262,33 +271,112 @@ fn lods_json(s: &ModelSummary) -> (Value, Value, Value, Value) {
     )
 }
 
+/// The files inside a pack's folder that the models of `world` need: each model's own files
+/// and the files they refer to, as the catalog lists them (`assets/models/crate.glb`, the
+/// textures of the store), with the licence record of each, sorted, each once; and the models
+/// no pack has.
+pub(crate) fn needed_files(world: &World, catalog: &Catalog) -> (Vec<String>, Vec<Value>) {
+    let mut files = BTreeSet::new();
+    let mut missing = Vec::new();
+    for (path, ids) in used(world) {
+        match catalog.get(&path) {
+            Some(asset) => {
+                files.extend(asset.asset.files.iter().cloned());
+                // Each file's licence record travels with it: the model's own and those of
+                // the textures of the store it refers to.
+                files.insert(record_path(&asset.asset.path));
+                for file in &asset.asset.files {
+                    if let Some(inside) = file.strip_prefix(&format!("{ASSETS_DIR}/"))
+                        && is_texture(inside)
+                    {
+                        files.insert(record_path(inside));
+                    }
+                }
+            }
+            None => missing.push(
+                json!({"asset": path, "entities": ids.iter().map(|id| id.0).collect::<Vec<_>>()}),
+            ),
+        }
+    }
+    (files.into_iter().collect(), missing)
+}
+
 impl Host {
-    /// The catalog of the open project, or the error that no project is open.
+    /// The catalog of the open project, or of the pack the open world file found (empty for a
+    /// world file without one, a project that has none, or a new world).
     fn catalog(&self) -> Result<&Catalog, String> {
-        self.project.as_ref().map(|p| &p.assets).ok_or_else(|| {
-            "no project is open; open one with project.open (assets live in packs)".to_string()
-        })
+        if self.project.is_none() && self.path.is_none() {
+            return Err(
+                "no project is open; open one with project.open, or a world file (the ones \
+                 inside a pack, or opened with `pack`, list that pack's): assets live in packs"
+                    .to_string(),
+            );
+        }
+        Ok(&self.assets)
+    }
+
+    /// The models of the world shown that no open pack provides, each with how many
+    /// entities show it, in path order.
+    fn missing_models(&self) -> Vec<(String, usize)> {
+        used(self.session.current_world())
+            .into_iter()
+            .filter(|(path, _)| !self.assets.contains_key(path))
+            .map(|(path, ids)| (path, ids.len()))
+            .collect()
+    }
+
+    /// One sentence for `view.render` when models are drawn as magenta boxes because no pack
+    /// provides their files: which models, why, and what to do. `None` when every model of the
+    /// world shown has its files.
+    pub(crate) fn missing_pack_line(&self) -> Option<String> {
+        let missing = self.missing_models();
+        if missing.is_empty() {
+            return None;
+        }
+        let one = missing.len() == 1;
+        let names: Vec<String> = missing
+            .iter()
+            .map(|(path, n)| format!("`{path}` ({n} entit{})", if *n == 1 { "y" } else { "ies" }))
+            .collect();
+        let list = match names.split_last() {
+            Some((last, [])) => last.clone(),
+            Some((last, head)) => format!("{} and {}", head.join(", "), last),
+            None => String::new(),
+        };
+        let why = match (&self.pack, &self.path) {
+            (Some(dir), _) => format!("the pack `{}` has no such file", dir.display()),
+            (None, Some(path)) => format!(
+                "no pack.json lies above `{}` and none was given",
+                path.display()
+            ),
+            (None, None) => "the world has no file, and no pack was given".to_string(),
+        };
+        let it = if one { "it" } else { "they" };
+        let is = if one { "is" } else { "are" };
+        Some(format!(
+            "{} {list}: no pack provides {it} ({why}), so {it} {is} drawn as small magenta \
+             boxes; open the world with --pack DIR (file.open `pack`), a folder with a \
+             pack.json whose assets/ holds {it}, or import {it} with asset.import.",
+            if one { "Model" } else { "Models" }
+        ))
     }
 
     /// Hands `give` the files of every model of the world shown that it was not handed yet
-    /// (by this host, since the project was opened): paths inside `assets/`, a `.gltf`'s
+    /// (by this host, since the assets were set): paths inside `assets/`, a `.gltf`'s
     /// buffers and images under their own paths. A window that draws for itself calls it
     /// before every frame; `view.render` does it for the host's [`crate::Pictures`]. A file
     /// that cannot be read is left out: the renderer then draws its stand-in and says why.
-    /// Nothing without an open project.
+    /// Nothing without an open project or a world file's pack.
     pub fn hand_over_assets(&mut self, give: &mut dyn FnMut(&str, Vec<u8>)) {
         let wanted: Vec<String> = used(self.session.current_world()).into_keys().collect();
-        let Some(open) = self.project.as_mut() else {
-            return;
-        };
         for path in wanted {
-            if open.provided.contains(&path) {
+            if self.provided.contains(&path) {
                 continue;
             }
-            let Some(asset) = open.assets.get(&path) else {
+            let Some(asset) = self.assets.get(&path) else {
                 continue;
             };
-            open.provided.insert(path.clone());
+            self.provided.insert(path.clone());
             for file in &asset.asset.files {
                 let Some(inside) = file.strip_prefix(&format!("{ASSETS_DIR}/")) else {
                     continue;
@@ -659,12 +747,9 @@ impl Host {
             "bounds": bounds_json(&summary.bounds),
             "textures": store,
         });
-        let Some(open) = self.project.as_mut() else {
-            return Ok(answer);
-        };
         for (path, bytes) in new_textures {
             let files = vec![format!("{ASSETS_DIR}/{path}")];
-            open.assets.insert(
+            self.assets.insert(
                 path.clone(),
                 HostAsset {
                     pack: pack.clone(),
@@ -679,7 +764,7 @@ impl Host {
                 },
             );
         }
-        open.assets.insert(
+        self.assets.insert(
             to.to_string(),
             HostAsset {
                 pack,
@@ -693,8 +778,8 @@ impl Host {
                 summary: Some(Ok(summary)),
             },
         );
-        open.provided.remove(to);
-        let all = bounds(&open.assets);
+        self.provided.remove(to);
+        let all = bounds(&self.assets);
         self.session.set_model_bounds(all);
         Ok(answer)
     }

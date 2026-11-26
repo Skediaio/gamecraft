@@ -104,7 +104,11 @@ command names (`entity.add {layer}`), or to the world's default layer.
 - Files are pretty-printed with a stable order, one entity per line in layer files, so diffs show
   exactly what changed.
 - `project.export {path}` writes the resolved world as one `.gamecraft` file (M0's format), which
-  stays the format for tests, examples and exchange.
+  stays the format for tests, examples and exchange. The file refers to its models by their paths
+  inside a pack's `assets/` folder, and the answer says what it needs: `pack` (the pack that has
+  them), `needs` (the files) and `missing` (the models no pack has). It draws its models when it
+  lies inside that pack or is opened with `--pack DIR` (`file.open` `pack`): a world file finds
+  its pack as most engines find the project a scene belongs to (*As built*, *Assets*).
 
 ### The index
 
@@ -335,8 +339,15 @@ models of a pack share stored once (`gamecraft-project/src/textures.rs`;
   every command's copy, so the bounds travel with it. The static part of the state hash covers
   the bounds of every asset a `box` collider uses (only when there are any, so other worlds hash
   as before). The browser measures the models it fetches the same way. A `.gamecraft` file
-  opened on its own has no assets: its models have no bounds (they do not collide) and are
-  drawn as magenta boxes.
+  finds its pack (`file.open`, 2026-11-26; `decisions.md`, *A world file finds the pack above
+  it*): the folder `pack` names, else the host's own (`gamecraft-cli --pack DIR`, the window's
+  `--pack DIR`, `Host::with_pack`), else the nearest `pack.json` above the file, searched up to
+  the read root (the command line and the window read from the folder that holds the pack, so a
+  dependency beside it is found too); `pack: null` wants none. That pack and the packs it depends
+  on are read for their assets only, through the licence gate as a project's are; the bounds
+  reach the session, the files go to the renderer, and `asset.list` and `asset.credits` list them.
+  A world file without a pack has no assets: its models have no bounds (they do not collide), are
+  drawn as magenta boxes, and `view.render` says so in one sentence.
 - **Licence records.** `assets/<path>.license.json`: `{"license": "CC0-1.0" | "CC-BY-4.0",
   "author", "source_url", "title"?, "changes"?}` (author and source not empty, texts at most
   2000 characters). Loading a pack refuses, naming the file: an asset without a record, a record

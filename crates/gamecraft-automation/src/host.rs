@@ -119,6 +119,15 @@ pub trait Pictures {
     }
 }
 
+impl Host {
+    /// The sentence for models no pack provides ([`crate::assets`]): none in the browser,
+    /// where the models of a world are fetched with it and the renderer says which were not.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn missing_pack_line(&self) -> Option<String> {
+        None
+    }
+}
+
 /// The SQL index of an open project (the CLI's is `gamecraft-index`, on Turso): rebuilt from
 /// the world, queried with one read-only `SELECT`.
 pub trait ProjectIndex {
@@ -155,6 +164,21 @@ pub struct Host {
     /// Opens the index of a project; without one, `project.query` says an index is needed.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) indexer: Option<Box<dyn Indexer>>,
+    /// The assets of the open project, or of the pack the open world file found
+    /// (`file.open`): the models measured. Empty without either.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) assets: crate::assets::Catalog,
+    /// The model assets whose files the renderer was given since the assets were set.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) provided: std::collections::BTreeSet<String>,
+    /// The folder of the pack whose assets are open: the open project's root pack, or the
+    /// pack of the open world file.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) pack: Option<PathBuf>,
+    /// The pack a world file takes its assets from when `file.open` names none (the host's
+    /// `--pack DIR`); it overrides the pack above the file too.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) default_pack: Option<PathBuf>,
 }
 
 impl Host {
@@ -172,7 +196,31 @@ impl Host {
             project: None,
             #[cfg(not(target_arch = "wasm32"))]
             indexer: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            assets: std::collections::BTreeMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            provided: std::collections::BTreeSet::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            pack: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            default_pack: None,
         }
+    }
+
+    /// The same host, taking the assets of a world file from the pack in `dir` when
+    /// `file.open` names no `pack`: where a command line's `--pack DIR` lands. The folder
+    /// must lie inside the read root when a world file is opened.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_pack(mut self, dir: PathBuf) -> Host {
+        self.default_pack = Some(dir);
+        self
+    }
+
+    /// The folders automation may touch from now on (a host that opened a world file with a
+    /// wider reach, to hand its pack over, narrows itself to what a server was started with).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_access(&mut self, access: Access) {
+        self.access = access;
     }
 
     /// The same host, indexing projects with `indexer` (`project.query`).

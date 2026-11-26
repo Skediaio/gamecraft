@@ -16,9 +16,20 @@ fn main() -> std::process::ExitCode {
         println!("{}", gamecraft::args::USAGE);
         return ExitCode::SUCCESS;
     }
+    if let (Some(path), Some(pack)) = (&args.world, &args.pack)
+        && path.is_dir()
+    {
+        eprintln!(
+            "gamecraft: {} is a project folder, which brings its own assets; --pack {} goes \
+             with a world file",
+            path.display(),
+            pack.display()
+        );
+        return ExitCode::from(2);
+    }
     let game = match &args.world {
         Some(path) if path.is_dir() => gamecraft::game::Game::from_project(path),
-        Some(path) => gamecraft::app::load_world_file(path).map(gamecraft::game::Game::new),
+        Some(path) => gamecraft::game::Game::from_world_file(path, args.pack.as_deref()),
         None => Ok(gamecraft::game::Game::new(gamecraft_engine::example_world())),
     };
     let game = match game {

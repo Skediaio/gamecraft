@@ -41,7 +41,7 @@ Options:
 
 pub const RUN: &str = "\
 Usage: gamecraft-cli run [FILE] [--new JSON] [--cmd ID [--params JSON]]... [--script FILE]...
-                         [--out FILE] [--keep-going]
+                         [--out FILE] [--keep-going] [--pack DIR]
 
 Opens the world FILE (a .gamecraft file, or a project folder) or, with --new, starts a world with the parameters of
 file.new (without either, an empty world), runs the steps in the order given, prints one line of
@@ -58,6 +58,8 @@ Options:
   --out FILE      Save the document afterwards (a .gamecraft file; replaces an existing one)
   --keep-going    Carry on after a failing step: its line is
                   {\"failed\": id, \"step\": n, \"error\": text}, --out still saves, exit code 1
+  --pack DIR      With a world FILE: the pack whose assets/ holds its models (a folder with a
+                  pack.json), instead of the nearest pack.json above the file
 
 Example:
   gamecraft-cli run --new '{\"name\": \"Valley\"}' \\
@@ -65,21 +67,27 @@ Example:
       --out valley.gamecraft";
 
 pub const INFO: &str = "\
-Usage: gamecraft-cli info FILE
+Usage: gamecraft-cli info FILE [--pack DIR]
 
 Prints the state of a .gamecraft file, or of a project folder (its world layered from its
-packs), as JSON, as the command world.inspect gives it (at most 1000 entities).";
+packs), as JSON, as the command world.inspect gives it (at most 1000 entities). --pack DIR,
+with a world file, is the pack whose assets/ holds its models (default: the nearest pack.json
+above the file).";
 
 pub const RENDER: &str = "\
 Usage: gamecraft-cli render FILE --out PNG [--size WxH] [--camera JSON]
-                            [--follow ENTITY [--view first|third] [--distance M]]
+                            [--follow ENTITY [--view first|third] [--distance M]] [--pack DIR]
 
 Draws the world to a PNG on the GPU and prints what the renderer says (the camera it used, what
 it drew, problems) as one line of JSON. Without a camera the whole world is framed. Without a GPU
-it fails (exit 1) and says so; everything else works without one.
+it fails (exit 1) and says so; everything else works without one. A world file's models come from
+the nearest pack above it; without one they are magenta boxes and `problems` says, in one
+sentence, what is missing.
 
 Options:
   --out PNG        The picture to write (replaced if it exists)
+  --pack DIR       With a world FILE: the pack whose assets/ holds its models (a folder with a
+                   pack.json), instead of the nearest pack.json above the file
   --size WxH       Pixels, 16 to 3840 wide and 16 to 2160 tall (default 960x540)
   --camera JSON    '{\"position\": [x, y, z], \"target\": [x, y, z], \"fov_y_deg\": 60}', metres
   --follow ENTITY  Through the eyes of an entity (id or name) or behind it
@@ -88,7 +96,7 @@ Options:
 
 pub const PLAY: &str = "\
 Usage: gamecraft-cli play FILE [--script FILE] [--seconds S | --ticks N]
-                          [--out-state FILE] [--picture PNG] [--journal FILE]
+                          [--out-state FILE] [--picture PNG] [--journal FILE] [--pack DIR]
 
 Starts the simulation of the world FILE, runs the script (steps as for run, typically sim.input
 and sim.step), steps on until the total time given is reached, and prints sim.state as one line
@@ -103,7 +111,9 @@ Options:
   --out-state FILE Also write the state to FILE as JSON
   --picture PNG    Draw the last state to PNG (needs a GPU); the state line gets a \"picture\" key
   --journal FILE   Also write the journal of the run (every command with its tick and the state
-                   hash after it; docs/design/journal.md), for `gamecraft-cli replay`";
+                   hash after it; docs/design/journal.md), for `gamecraft-cli replay`
+  --pack DIR       With a world FILE: the pack whose assets/ holds its models, so solid ones
+                   collide (default: the nearest pack.json above the file)";
 
 pub const REPLAY: &str = "\
 Usage: gamecraft-cli replay JOURNAL [--to-tick N] [--check]
@@ -128,7 +138,8 @@ Writes an empty world (no terrain, the default environment, no entities) to FILE
 file that must not exist yet, and prints {path, bytes, name, seed}.";
 
 pub const SERVE: &str = "\
-Usage: gamecraft-cli serve [--automation-read-root DIR] [--automation-write-root DIR] [--file FILE]
+Usage: gamecraft-cli serve [--automation-read-root DIR] [--automation-write-root DIR]
+                        [--file FILE [--pack DIR]]
 
 The JSON-lines protocol on stdin and stdout: one request per line, one reply per line
 ({\"id\", \"method\", \"params\"}; docs/control-protocol.md). Nothing listens on a network port.
@@ -140,10 +151,15 @@ Options:
   --automation-read-root DIR   Where file.open may read
   --automation-write-root DIR  Where file.save and pictures may write
   --file FILE                  Start with this world open (its path is not remembered: file.save
-                               needs a path)";
+                               needs a path). A world file's models come from the nearest
+                               pack.json above it, or from --pack DIR
+  --pack DIR                   With --file: the pack whose assets/ holds the world's models (a
+                               folder with a pack.json), for the start and for every world file
+                               opened later without `pack`";
 
 pub const MCP: &str = "\
-Usage: gamecraft-cli mcp [--automation-read-root DIR] [--automation-write-root DIR] [--file FILE]
+Usage: gamecraft-cli mcp [--automation-read-root DIR] [--automation-write-root DIR]
+                      [--file FILE [--pack DIR]]
 
 The Model Context Protocol server (JSON-RPC 2.0, one message per line) on stdin and stdout, over
 the same commands as serve. The flags are those of serve.
@@ -151,7 +167,11 @@ the same commands as serve. The flags are those of serve.
 Options:
   --automation-read-root DIR   Where file.open may read
   --automation-write-root DIR  Where file.save and pictures may write
-  --file FILE                  Start with this world open";
+  --file FILE                  Start with this world open. A world file's models come from the
+                               nearest pack.json above it, or from --pack DIR
+  --pack DIR                   With --file: the pack whose assets/ holds the world's models (a
+                               folder with a pack.json), for the start and for every world file
+                               opened later without `pack`";
 
 pub const PROJECT: &str = "\
 Usage: gamecraft-cli project new DIR --id ID [--name NAME] [--world W] [--from FILE]

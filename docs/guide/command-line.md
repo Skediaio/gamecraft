@@ -64,6 +64,12 @@ Play commands work inside one run: `sim.start`, `sim.input`, `sim.step`, `sim.st
 
 `run` may read the folder of its FILE and write the folder of its `--out`, and nothing else.
 
+A world file refers to its models by their paths inside a pack's `assets/` folder. It finds that
+pack as most engines find the project a scene belongs to: the nearest `pack.json` above the file.
+`--pack DIR` names another one (a folder with a `pack.json`): `gamecraft-cli run valley.gamecraft
+--pack ../valley-pack --cmd asset.list`. The folder that holds the pack may be read too. The same
+flag is on `info`, `render`, `play` and the servers.
+
 > **Quotes on Windows:** in PowerShell and Command Prompt the JSON in `--params` needs other
 > quoting (in Command Prompt, double quotes doubled or escaped as `\"`). A script file (below)
 > avoids the problem altogether.
@@ -103,7 +109,9 @@ Draws the world to a PNG on the GPU and prints what the renderer says: the camer
 drew (`stats`) and `problems`, for example an unknown plant species. Without a camera the whole
 world is framed. `--follow` takes an entity's id or name: `--view third` (the default) looks at it
 from behind, `--view first` through a character's eyes. Without a GPU it fails with code 1 and says
-so; everything else works without one.
+so; everything else works without one. A world file's models come from the nearest `pack.json`
+above it, or from `--pack DIR`; without a pack they are magenta boxes and `problems` says, in one
+sentence, which models are missing and what to do.
 
 ## Playing: `play`
 
@@ -162,7 +170,7 @@ gamecraft-cli project open examples/skirmish-night-mod
 gamecraft-cli project new my-skirmish --id my-skirmish --name "My skirmish" --world village \
     --from examples/skirmish/world.gamecraft
 # One .gamecraft file of what a project resolves to.
-gamecraft-cli project export examples/skirmish-night-mod --out night.gamecraft
+gamecraft-cli project export examples/skirmish-night-mod --out night.gamecraft   # says what it needs
 # Ask the index: every enemy within 100 m of the houses.
 gamecraft-cli project query examples/skirmish/project \
     "SELECT e.name, e.x, e.z FROM entities e JOIN entity_tags t ON t.entity_id = e.id
@@ -253,7 +261,9 @@ port. Files are touched only inside the roots given: `file.open` reads inside
 `--automation-read-root`, `file.save` and `view.render` with a `path` write inside
 `--automation-write-root`. With no root there is no file access, and the error names the flag that
 grants it. `--file` starts with a world open (read once; its path is not remembered, so `file.save`
-needs a `path`).
+needs a `path`). A world file's models come from the nearest `pack.json` above it, searched up to
+`--automation-read-root`, or from `--pack DIR`: the start and every world file opened later
+without `pack` use it.
 
 World files of up to 512 MiB are read by default. That cap is a safety net against a file that
 would exhaust memory; raise it with the global `--max-world-mb N` (any subcommand, anywhere on the

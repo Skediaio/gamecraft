@@ -431,6 +431,14 @@ fn the_arguments_name_a_world_the_control_channel_and_a_quality() {
     assert!(e.contains("--stdn") && e.contains("--stdin"), "{e}");
     let e = parse(&["a.gamecraft", "b.gamecraft"]).unwrap_err();
     assert!(e.contains("b.gamecraft"), "{e}");
+    // The pack a world file takes its assets from.
+    let a = parse(&["valley.gamecraft", "--pack", "demo"]).unwrap();
+    assert_eq!(a.pack.as_deref(), Some(std::path::Path::new("demo")));
+    assert_eq!(Args::default().pack, None);
+    let e = parse(&["valley.gamecraft", "--pack"]).unwrap_err();
+    assert!(e.contains("--pack"), "{e}");
+    let e = parse(&["valley.gamecraft", "--pac", "demo"]).unwrap_err();
+    assert!(e.contains("--pac") && e.contains("--pack"), "{e}");
 }
 
 // ---- the game loop, without a window ----
@@ -706,6 +714,103 @@ fn the_left_stick_walks_the_player_north_and_start_pauses() {
 }
 
 // ---- projects and their models ----
+
+/// Copies a folder, recursively.
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let path = entry.unwrap().path();
+        let target = to.join(path.file_name().unwrap());
+        if path.is_dir() {
+            copy_dir(&path, &target);
+        } else {
+            std::fs::copy(&path, &target).unwrap();
+        }
+    }
+}
+
+/// The demo pack in a temporary folder with a world file in it (`demo/loose.gamecraft`: a
+/// solid crate and a character), and a copy of the file outside every pack.
+fn pack_with_a_world_file(tag: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!("gamecraft-window-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let demo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/assets-demo");
+    copy_dir(&demo, &tmp.join("demo"));
+    let mut world = World::new("Yard", 3);
+    world.terrain = Some(Terrain {
+        size_m: 64.0,
+        cell_m: 1.0,
+        source: TerrainSource::Flat { height_m: 0.0 },
+        ..Default::default()
+    });
+    world
+        .add_entity(EntityDraft {
+            name: "Crate".into(),
+            components: vec![Component::Model(gamecraft_world::Model {
+                solid: true,
+                ..gamecraft_world::Model::of("models/crate.glb")
+            })],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    world
+        .add_entity(EntityDraft {
+            name: "Walker".into(),
+            position: [0.0, 0.0, 6.0],
+            components: vec![Component::Character(Character::default())],
+            ..EntityDraft::default()
+        })
+        .unwrap();
+    std::fs::write(tmp.join("demo/loose.gamecraft"), world.to_json().unwrap()).unwrap();
+    std::fs::copy(
+        tmp.join("demo/loose.gamecraft"),
+        tmp.join("loose.gamecraft"),
+    )
+    .unwrap();
+    tmp
+}
+
+#[test]
+fn a_world_file_opens_with_the_pack_above_it_or_the_one_given() {
+    let tmp = pack_with_a_world_file("world-file");
+    // Inside the pack: its models' files go to the view and their bounds to the simulation.
+    let mut game = Game::from_world_file(&tmp.join("demo/loose.gamecraft"), None).unwrap();
+    assert!(game.session().is_playing());
+    assert!(
+        game.session()
+            .current_world()
+            .model_bounds("models/crate.glb")
+            .is_some()
+    );
+    let paths: Vec<String> = game.take_assets().into_iter().map(|(p, _)| p).collect();
+    assert_eq!(paths, ["models/crate.glb"]);
+    assert!(game.take_assets().is_empty(), "handed over once");
+    // Outside every pack, with the pack given: the same.
+    let mut game =
+        Game::from_world_file(&tmp.join("loose.gamecraft"), Some(&tmp.join("demo"))).unwrap();
+    assert!(
+        game.session()
+            .current_world()
+            .model_bounds("models/crate.glb")
+            .is_some()
+    );
+    assert_eq!(game.take_assets().len(), 1);
+    // Without a pack: the world opens, with no models to draw or collide with.
+    let mut game = Game::from_world_file(&tmp.join("loose.gamecraft"), None).unwrap();
+    assert!(
+        game.session()
+            .current_world()
+            .model_bounds("models/crate.glb")
+            .is_none()
+    );
+    assert!(game.take_assets().is_empty());
+    // A pack that is not one is an error naming it.
+    let e = Game::from_world_file(&tmp.join("loose.gamecraft"), Some(&tmp.join("nowhere")))
+        .err()
+        .unwrap();
+    assert!(e.contains("nowhere"), "{e}");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
 
 #[test]
 fn a_project_folder_opens_with_its_models_handed_to_the_view_once() {

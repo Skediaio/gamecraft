@@ -78,7 +78,7 @@ pub use paths::{
 };
 pub use project::{
     DEFAULT_LAYER, EntitySource, PackInfo, Project, ProjectAsset, Provenance, SavePlan, Saving,
-    manifests,
+    manifests, pack_assets,
 };
 pub use terrain::TERRAIN_EDITS_FORMAT;
 pub use textures::{TEXTURES_DIR, content_hash, is_texture};

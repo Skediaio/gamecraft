@@ -8,6 +8,45 @@ developer as a recommendation.
 
 ## Taken
 
+### 2026-11-26: A world file finds the pack above it, and an export says what it needs
+
+`view.render` of a world file inside a pack drew magenta boxes for every model: nothing told the
+host where the pack's `assets/` folder was. A world file refers to its models by their paths
+inside a pack (`models/crate.glb`), so it needs the pack, and the question was where that comes
+from.
+
+- **The nearest `pack.json` above the file**, as most engines find the project a scene belongs
+  to (Godot finds `project.godot` by walking up from a scene given on its command line; Unity
+  and Unreal find the project by the folder the scene is in). Chosen over a world that records
+  its pack (a path inside a document goes stale when either file moves, and a file sent to
+  someone else points at a folder they do not have) and over always naming the pack (a world
+  file inside its pack should just work). The climb stops at the host's read root, so automation
+  reads nothing it was not given; the command line and the window, which were given the file
+  itself, widen their reach to the folder that holds the pack, where its dependencies lie
+  (`../game`).
+- **The pack given wins**: `file.open {pack: DIR}` and `gamecraft-cli --pack DIR` (the host's
+  pack, for every world file opened later without `pack`) come first, and `pack: null` wants
+  none even above a pack. The command line refuses `--pack` on a project folder, which brings
+  its own assets.
+- **Only the assets are read**, not the worlds: a pack of 60 000 entities in cells opens a
+  world file as fast as a small one. Each pack of the chain passes the licence gate as for a
+  project; a broken one is an error naming the file, and the sentence says the world opens
+  without it with `pack: null`. The models are measured and their bounds reach the session with
+  the world, so a solid model collides from the first tick; the renderer is handed their files;
+  `asset.list` and `asset.credits` list the pack's assets as a project's.
+- **A world without a pack is said in one sentence**: the renderer names each model it cannot
+  draw; the host adds one sentence naming them all, why (no `pack.json` above the file and none
+  given, or the pack has no such file) and what to do. An agent reads `problems`; one sentence
+  with the remedy is what it can act on.
+- **An export says what it needs, and carries nothing.** `project.export` writes one
+  `.gamecraft` file; its answer names the pack that has the world's models (`pack`), the files
+  it needs of one, licence records included (`needs`), and the models no pack has (`missing`).
+  The file draws its models when it lies inside that pack or is opened with `--pack DIR`. A
+  bundle that carries its assets is distribution (M11, "packaging a game and its mods"): copying
+  a pack's files beside a loose world file would make a second, half-pack on disk that the
+  licence gate does not know. Chosen over embedding models in the world file (the document is
+  copied by every command and every undo step) and over a side folder of copies.
+
 ### 2026-11-26: A uniform grid over the ground plane for what a ray or a character can meet
 
 On a world of 300 000 entities (boxes and prefab instances with their children over 8 km) a

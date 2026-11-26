@@ -101,31 +101,77 @@ pub fn exec(host: &mut Host, id: &str, params: &Value) -> Result<Value, CliError
     host.execute(id, params).map_err(CliError::Failed)
 }
 
-/// Opens `file` in a host whose read root is the file's own folder.
-fn open_in(host: &mut Host, file: &Path) -> Res {
-    exec(
-        host,
-        "file.open",
-        &json!({"path": file.display().to_string()}),
-    )
-    .map(drop)
+/// The `--pack DIR` flag of a subcommand that opens a world file: the folder, checked
+/// against `file` (a project folder brings its own assets and takes none).
+fn pack_flag<'a>(a: &'a Args, file: Option<&str>) -> Result<Option<&'a str>, CliError> {
+    let pack = a.value("--pack")?;
+    if let (Some(pack), Some(file)) = (pack, file)
+        && absolute(file)?.is_dir()
+    {
+        return Err(CliError::Usage(format!(
+            "`{file}` is a project folder, which brings its own assets; --pack {pack} goes \
+             with a world file"
+        )));
+    }
+    Ok(pack)
 }
 
 /// A host that has opened `file`, writing only in `write_folder`. A folder is a project:
 /// it is opened with project.open, reading in the folder that holds it (so a dependency
-/// beside it, `../game`, is found).
-pub fn opened(file: &str, write_folder: Option<PathBuf>) -> Result<Host, CliError> {
+/// beside it, `../game`, is found). A world file finds the pack above it, or the pack
+/// `pack` names (`--pack DIR`, a folder with a pack.json whose assets/ holds the world's
+/// models); that folder is read too, from the folder that holds it.
+pub fn opened(
+    file: &str,
+    write_folder: Option<PathBuf>,
+    pack: Option<&str>,
+) -> Result<Host, CliError> {
     let path = absolute(file)?;
-    let mut host = host(Some(folder(&path)), write_folder);
     if path.is_dir() {
+        let mut host = host(Some(folder(&path)), write_folder);
         exec(
             &mut host,
             "project.open",
             &json!({"path": path.display().to_string()}),
         )?;
-    } else {
-        open_in(&mut host, &path)?;
+        return Ok(host);
     }
+    let path = std::fs::canonicalize(&path)
+        .map_err(|e| CliError::Failed(format!("cannot open `{file}`: {e}")))?;
+    // Where the pack is: the one given, else the nearest pack.json above the file. Only the
+    // one given is the host's own pack (it stands for every world file opened later).
+    let given = pack.is_some();
+    let pack_dir = match pack {
+        Some(dir) => {
+            let dir = absolute(dir)?;
+            if !dir.is_dir() {
+                return Err(CliError::Failed(format!(
+                    "`--pack {}`: the folder does not exist; give the folder of a pack (it has \
+                     a pack.json whose assets/ holds the world's models)",
+                    dir.display()
+                )));
+            }
+            Some(std::fs::canonicalize(&dir).map_err(|e| {
+                CliError::Failed(format!("cannot use the pack `{}`: {e}", dir.display()))
+            })?)
+        }
+        None => gamecraft_automation::find_pack_above(&folder(&path), None),
+    };
+    // The file's own folder, widened to the folder that holds the pack (where its
+    // dependencies lie, `../game`).
+    let read_root = match &pack_dir {
+        Some(pack) => gamecraft_automation::common_ancestor(&folder(&path), &folder(pack)),
+        None => folder(&path),
+    };
+    let mut host = host(Some(read_root), write_folder);
+    if given && let Some(pack) = &pack_dir {
+        host = host.with_pack(pack.clone());
+    }
+    exec(
+        &mut host,
+        "file.open",
+        &json!({"path": path.display().to_string()}),
+    )?;
     Ok(host)
 }
 
@@ -231,7 +277,7 @@ pub fn list(raw: &[String]) -> Res {
 pub fn run(raw: &[String]) -> Res {
     let a = Args::parse(
         raw,
-        &["--new", "--script", "--cmd", "--params", "--out"],
+        &["--new", "--script", "--cmd", "--params", "--out", "--pack"],
         &["--keep-going"],
     )?;
     if a.help() {
@@ -244,13 +290,14 @@ pub fn run(raw: &[String]) -> Res {
             "`--new` starts a new world; it does not go with a FILE".into(),
         ));
     }
+    let pack = pack_flag(&a, file)?;
     let new = new.map(|text| json_arg("--new", text)).transpose()?;
     let steps = collect_steps(&a)?;
     let out = a.value("--out")?.map(absolute).transpose()?;
     let keep_going = a.has("--keep-going");
     let write_root = out.as_deref().map(folder);
     let mut host = match file {
-        Some(file) => opened(file, write_root)?,
+        Some(file) => opened(file, write_root, pack)?,
         None => {
             let mut host = host(None, write_root);
             if let Some(params) = new {
@@ -277,12 +324,12 @@ pub fn run(raw: &[String]) -> Res {
 
 /// `info`: `world.inspect` of a file.
 pub fn info(raw: &[String]) -> Res {
-    let a = Args::parse(raw, &[], &[])?;
+    let a = Args::parse(raw, &["--pack"], &[])?;
     if a.help() {
         return print(help::INFO);
     }
     let file = a.required_file("the world FILE to describe")?;
-    let mut host = opened(file, None)?;
+    let mut host = opened(file, None, pack_flag(&a, Some(file))?)?;
     let result = exec(
         &mut host,
         "world.inspect",
@@ -334,6 +381,7 @@ pub fn render(raw: &[String]) -> Res {
             "--follow",
             "--view",
             "--distance",
+            "--pack",
         ],
         &[],
     )?;
@@ -341,6 +389,7 @@ pub fn render(raw: &[String]) -> Res {
         return print(help::RENDER);
     }
     let file = a.required_file("the world FILE to draw")?;
+    let pack = pack_flag(&a, Some(file))?;
     let out = absolute(
         a.value("--out")?
             .ok_or_else(|| CliError::Usage("give the picture to write with --out PNG".into()))?,
@@ -399,7 +448,7 @@ pub fn render(raw: &[String]) -> Res {
             }
         }
     }
-    let mut host = opened(file, Some(folder(&out)))?;
+    let mut host = opened(file, Some(folder(&out)), pack)?;
     let result = exec(&mut host, "view.render", &Value::Object(params))?;
     print_json(&result)
 }
@@ -415,6 +464,7 @@ pub fn play(raw: &[String]) -> Res {
             "--out-state",
             "--picture",
             "--journal",
+            "--pack",
         ],
         &[],
     )?;
@@ -423,6 +473,7 @@ pub fn play(raw: &[String]) -> Res {
     }
     let journal_out = a.value("--journal")?.map(absolute).transpose()?;
     let file = a.required_file("the world FILE to play")?;
+    let pack = pack_flag(&a, Some(file))?;
     let target_ticks = match (a.value("--seconds")?, a.value("--ticks")?) {
         (Some(_), Some(_)) => {
             return Err(CliError::Usage(
@@ -458,7 +509,7 @@ pub fn play(raw: &[String]) -> Res {
         None => Vec::new(),
     };
     let picture = a.value("--picture")?.map(absolute).transpose()?;
-    let mut host = opened(file, picture.as_deref().map(folder))?;
+    let mut host = opened(file, picture.as_deref().map(folder), pack)?;
     exec(&mut host, "sim.start", &json!({}))?;
     run_steps(&mut host, &steps, false, true)?;
     let mut state = exec(&mut host, "sim.state", &json!({}))?;
@@ -597,6 +648,7 @@ pub fn serve(raw: &[String], mcp_protocol: bool) -> Res {
             "--automation-read-root",
             "--automation-write-root",
             "--file",
+            "--pack",
         ],
         &[],
     )?;
@@ -604,6 +656,13 @@ pub fn serve(raw: &[String], mcp_protocol: bool) -> Res {
         return print(if mcp_protocol { help::MCP } else { help::SERVE });
     }
     a.positional(0)?;
+    let pack = a.value("--pack")?;
+    if pack.is_some() && a.value("--file")?.is_none() {
+        return Err(CliError::Usage(
+            "`--pack` says where the world file of --file finds its models; give --file FILE"
+                .into(),
+        ));
+    }
     let root = |flag: &str| -> Result<Option<PathBuf>, CliError> {
         match a.value(flag)? {
             None => Ok(None),
@@ -619,16 +678,17 @@ pub fn serve(raw: &[String], mcp_protocol: bool) -> Res {
         max_world_bytes: max_world_bytes()?,
         cache_beside_files: std::env::var_os("GAMECRAFT_NO_CACHE").is_none(),
     };
-    let world = match a.value("--file")? {
+    let mut host = match a.value("--file")? {
+        // Read through a host that may read the file's folder (and its pack's); the served
+        // host keeps what was read and just the roots the flags gave.
         Some(file) => {
-            // Read through a host that may read the file's folder only; the served host
-            // keeps just the roots the flags gave.
-            let loader = opened(file, None)?;
-            loader.session().document().clone()
+            let mut loaded = opened(file, None, pack)?;
+            loaded.set_access(access);
+            loaded
         }
-        None => World::new("Untitled", 0),
+        None => Host::new(World::new("Untitled", 0), access)
+            .with_pictures(Box::new(GpuPictures::default())),
     };
-    let mut host = Host::new(world, access).with_pictures(Box::new(GpuPictures::default()));
     let (stdin, stdout) = (std::io::stdin().lock(), std::io::stdout().lock());
     let served = if mcp_protocol {
         mcp::serve(&mut host, stdin, stdout)

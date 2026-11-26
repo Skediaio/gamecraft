@@ -6,13 +6,17 @@ use std::path::PathBuf;
 /// The usage, as `--help` prints it.
 pub const USAGE: &str = "\
 Usage: gamecraft [world.gamecraft | PROJECT] [--stdin] [--quality low|medium|high] [--invert-look]
+                  [--pack DIR]
 
 Opens a window in which you walk the world's first character (by id). A folder is a project:
-its packs are layered and its models drawn from their assets. Without a world, the engine's
-example valley opens.
+its packs are layered and its models drawn from their assets. A world file's models come from
+the nearest pack.json above it, or from --pack DIR. Without a world, the engine's example
+valley opens.
 
   --stdin            read JSON-lines requests on stdin (the protocol of `gamecraft-cli serve`),
                      run them between frames and answer on stdout
+  --pack DIR         with a world file: the pack whose assets/ holds its models (a folder with
+                     a pack.json), instead of the nearest pack.json above the file
   --quality <q>      live frames' effects: low, medium (default) or high
   --invert-look      a gamepad's right stick pushed up looks down
   --help             print this
@@ -23,13 +27,16 @@ Gamepad: left stick walks, right stick looks, stick click or left trigger runs, 
 jumps, west interacts, right trigger fires, start pauses, select switches the view.";
 
 /// The flags it knows, for the nearest name in an error.
-const FLAGS: [&str; 4] = ["--stdin", "--quality", "--invert-look", "--help"];
+const FLAGS: [&str; 5] = ["--stdin", "--quality", "--invert-look", "--pack", "--help"];
 
 /// What the command line asks for.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Args {
     /// The world file or project folder; `None` opens the example world.
     pub world: Option<PathBuf>,
+    /// With a world file: the pack whose assets hold its models; `None` is the nearest
+    /// `pack.json` above the file.
+    pub pack: Option<PathBuf>,
     /// Read the control protocol on stdin.
     pub stdin: bool,
     /// The live frames' quality.
@@ -49,6 +56,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         match arg.as_str() {
             "--stdin" => out.stdin = true,
             "--invert-look" => out.invert_look = true,
+            "--pack" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--pack needs a value: the folder of a pack".to_string())?;
+                out.pack = Some(PathBuf::from(value));
+            }
             "--help" | "-h" => out.help = true,
             "--quality" => {
                 let value = args

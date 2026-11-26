@@ -79,6 +79,63 @@ impl Game {
         Ok(Game::with_host(host))
     }
 
+    /// A game of the world file `path` (natively), opened as `file.open` opens it: its models
+    /// come from the pack `pack` names (a folder with a `pack.json`), else from the nearest
+    /// `pack.json` above the file; their files go to the view ([`Game::take_assets`]) and
+    /// their bounds to the simulation. Automation may read the folder that holds the file and
+    /// the folder that holds the pack (where a dependency beside it lies) and writes nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_world_file(
+        path: &std::path::Path,
+        pack: Option<&std::path::Path>,
+    ) -> Result<Game, String> {
+        let path = std::fs::canonicalize(path)
+            .map_err(|e| format!("the world {} cannot be opened: {e}", path.display()))?;
+        let folder = |p: &std::path::Path| {
+            p.parent().map_or_else(
+                || std::path::PathBuf::from("/"),
+                std::path::Path::to_path_buf,
+            )
+        };
+        let pack_dir = match pack {
+            Some(dir) => {
+                if !dir.is_dir() {
+                    return Err(format!(
+                        "the pack `{}` does not exist; --pack names the folder of a pack (it \
+                         has a pack.json whose assets/ holds the world's models)",
+                        dir.display()
+                    ));
+                }
+                Some(
+                    std::fs::canonicalize(dir)
+                        .map_err(|e| format!("the pack {} cannot be opened: {e}", dir.display()))?,
+                )
+            }
+            None => gamecraft_automation::find_pack_above(&folder(&path), None),
+        };
+        let read_root = match &pack_dir {
+            Some(pack) => gamecraft_automation::common_ancestor(&folder(&path), &folder(pack)),
+            None => folder(&path),
+        };
+        let mut host = Host::new(
+            World::new("Untitled", 0),
+            Access {
+                read_root: Some(read_root),
+                write_root: None,
+                max_world_bytes: None,
+                cache_beside_files: false,
+            },
+        );
+        // Only a pack given (--pack) is the host's own; one found above the file is that
+        // file's.
+        if let (Some(dir), Some(_)) = (&pack_dir, pack) {
+            host = host.with_pack(dir.clone());
+        }
+        host.execute("file.open", &json!({"path": path.display().to_string()}))
+            .map_err(|e| format!("the world {}: {e}", path.display()))?;
+        Ok(Game::with_host(host))
+    }
+
     /// A game on `host`'s document, the simulation started.
     fn with_host(host: Host) -> Game {
         let mut game = Game {

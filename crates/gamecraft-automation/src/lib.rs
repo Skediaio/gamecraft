@@ -12,7 +12,9 @@
 //! - [`Host`]: what both run: the engine's commands plus the host's own (`file.*`,
 //!   `project.*`, `pack.*`, `asset.*`, `terrain.import`, `edit.*`, `view.render`), one
 //!   namespace and one listing
-//!   ([`Host::command_docs`]), and batches.
+//!   ([`Host::command_docs`]), and batches. A world file finds the pack its models come from
+//!   ([`find_pack_above`]: the nearest `pack.json` above it, the pack `file.open` names, or the
+//!   host's [`Host::with_pack`]).
 //!
 //! Each server is a function from one input line to at most one reply line (`handle_line`),
 //! plus a loop over a reader and a writer (`serve`). No line, however malformed, makes a server
@@ -44,6 +46,8 @@ pub use host::{
     RenderRequest, Rendered,
 };
 pub use lines::{Line, read_line};
+#[cfg(not(target_arch = "wasm32"))]
+pub use projects::{common_ancestor, find_pack_above};
 
 /// Longest request line a server reads, in bytes (as 3DCraft and VisionCraft).
 pub const MAX_REQUEST_BYTES: usize = 1 << 20;

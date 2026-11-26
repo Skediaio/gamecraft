@@ -16,6 +16,9 @@ fence.
 gamecraft-cli run examples/assets-demo --cmd asset.list
 gamecraft-cli render examples/assets-demo --out yard.png
 gamecraft examples/assets-demo        # walk it in the window
+
+A `.gamecraft` file saved inside the pack (say `assets-demo/yard.gamecraft`) finds the pack above
+it and draws its models; the same file elsewhere needs `--pack examples/assets-demo`.
 ```
 
 A test walks both characters north (`crates/gamecraft-automation/tests/assets.rs`): the Walker

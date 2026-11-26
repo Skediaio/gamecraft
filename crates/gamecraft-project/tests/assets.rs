@@ -250,6 +250,59 @@ fn a_later_pack_s_asset_replaces_an_earlier_one_s() {
 }
 
 #[test]
+fn the_assets_of_a_chain_of_packs_without_a_world() {
+    // The same two packs as above, read for their assets alone: a world file inside the mod
+    // takes the base pack's crate as the mod's (its file is the one that counts).
+    let size = CRATE.len() as u64;
+    let mut base = with_assets(
+        &[("assets/models/crate.glb", size)],
+        &[("assets/models/crate.glb.license.json", CC0)],
+    );
+    base.files.insert(
+        "pack.json".into(),
+        r#"{"gamecraft_pack": 1, "id": "base", "name": "Base"}"#.into(),
+    );
+    base.files.remove("worlds/main/world.json");
+    base.location = "base".into();
+    let mut modded = with_assets(
+        &[("assets/models/crate.glb", 7)],
+        &[("assets/models/crate.glb.license.json", CCBY)],
+    );
+    modded.files.insert(
+        "pack.json".into(),
+        r#"{"gamecraft_pack": 1, "id": "demo", "name": "Demo", "depends": [{"id": "base"}]}"#
+            .into(),
+    );
+    modded.files.remove("worlds/main/world.json");
+    let sources = packs(vec![("base", base), ("demo", modded)]);
+    let assets = gamecraft_project::pack_assets("demo", &sources).unwrap();
+    assert_eq!(assets.len(), 1, "{assets:?}");
+    let a = &assets["models/crate.glb"];
+    assert_eq!((a.pack.as_str(), a.asset.bytes), ("demo", 7));
+    assert_eq!(a.asset.record.license, License::CcBy);
+    // From the base pack alone there is the base's crate; a root that is missing, a pack
+    // without its manifest and a broken gate are errors that name what is wrong.
+    let assets = gamecraft_project::pack_assets("base", &sources).unwrap();
+    assert_eq!(assets["models/crate.glb"].asset.bytes, size);
+    let e = gamecraft_project::pack_assets("nowhere", &sources)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("nowhere"), "{e}");
+    let mut bare = pack("bare", &[]);
+    bare.location = "bare".into();
+    let e = gamecraft_project::pack_assets("bare", &packs(vec![("bare", bare)]))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("bare/pack.json"), "{e}");
+    let mut broken = with_assets(&[("assets/models/crate.glb", size)], &[]);
+    broken.location = "broken".into();
+    let e = gamecraft_project::pack_assets("demo", &packs(vec![("demo", broken)]))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("has no licence record"), "{e}");
+}
+
+#[test]
 fn credits_name_every_cc_by_asset() {
     let source = with_assets(
         &[("assets/a.glb", 1), ("assets/b.glb", 1)],

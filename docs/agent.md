@@ -268,7 +268,9 @@ drops the earlier layer of its name).
   AND (e.x - 4) * (e.x - 4) + (e.z + 54) * (e.z + 54) <= 10000`. The index is rebuilt from the
   world when it changed; it cannot be written to, and change the world with commands instead.
 - `project.export {path}` writes the resolved world as one `.gamecraft` file, the format for
-  tests and exchange. `examples/skirmish/project` is the Skirmish as a project;
+  tests and exchange; its answer names the pack that has the world's models (`pack`), the files
+  it needs of one (`needs`) and the models none has (`missing`). The file draws its models when it
+  lies inside that pack or is opened with `--pack DIR`. `examples/skirmish/project` is the Skirmish as a project;
   `examples/skirmish-night-mod` turns it to night, gives the enemies lanterns and adds a guard.
 
 ## Projectiles and behaviour

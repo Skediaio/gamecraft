@@ -1511,8 +1511,8 @@ fn upload_model(
         if found.is_none() && missing.borrow().is_none() {
             *missing.borrow_mut() = Some(format!(
                 "its file `{key}` was not handed to the renderer (the host reads the files a \
-                 model refers to from the open project's packs; asset.list shows what they \
-                 hold)"
+                 model refers to from the pack the world belongs to; asset.list shows what it \
+                 holds)"
             ));
         }
         found

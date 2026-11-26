@@ -14,6 +14,8 @@ use gamecraft_engine::spec::nearest;
 use gamecraft_engine::{CommandError, CommandSpec, ParamType as T, Session, param, spec};
 use gamecraft_world::{EntityId, World};
 use serde_json::{Map, Value, json};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
 
 /// Smallest and largest side of a picture, pixels.
 const PICTURE_MIN_SIDE: u64 = 16;
@@ -196,9 +198,14 @@ fn file_specs() -> Vec<CommandSpec> {
         host_spec(
             "file.open",
             "Open",
-            "Opens a .gamecraft file inside the read root (at most 64 MB): it becomes the \
-             document, with a new history; a running simulation stops. A file that cannot be \
-             read or is not a valid world is an error, and the session stays as it was.",
+            "Opens a .gamecraft file inside the read root (at most 512 MB by default): it becomes \
+             the document, with a new history; a running simulation stops. The world's models \
+             come from a pack: the pack `pack` names, else the host's own (--pack DIR), else \
+             the nearest pack.json above the file (searched up to the read root), so a world \
+             file inside a pack draws its models and its solid models collide; `pack: null` \
+             wants none. That pack's assets are read (each through the licence gate: a broken \
+             one is an error that names the file). A file that cannot be read or is not a valid \
+             world is an error, and the session stays as it was.",
             vec![
                 param(
                     "path",
@@ -206,8 +213,17 @@ fn file_specs() -> Vec<CommandSpec> {
                     "A .gamecraft file inside the read root; relative to it, or absolute inside it.",
                 )
                 .required(),
+                param(
+                    "pack",
+                    T::Any,
+                    "The folder of the pack whose assets/ holds the world's models, inside the \
+                     read root (it needs no world); null for none. Left out: the host's pack, \
+                     else the nearest pack.json above the file.",
+                ),
             ],
-            "{path, name, entities, terrain}: terrain is whether the world has one",
+            "{path, name, entities, terrain, cache, pack}: terrain is whether the world has one; \
+             pack is null or {path, id, packs (in load order), found: \"given\" | \"default\" \
+             | \"above\", assets}",
             json!({"path": "valley.gamecraft"}),
         ),
         host_spec(
@@ -552,6 +568,20 @@ impl Host {
                 map
             }
         };
+        // The renderer says of each model it could not draw; the host says in one sentence
+        // which models no pack provides and what to do. A renderer that lists its problems
+        // keeps the list, empty or not.
+        let listed = matches!(out.get("problems"), Some(Value::Array(_)));
+        let mut problems = match out.remove("problems") {
+            Some(Value::Array(list)) => list,
+            _ => Vec::new(),
+        };
+        if let Some(line) = self.missing_pack_line() {
+            problems.push(Value::String(line));
+        }
+        if listed || !problems.is_empty() {
+            out.insert("problems".into(), Value::Array(problems));
+        }
         match target {
             Some(path) => {
                 write_picture(&path, &rendered.png)?;
@@ -736,8 +766,53 @@ impl Host {
         self.session.replace_document(world);
         self.path = None;
         self.project = None;
+        self.assets.clear();
+        self.provided.clear();
+        self.pack = None;
         self.saved_revision = self.session.revision();
         Ok(json!({"name": name, "seed": seed}))
+    }
+
+    /// The pack a world file at `path` (resolved) takes its assets from, and how it was
+    /// chosen: the `pack` parameter (a folder inside the read root), else the host's own pack,
+    /// else the nearest `pack.json` above the file, up to the read root. `pack: null` wants
+    /// none. A folder that is missing or is not a pack is an error naming it.
+    fn pack_of_file(
+        &self,
+        path: &std::path::Path,
+        p: &Fields,
+    ) -> Result<Option<(PathBuf, &'static str)>, String> {
+        let folder = |given: &str| {
+            crate::projects::resolve_dir(&self.access, given, crate::files::Direction::Read, true)
+                .map_err(|e| format!("`pack`: {e}"))
+        };
+        match p.raw("pack") {
+            Some(Value::Null) => Ok(None),
+            Some(v) => {
+                let given = v.as_str().ok_or_else(|| {
+                    format!(
+                        "`pack` must be the folder of a pack or null, got {}",
+                        describe(v)
+                    )
+                })?;
+                folder(given).map(|dir| Some((dir, "given")))
+            }
+            None => match self.default_pack.as_ref() {
+                Some(dir) => folder(&dir.display().to_string()).map(|dir| Some((dir, "default"))),
+                None => {
+                    let top = self
+                        .access
+                        .read_root
+                        .as_ref()
+                        .and_then(|r| std::fs::canonicalize(r).ok());
+                    Ok(crate::projects::find_pack_above(
+                        path.parent().unwrap_or(std::path::Path::new("/")),
+                        top.as_deref(),
+                    )
+                    .map(|dir| (dir, "above")))
+                }
+            },
+        }
     }
 
     fn file_open(&mut self, p: &Fields) -> Result<Value, String> {
@@ -750,16 +825,41 @@ impl Host {
             self.access.max_world_bytes(),
             may_cache(&self.access, &path),
         )?;
+        // The pack whose assets the world's models come from; its models measured, their
+        // bounds handed over with the world. Nothing is kept until all of it could be read.
+        let pack = self.pack_of_file(&path, p)?;
+        let mut world = world;
+        let (pack_json, assets, pack_dir) = match pack {
+            Some((dir, found)) => {
+                let (catalog, root, packs) = crate::projects::open_pack_assets(&self.access, &dir)
+                    .map_err(|e| {
+                        format!("{e}; open the world without its pack with `pack: null`")
+                    })?;
+                let count = catalog.len();
+                world.set_model_bounds(crate::assets::bounds(&catalog));
+                let dir_text = dir.display().to_string();
+                (
+                    json!({"path": dir_text, "id": root, "packs": packs, "found": found, "assets": count}),
+                    catalog,
+                    Some(dir),
+                )
+            }
+            None => (Value::Null, std::collections::BTreeMap::new(), None),
+        };
         let result = json!({
             "path": path.display().to_string(),
             "name": world.name,
             "entities": world.entity_count(),
             "terrain": world.terrain.is_some(),
             "cache": cache,
+            "pack": pack_json,
         });
         self.session.replace_document(world);
         self.path = Some(path);
         self.project = None;
+        self.assets = assets;
+        self.provided.clear();
+        self.pack = pack_dir;
         self.saved_revision = self.session.revision();
         Ok(result)
     }
