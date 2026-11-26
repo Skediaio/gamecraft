@@ -301,6 +301,15 @@ from the engine, as mechanisms with no game in them, in the order they are sched
     attachment holds any, or `cascade`) and `.list` (`design/attachments.md`). The simulation
     treats an attachment as part of its root entity. Open: a collider and a mass of its own, what
     an attachment changes (a suppressor's sound range), attachments in the far levels of a cell.
+15. **Several water surfaces drawn in one picture:** the renderer draws one water surface (the
+    sea, or the largest outlined area); a river with several areas, lakes and canals in one view
+    draw only one of them and name the rest in `problems`. Draw every area in view, each with its
+    own level, outline and waves (inland or sea).
+16. **The time to open a large project, measured per phase:** on a weak integrated GPU (Iris Xe)
+    the first open of a 300 000-entity town took well over a minute (about 10 s on a fast
+    machine). Time each phase of the open (reading cells, the terrain cache, the spatial index,
+    model reads and uploads, the first frame) and report it (`project.open`'s answer, the window's
+    log), so the cost can be put on the engine's or the content's side and cut.
 
 ## M4: Physics
 
